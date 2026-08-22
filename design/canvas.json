@@ -1,0 +1,18 @@
+{
+  "artboards": [
+    { "file": "Jobs.dc.html", "title": "Today · Jobs", "x": 0, "y": 0, "w": 390, "h": 844 },
+    { "file": "Main.dc.html", "title": "Job overview", "x": 480, "y": 0, "w": 390, "h": 844 },
+    { "file": "Checklist.dc.html", "title": "Section checklist", "x": 960, "y": 0, "w": 390, "h": 844 },
+    { "file": "Cleanup.dc.html", "title": "Cleanup & photo proof", "x": 1440, "y": 0, "w": 390, "h": 844 },
+    { "file": "PunchList.dc.html", "title": "Punch list", "x": 1920, "y": 0, "w": 390, "h": 844 },
+    { "file": "PunchItem.dc.html", "title": "Punch item", "x": 2400, "y": 0, "w": 390, "h": 844 },
+    { "file": "Closeout.dc.html", "title": "Closeout & gate", "x": 2880, "y": 0, "w": 390, "h": 844 },
+    { "file": "AltHighVis.dc.html", "title": "Sketch — High-vis dark", "x": 0, "y": 1060, "w": 390, "h": 844 },
+    { "file": "AltDense.dc.html", "title": "Sketch — Paper-parity", "x": 480, "y": 1060, "w": 390, "h": 844 }
+  ],
+  "annotations": [
+    { "id": "flow-note", "x": 0, "y": -170, "w": 360, "text": "DB CheckOut — final inspection flow, left to right: today's jobs, job overview, a section checklist (OK / N/A / ACTION mirrors the paper form), cleanup with photo proof, punch list, punch item detail, and the Complete Gate closeout.\nJob names, addresses and crew are sample data." },
+    { "id": "alt-note", "x": 980, "y": 1100, "w": 300, "text": "Two rougher directions kept for comparison — the main flow above uses the brand-blue field style. Say the word to develop either of these instead." }
+  ],
+  "launch": { "view": "canvas" }
+}
