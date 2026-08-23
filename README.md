@@ -48,6 +48,14 @@ node --env-file=apps/sync/.env --experimental-strip-types apps/sync/src/index.ts
 
 Tests & typecheck (no JT key needed): `npm install && npm test && npm run typecheck`
 
+**Deploying to Vercel:** the repo is Vercel-ready — `api/index.ts` wraps
+the same router as a serverless function and `vercel.json` routes every
+path to it. In Vercel: Add New Project → import this repo → framework
+preset "Other", no build command → set env vars `JT_GRANT_KEY` and
+`APP_TOKEN` (paste values only in Vercel's dashboard, never in the
+repo) → Deploy. The JobTread webhook URL is then
+`https://<project>.vercel.app/webhooks/jobtread/<APP_TOKEN>`.
+
 **Mobile app** (`apps/mobile`) — run with Expo:
 
 ```
