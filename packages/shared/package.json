@@ -1,0 +1,7 @@
+{
+  "name": "@db-checkout/shared",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared JobTread contract, types and bilingual strings for DB CheckOut"
+}

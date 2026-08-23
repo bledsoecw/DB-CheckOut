@@ -1,0 +1,52 @@
+import React from "react";
+import { NavigationContainer } from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { StatusBar } from "expo-status-bar";
+import { LangProvider } from "./src/i18n";
+import { colors } from "./src/theme";
+import QueueScreen from "./src/screens/QueueScreen";
+import JobScreen from "./src/screens/JobScreen";
+import ChecklistScreen from "./src/screens/ChecklistScreen";
+import CleanupScreen from "./src/screens/CleanupScreen";
+import ReportScreen from "./src/screens/ReportScreen";
+import SendScreen from "./src/screens/SendScreen";
+import PunchListScreen from "./src/screens/PunchListScreen";
+import PunchItemScreen from "./src/screens/PunchItemScreen";
+
+export type RootStackParamList = {
+  Queue: undefined;
+  Job: { jobId: string };
+  Checklist: { jobId: string };
+  Cleanup: { jobId: string };
+  Report: { jobId: string };
+  Send: { jobId: string };
+  PunchList: { jobId: string };
+  PunchItem: { jobId: string; taskId: string };
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+export default function App() {
+  return (
+    <LangProvider>
+      <NavigationContainer>
+        <StatusBar style="dark" />
+        <Stack.Navigator
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: colors.bg },
+          }}
+        >
+          <Stack.Screen name="Queue" component={QueueScreen} />
+          <Stack.Screen name="Job" component={JobScreen} />
+          <Stack.Screen name="Checklist" component={ChecklistScreen} />
+          <Stack.Screen name="Cleanup" component={CleanupScreen} />
+          <Stack.Screen name="Report" component={ReportScreen} />
+          <Stack.Screen name="Send" component={SendScreen} />
+          <Stack.Screen name="PunchList" component={PunchListScreen} />
+          <Stack.Screen name="PunchItem" component={PunchItemScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </LangProvider>
+  );
+}

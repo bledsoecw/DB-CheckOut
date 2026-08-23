@@ -1,0 +1,18 @@
+{
+  "name": "db-checkout",
+  "private": true,
+  "version": "0.1.0",
+  "description": "DB CheckOut — Deitemeyer Brothers field inspection, cleanup & punch app, wired to JobTread",
+  "workspaces": [
+    "packages/*",
+    "apps/sync"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p apps/sync/tsconfig.json",
+    "test": "npm --workspace apps/sync run test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  }
+}

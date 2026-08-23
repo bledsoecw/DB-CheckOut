@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "DB CheckOut",
+    "slug": "db-checkout",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F2F5F9",
+    "splash": {
+      "backgroundColor": "#143A75"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.deitemeyerbrothers.dbcheckout"
+    },
+    "android": {
+      "package": "com.deitemeyerbrothers.dbcheckout"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "DB CheckOut usa la cámara para las fotos de inspección y reparaciones. / DB CheckOut uses the camera for inspection and repair photos."
+        }
+      ]
+    ]
+  }
+}

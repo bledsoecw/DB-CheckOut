@@ -26,6 +26,44 @@ repair work — wired into JobTread and the DB Production board.
    **Punch Review** automatically; the PM reviews the photos and notes,
    then sets **Job Completed**.
 
+## Code
+
+```
+packages/shared/   JT contract (ids, statuses), API types, ES/EN strings
+apps/sync/         Sync server — Node 22+, zero runtime dependencies
+apps/mobile/       Crew app — Expo / React Native, Spanish-first
+docs/              jobtread-setup.md is the JT build contract
+```
+
+**Sync server** (`apps/sync`) — the bridge between the app and JobTread:
+queue of pipeline jobs (Final Inspection / Punch List / Punch Review),
+form submissions, problem reports → unassigned Punch List tasks, task
+completion with the automatic **Punch Review** status flip, and a
+webhook receiver. Run it:
+
+```
+cp apps/sync/.env.example apps/sync/.env   # add JT_GRANT_KEY + APP_TOKEN
+node --env-file=apps/sync/.env --experimental-strip-types apps/sync/src/index.ts
+```
+
+Tests & typecheck (no JT key needed): `npm install && npm test && npm run typecheck`
+
+**Mobile app** (`apps/mobile`) — run with Expo:
+
+```
+cd apps/mobile && npm install && npx expo start
+```
+
+With `SERVER_URL` empty in `src/api.ts` it runs in demo mode on sample
+data; point it at a deployed sync server (plus the matching
+`APP_TOKEN`) for the real queue. All writes go through a persistent
+offline outbox — nothing is lost in a dead spot.
+
+Not built yet (M2): voice capture + ES/EN→English transcription
+(`apps/sync/src/voice.ts` holds the interface), photo upload to JT
+files, webhook registration, per-user login, and the PM surfaces
+(PMs use JobTread itself meanwhile).
+
 ## design/
 
 Design mockups (one file per screen, laid out by `canvas.json`):

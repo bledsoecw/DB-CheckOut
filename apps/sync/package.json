@@ -1,0 +1,14 @@
+{
+  "name": "@db-checkout/sync",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "DB CheckOut sync server — thin bridge between the crew app and JobTread (zero runtime dependencies)",
+  "engines": {
+    "node": ">=22.7"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts",
+    "test": "node --experimental-strip-types --test test/pave.test.ts test/jt.test.ts test/punchReview.test.ts"
+  }
+}
