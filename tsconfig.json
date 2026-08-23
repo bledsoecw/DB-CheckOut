@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["api/**/*.ts", "apps/sync/src/**/*.ts", "apps/sync/test/**/*.ts", "packages/shared/src/**/*.ts"]
+  "include": ["apps/sync/src/**/*.ts", "apps/sync/test/**/*.ts", "packages/shared/src/**/*.ts"]
 }
