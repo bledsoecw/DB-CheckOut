@@ -44,6 +44,7 @@ Design mockups (one file per screen, laid out by `canvas.json`):
 | `PMReview.dc.html` | PM — inspection results with problem reports, set status Punch List |
 | `PMAssign.dc.html` | PM — assign a repair: crew member, due date, materials |
 | `PMVerify.dc.html` | PM — verify before/after photos, approve & close or send back |
+| `PMBoard.dc.html` | PM — desktop Production Board (primary PM surface), synced with JT statuses, with inline review, work-order editing & assignment |
 
 Key design decisions:
 
