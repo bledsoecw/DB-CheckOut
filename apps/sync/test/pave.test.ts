@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPaveClient, PaveError, withGrantKey } from "../src/pave.ts";
+import { createPaveClient, PaveError, withGrantKey } from "../src/pave";
 
 test("withGrantKey injects the key without clobbering existing $ args", () => {
   const q = withGrantKey({ $: { foo: 1 }, organization: {} }, "KEY");

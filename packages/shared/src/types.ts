@@ -4,7 +4,7 @@
  * system of record; nothing here is stored anywhere else.
  */
 
-import type { Answer } from "./jobtread.ts";
+import type { Answer } from "./jobtread";
 
 /** A job in the crew queue (Status = Final Inspection, or with punch tasks assigned to the user). */
 export interface QueueJob {

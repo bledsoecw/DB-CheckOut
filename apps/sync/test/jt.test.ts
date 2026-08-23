@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { PaveClient, PaveQuery } from "../src/pave.ts";
-import { createReportTask, listPipelineJobs, submitForm, toQueueJob } from "../src/jt.ts";
-import { CUSTOM_FIELDS, INSPECTION_FORM, TASK_TYPES } from "../../../packages/shared/src/jobtread.ts";
+import type { PaveClient, PaveQuery } from "../src/pave";
+import { createReportTask, listPipelineJobs, submitForm, toQueueJob } from "../src/jt";
+import { CUSTOM_FIELDS, INSPECTION_FORM, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 function fakePave(responder: (q: PaveQuery) => unknown): { client: PaveClient; queries: PaveQuery[] } {
   const queries: PaveQuery[] = [];

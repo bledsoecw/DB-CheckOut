@@ -7,21 +7,21 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { PaveClient } from "./pave.ts";
+import type { PaveClient } from "./pave";
 import {
   CLEANUP_FORM,
   INSPECTION_FORM,
   STATUS,
-} from "../../../packages/shared/src/jobtread.ts";
-import type { ChecklistSubmission, ProblemReport } from "../../../packages/shared/src/types.ts";
+} from "../../../packages/shared/src/jobtread";
+import type { ChecklistSubmission, ProblemReport } from "../../../packages/shared/src/types";
 import {
   completeTask,
   createReportTask,
   getJob,
   listPipelineJobs,
   submitForm,
-} from "./jt.ts";
-import { applyPunchReviewFlip } from "./punchReview.ts";
+} from "./jt";
+import { applyPunchReviewFlip } from "./punchReview";
 
 export interface RouterDeps {
   pave: PaveClient;

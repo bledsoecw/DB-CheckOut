@@ -3,14 +3,14 @@
  * verified Pave query shape (see docs/jobtread-setup.md "Pave API notes").
  */
 
-import type { PaveClient } from "./pave.ts";
+import type { PaveClient } from "./pave";
 import {
   CUSTOM_FIELDS,
   ORGANIZATION_ID,
   STATUS,
   TASK_TYPES,
-} from "../../../packages/shared/src/jobtread.ts";
-import type { JobDetail, ProblemReport, PunchTask, QueueJob } from "../../../packages/shared/src/types.ts";
+} from "../../../packages/shared/src/jobtread";
+import type { JobDetail, ProblemReport, PunchTask, QueueJob } from "../../../packages/shared/src/types";
 
 // --------------------------------------------------------------------------
 // Raw node shapes as Pave returns them

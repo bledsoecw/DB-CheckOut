@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shouldFlipToPunchReview } from "../src/punchReview.ts";
-import { STATUS } from "../../../packages/shared/src/jobtread.ts";
-import type { PunchTask } from "../../../packages/shared/src/types.ts";
+import { shouldFlipToPunchReview } from "../src/punchReview";
+import { STATUS } from "../../../packages/shared/src/jobtread";
+import type { PunchTask } from "../../../packages/shared/src/types";
 
 function task(progress: number): PunchTask {
   return { id: "t", name: "n", description: null, progress, endDate: null, assigneeNames: [] };

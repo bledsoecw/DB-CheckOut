@@ -6,10 +6,10 @@
  * "Punch Review" automatically, putting it in the PM's review column.
  */
 
-import type { PaveClient } from "./pave.ts";
-import { STATUS } from "../../../packages/shared/src/jobtread.ts";
-import type { PunchTask } from "../../../packages/shared/src/types.ts";
-import { getJob, setJobStatus } from "./jt.ts";
+import type { PaveClient } from "./pave";
+import { STATUS } from "../../../packages/shared/src/jobtread";
+import type { PunchTask } from "../../../packages/shared/src/types";
+import { getJob, setJobStatus } from "./jt";
 
 /** Pure decision: flip only when there ARE punch tasks and every one is finished. */
 export function shouldFlipToPunchReview(currentStatus: string, tasks: PunchTask[]): boolean {

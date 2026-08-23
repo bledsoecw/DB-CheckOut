@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import { loadEnv } from "./env.ts";
-import { createPaveClient } from "./pave.ts";
-import { createHandler } from "./routes.ts";
+import { loadEnv } from "./env";
+import { createPaveClient } from "./pave";
+import { createHandler } from "./routes";
 
 const env = loadEnv();
 const pave = createPaveClient(env.jtGrantKey);

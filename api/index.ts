@@ -12,9 +12,9 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadEnv } from "../apps/sync/src/env.ts";
-import { createPaveClient } from "../apps/sync/src/pave.ts";
-import { createHandler } from "../apps/sync/src/routes.ts";
+import { loadEnv } from "../apps/sync/src/env";
+import { createPaveClient } from "../apps/sync/src/pave";
+import { createHandler } from "../apps/sync/src/routes";
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 

@@ -43,7 +43,7 @@ webhook receiver. Run it:
 
 ```
 cp apps/sync/.env.example apps/sync/.env   # add JT_GRANT_KEY + APP_TOKEN
-node --env-file=apps/sync/.env --experimental-strip-types apps/sync/src/index.ts
+node --env-file=apps/sync/.env --import tsx apps/sync/src/index.ts
 ```
 
 Tests & typecheck (no JT key needed): `npm install && npm test && npm run typecheck`
