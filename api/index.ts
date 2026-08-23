@@ -6,6 +6,9 @@
  * Locally you can still run the plain Node server (apps/sync/src/index.ts).
  *
  * Required Vercel environment variables: JT_GRANT_KEY, APP_TOKEN.
+ *
+ * Any startup/config error is returned as JSON (message + presence booleans,
+ * never secret values) instead of Vercel's opaque crash page.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -17,13 +20,32 @@ type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 let handler: Handler | null = null;
 
-export default function entry(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!handler) {
-    const env = loadEnv();
-    handler = createHandler({
-      pave: createPaveClient(env.jtGrantKey),
-      appToken: env.appToken,
-    });
+export default async function entry(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    if (!handler) {
+      const env = loadEnv();
+      handler = createHandler({
+        pave: createPaveClient(env.jtGrantKey),
+        appToken: env.appToken,
+      });
+    }
+    await handler(req, res);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: message,
+        diagnostics: {
+          node: process.version,
+          hasJtGrantKey: Boolean(process.env.JT_GRANT_KEY),
+          hasAppToken: Boolean(process.env.APP_TOKEN),
+        },
+      }),
+    );
   }
-  return handler(req, res);
 }
