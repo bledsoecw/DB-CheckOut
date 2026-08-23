@@ -1,38 +1,64 @@
 # DB CheckOut
 
-Mobile field app for Deitemeyer Brothers roofing operations: final-inspection
-quality control, post-job cleanup verification, and field-crew punch lists,
-built around the DB Final Roofing Inspection checklist.
+Spanish-first mobile app for Deitemeyer Brothers' small field crew:
+final-inspection checklists, site cleanup checklists, and punch-list
+repair work — wired into JobTread and the DB Production board.
+
+## How it works
+
+1. The PM moves a finished roof to **Final Inspection** on the DB
+   Production board (JobTread) and assigns the crew there. The job
+   automatically appears in the crew's app — the app only ever shows
+   jobs that need inspection/cleanup or repairs assigned to the user.
+2. The crew drives to the job (built-in directions), runs the
+   **inspection checklist** and the **cleanup checklist** (both sourced
+   from JT Form templates), and reports problems with an annotated
+   photo, a location, and a voice note.
+3. Voice notes can be spoken in Spanish, English, or a mix — they are
+   transcribed **into English** for the office, with the original
+   speech kept alongside.
+4. Everything syncs back to JobTread: checklists as form submissions,
+   problem reports with photos and English notes. The PM reviews and
+   assigns repairs on the Production board.
+5. The **punch crew** sees assigned repairs in the same app: where to
+   go, what to do, what to bring, before/after photos, and a big
+   "Terminado" button. The PM verifies and moves the JT status to
+   **Punch List** → **Job Completed**.
 
 ## design/
 
-Design mockups for the app (one file per screen, laid out by `canvas.json`):
+Design mockups (one file per screen, laid out by `canvas.json`):
 
 | File | Screen |
 | --- | --- |
-| `Jobs.dc.html` | Today's job list with offline sync status |
-| `Main.dc.html` | Job overview — six checklist sections + DB Complete Gate |
-| `Checklist.dc.html` | Section 1: Roof system & water-shedding (OK / N/A / ACTION) |
-| `Cleanup.dc.html` | Section 2: Property & cleanup with photo proof and magnet sweep |
-| `PunchList.dc.html` | Punch list with two-step closeout (Ready for review → Verified) |
-| `PunchItem.dc.html` | Punch item detail — annotated photo, dictation, assignee, status |
-| `Closeout.dc.html` | Complete Gate, final outcome (Pass / Pass with punch / Hold), sign-off |
-| `AltHighVis.dc.html` | Alternate direction sketch: high-vis dark |
-| `AltDense.dc.html` | Alternate direction sketch: paper-parity table |
+| `Flow.dc.html` | Integration map — Production board → crew app → back to JT |
+| `Jobs.dc.html` | Mis trabajos — auto-filled job queue with directions |
+| `Main.dc.html` | Job home — Inspección / Limpieza / Reportar problema tiles |
+| `Checklist.dc.html` | Inspection checklist — big BIEN / N/A / FALLA buttons |
+| `Report.dc.html` | Report a problem — photo annotation + ES/EN voice → English note |
+| `Cleanup.dc.html` | Cleanup checklist with required photo proof |
+| `Send.dc.html` | Finish & send to JobTread |
+| `PunchList.dc.html` | Punch crew — assigned repairs for a job |
+| `PunchItem.dc.html` | One repair — what to do, materials, AFTER photo gate |
 
 Key design decisions:
 
-- **Glove-friendly**: every control is a 44 px+ target; the three-state
-  OK / N/A / ACTION toggles mirror the paper checklist columns.
-- **Offline-first**: photos and checklists queue locally and sync when
-  signal returns; sync state is always visible.
-- **Photo-required rules**: cleanup items and punch corrections can require
-  photo proof before they can be closed.
-- **Two-step closeout**: crew marks items *Ready for review*; only a
-  lead/PM can *Verify*. The Complete Gate blocks "Pass" while
-  water-shedding, safety, or property-damage items are open.
-- **JobTread/DB Cam aware**: dictated notes are AI-drafted for inspector
-  review; closeout syncs the record to the JobTread job.
+- **Spanish first, English second** — every label shows Spanish large
+  with English small underneath; an ES/EN toggle flips the priority.
+- **Voice in any language, notes in English** — the crew speaks
+  Spanish, English, or a mix; the office always receives an English
+  note, with the original speech shown to the crew for confidence.
+- **Glove-friendly & minimal reading** — 44px+ targets everywhere,
+  icon-heavy, one primary action per screen.
+- **Offline-first** — everything saves locally and syncs when signal
+  returns; the app says so in plain words ("Sin señal, no pasa nada").
+- **Photo gates** — cleanup proof photos and AFTER photos on repairs
+  are required before items can close.
+- **JT is the system of record** — checklists come from JT Forms,
+  queue and assignments come from the Production board (job Status:
+  Production → Final Inspection → Punch List → Job Completed), and all
+  results land back on the JT job.
 
-All customer names, addresses, and crew members in the mockups are sample
-data.
+Customer names and addresses in the mockups are sample data; PM names
+and job statuses come from the real Deitemeyer Brothers JobTread
+configuration.

@@ -1,18 +1,18 @@
 {
   "artboards": [
-    { "file": "Jobs.dc.html", "title": "Today · Jobs", "x": 0, "y": 0, "w": 390, "h": 844 },
-    { "file": "Main.dc.html", "title": "Job overview", "x": 480, "y": 0, "w": 390, "h": 844 },
-    { "file": "Checklist.dc.html", "title": "Section checklist", "x": 960, "y": 0, "w": 390, "h": 844 },
-    { "file": "Cleanup.dc.html", "title": "Cleanup & photo proof", "x": 1440, "y": 0, "w": 390, "h": 844 },
-    { "file": "PunchList.dc.html", "title": "Punch list", "x": 1920, "y": 0, "w": 390, "h": 844 },
-    { "file": "PunchItem.dc.html", "title": "Punch item", "x": 2400, "y": 0, "w": 390, "h": 844 },
-    { "file": "Closeout.dc.html", "title": "Closeout & gate", "x": 2880, "y": 0, "w": 390, "h": 844 },
-    { "file": "AltHighVis.dc.html", "title": "Sketch — High-vis dark", "x": 0, "y": 1060, "w": 390, "h": 844 },
-    { "file": "AltDense.dc.html", "title": "Sketch — Paper-parity", "x": 480, "y": 1060, "w": 390, "h": 844 }
+    { "file": "Flow.dc.html", "title": "How it connects — JT integration", "x": 0, "y": -900, "w": 1400, "h": 600 },
+    { "file": "Jobs.dc.html", "title": "Mis trabajos · Queue", "x": 0, "y": 0, "w": 390, "h": 844 },
+    { "file": "Main.dc.html", "title": "Job home", "x": 480, "y": 0, "w": 390, "h": 844 },
+    { "file": "Checklist.dc.html", "title": "Inspección checklist", "x": 960, "y": 0, "w": 390, "h": 844 },
+    { "file": "Report.dc.html", "title": "Reportar problema", "x": 1440, "y": 0, "w": 390, "h": 844 },
+    { "file": "Cleanup.dc.html", "title": "Limpieza checklist", "x": 1920, "y": 0, "w": 390, "h": 844 },
+    { "file": "Send.dc.html", "title": "Terminar y enviar", "x": 2400, "y": 0, "w": 390, "h": 844 },
+    { "file": "PunchList.dc.html", "title": "Punch crew · Reparaciones", "x": 0, "y": 1064, "w": 390, "h": 844 },
+    { "file": "PunchItem.dc.html", "title": "Punch crew · Una reparación", "x": 480, "y": 1064, "w": 390, "h": 844 }
   ],
   "annotations": [
-    { "id": "flow-note", "x": 0, "y": -170, "w": 360, "text": "DB CheckOut — final inspection flow, left to right: today's jobs, job overview, a section checklist (OK / N/A / ACTION mirrors the paper form), cleanup with photo proof, punch list, punch item detail, and the Complete Gate closeout.\nJob names, addresses and crew are sample data." },
-    { "id": "alt-note", "x": 980, "y": 1100, "w": 300, "text": "Two rougher directions kept for comparison — the main flow above uses the brand-blue field style. Say the word to develop either of these instead." }
+    { "id": "flow-note", "x": 0, "y": -180, "w": 380, "text": "DB CheckOut — Spanish-first crew app, wired to JobTread.\nTop: how it connects to the JT Production board & JT Forms.\nThis row, left to right: job queue → job home → inspection checklist → report a problem (photo + voice ES/EN → English note) → cleanup checklist → send to JobTread.\nCustomers & addresses are sample data; PM names and statuses come from your JobTread." },
+    { "id": "punch-note", "x": 980, "y": 1104, "w": 320, "text": "Punch crew flow — same app. The PM assigns repairs on the JT Production board; the crew sees where to go, what to do, what to bring, and checks off each repair with before/after photos. The PM verifies and JT status moves to Job Completed." }
   ],
   "launch": { "view": "canvas" }
 }
