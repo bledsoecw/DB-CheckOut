@@ -26,7 +26,7 @@ interface RawJob {
   number: string;
   name: string;
   customFieldValues: { nodes: RawCfv[] };
-  location?: { address: string | null } | null;
+  location?: { formattedAddress: string | null } | null;
 }
 
 interface RawTask {
@@ -53,7 +53,7 @@ export function toQueueJob(job: RawJob, openPunchCount = 0): QueueJob {
     jobType: cfv(job, CUSTOM_FIELDS.jobType),
     projectManager: cfv(job, CUSTOM_FIELDS.projectManager),
     salesRep: cfv(job, CUSTOM_FIELDS.salesRep),
-    address: job.location?.address ?? null,
+    address: job.location?.formattedAddress ?? null,
     openPunchCount,
   };
 }
@@ -63,6 +63,7 @@ const JOB_SELECTION = {
   number: {},
   name: {},
   customFieldValues: { $: { size: 25 }, nodes: { value: {}, customField: { id: {} } } },
+  location: { formattedAddress: {} },
 } as const;
 
 // --------------------------------------------------------------------------

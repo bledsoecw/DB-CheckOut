@@ -128,7 +128,7 @@ function toQueueJob(job, openPunchCount = 0) {
     jobType: cfv(job, CUSTOM_FIELDS.jobType),
     projectManager: cfv(job, CUSTOM_FIELDS.projectManager),
     salesRep: cfv(job, CUSTOM_FIELDS.salesRep),
-    address: job.location?.address ?? null,
+    address: job.location?.formattedAddress ?? null,
     openPunchCount
   };
 }
@@ -136,7 +136,8 @@ var JOB_SELECTION = {
   id: {},
   number: {},
   name: {},
-  customFieldValues: { $: { size: 25 }, nodes: { value: {}, customField: { id: {} } } }
+  customFieldValues: { $: { size: 25 }, nodes: { value: {}, customField: { id: {} } } },
+  location: { formattedAddress: {} }
 };
 async function listPipelineJobs(pave) {
   const wanted = /* @__PURE__ */ new Set([STATUS.finalInspection, STATUS.punchList, STATUS.punchReview]);

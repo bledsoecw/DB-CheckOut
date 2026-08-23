@@ -1,7 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/health", "destination": "/api" },
+    { "source": "/queue", "destination": "/api" },
+    { "source": "/jobs/:rest*", "destination": "/api" },
+    { "source": "/tasks/:rest*", "destination": "/api" },
+    { "source": "/webhooks/:rest*", "destination": "/api" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
   "functions": {
     "api/index.mjs": {
       "maxDuration": 30

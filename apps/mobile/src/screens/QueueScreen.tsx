@@ -6,6 +6,7 @@ import type { QueueJob } from "@shared/types";
 import { STATUS } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
 import { getQueue, outboxCount } from "../api";
+import { useAuth } from "../auth";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
 import { colors } from "../theme";
@@ -17,7 +18,8 @@ export function directionsUrl(address: string): string {
 }
 
 export default function QueueScreen({ navigation }: Props) {
-  const { t, t2 } = useLang();
+  const { t, t2, p } = useLang();
+  const { mode, signOut } = useAuth();
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [queued, setQueued] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -63,7 +65,18 @@ export default function QueueScreen({ navigation }: Props) {
         keyExtractor={(j) => j.id}
         contentContainerStyle={{ padding: 16, gap: 12 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}
-        ListFooterComponent={<Text style={styles.footer}>{t("queueNote")}</Text>}
+        ListFooterComponent={
+          <View>
+            <Text style={styles.footer}>{t("queueNote")}</Text>
+            <Pressable onPress={signOut} style={styles.change} hitSlop={8}>
+              <Text style={styles.changeText}>
+                {mode === "demo"
+                  ? p({ es: "Salir de la demostración", en: "Leave the demo" })
+                  : p({ es: "Cambiar código del equipo", en: "Change team code" })}
+              </Text>
+            </Pressable>
+          </View>
+        }
         renderItem={({ item }) => <JobCard job={item} navigation={navigation} />}
       />
     </SafeAreaView>
@@ -159,4 +172,6 @@ const styles = StyleSheet.create({
   },
   directionsText: { color: colors.blue, fontSize: 13.5, fontWeight: "700" },
   footer: { textAlign: "center", color: "#66788C", fontSize: 11.5, paddingVertical: 10 },
+  change: { alignItems: "center", paddingVertical: 6 },
+  changeText: { fontSize: 11.5, fontWeight: "600", color: colors.blue },
 });
