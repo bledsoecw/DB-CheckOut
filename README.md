@@ -56,10 +56,15 @@ preset "Other", no build command → set env vars `JT_GRANT_KEY` and
 repo) → Deploy. The JobTread webhook URL is then
 `https://<project>.vercel.app/webhooks/jobtread/<APP_TOKEN>`.
 
-**Mobile app** (`apps/mobile`) — run with Expo:
+**Crew app** (`apps/mobile`) — one Expo codebase, two targets: an
+internal **web app** (the DB pattern — deploy the static export to
+Vercel, crew adds it to their home screen) and, if ever needed, native
+iOS/Android builds via the same code. Run it:
 
 ```
-cd apps/mobile && npm install && npx expo start
+cd apps/mobile && npm install
+npx expo start --web              # develop in the browser
+npx expo export --platform web    # static build (dist/) for Vercel
 ```
 
 With `SERVER_URL` empty in `src/api.ts` it runs in demo mode on sample

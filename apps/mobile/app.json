@@ -16,6 +16,14 @@
     "android": {
       "package": "com.deitemeyerbrothers.dbcheckout"
     },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "DB CheckOut",
+      "shortName": "DB CheckOut",
+      "themeColor": "#143A75",
+      "backgroundColor": "#F2F5F9"
+    },
     "plugins": [
       [
         "expo-image-picker",
