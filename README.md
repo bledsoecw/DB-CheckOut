@@ -35,6 +35,7 @@ Design mockups (one file per screen, laid out by `canvas.json`):
 | `Jobs.dc.html` | Mis trabajos — auto-filled job queue with directions |
 | `Main.dc.html` | Job home — Inspección / Limpieza / Reportar problema tiles |
 | `Checklist.dc.html` | Inspection checklist — big BIEN / N/A / FALLA buttons |
+| `ChecklistEN.dc.html` | Same inspection checklist with EN selected (OK / N/A / FIX) |
 | `Report.dc.html` | Report a problem — photo annotation + ES/EN voice → English note |
 | `Cleanup.dc.html` | Cleanup checklist with required photo proof |
 | `Send.dc.html` | Finish & send to JobTread |
@@ -49,7 +50,10 @@ Design mockups (one file per screen, laid out by `canvas.json`):
 Key design decisions:
 
 - **Spanish first, English second** — every label shows Spanish large
-  with English small underneath; an ES/EN toggle flips the priority.
+  with English small underneath; an ES·EN pill on every
+  inspection, cleanup & punch screen flips which language leads —
+  per crew member, remembered on their phone (labels swap too:
+  BIEN/FALLA becomes OK/FIX).
 - **Voice in any language, notes in English** — the crew speaks
   Spanish, English, or a mix; the office always receives an English
   note, with the original speech shown to the crew for confidence.
