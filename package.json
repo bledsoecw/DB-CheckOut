@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "typecheck": "tsc -p apps/sync/tsconfig.json",
-    "test": "npm --workspace apps/sync run test"
+    "test": "npm --workspace apps/sync run test",
+    "build:api": "node scripts/build-api.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

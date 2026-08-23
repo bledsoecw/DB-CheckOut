@@ -12,4 +12,7 @@ await build({
   outfile: "api/index.mjs",
   sourcemap: false,
   logLevel: "info",
+  banner: {
+    js: "// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api",
+  },
 });
