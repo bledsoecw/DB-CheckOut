@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# The committed web export mirrors source paths, including node_modules names
+!public/**
 .expo/
 .env
 *.local
