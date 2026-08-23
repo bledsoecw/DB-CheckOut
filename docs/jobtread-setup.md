@@ -41,12 +41,35 @@ pill flips priority). Canonical option values are always stored as
 | `22PdEQhB6rSV` | 5. General appearance — ready for the homeowner to view | Listo para que lo vea el cliente | option |
 | `22PdEQhB6rSW` | Cleanup notes (English) | Notas | longString |
 
-Form roles (already configured on both forms):
+### DB Customer Walkthrough — form `22PdEpi4SNW3`
 
-- Submitters: Crew `22PEWdLwFuDb`, Site Manager `22PEWeBJqFr4`,
-  Roofing Production Manager `22PT7gAjFxyX`, Admin `22PBAjexsjjX`
-- Reviewers: Roofing Production Manager `22PT7gAjFxyX`,
-  Construction Production Manager `22PEWd9dRa5k`, Admin `22PBAjexsjjX`
+Sales-rep form at the Final Inspection milestone (does not wait for
+punch items — the rep communicates the repair plan). **Gate: the job
+does not move to `Pending Final Payment` until this form is
+submitted.** English-only (sales reps).
+
+| Field id | Field | Type |
+| --- | --- | --- |
+| `22PdEpi4SjQL` | 1. Walkthrough with homeowner (In person / By phone/video / Unavailable — documented) | option |
+| `22PdEpi4SjQM` | 2. Sold scope complete — or approved changes/exclusions documented | option |
+| `22PdEpi4SjQN` | 3. Remaining punch items & repair timing communicated | option |
+| `22PdEpi4SjQP` | 4. Payment expectations reviewed — 40% now, 10% at job completion | option |
+| `22PdEpi4SjQQ` | Customer concerns / commitments | longString |
+| `22PdEpi4SjQR` | Follow-up — who owns the next action & when | longString |
+
+Form roles:
+
+- Inspection & Cleanup submitters: Crew `22PEWdLwFuDb`, Site Manager
+  `22PEWeBJqFr4`, Roofing Production Manager `22PT7gAjFxyX`, Admin
+  `22PBAjexsjjX`, **Sales Team `22PEWdJcCip7`** (reps inspect far jobs
+  in the app, EN mode; punch fixes still route to the service crew)
+- Inspection & Cleanup reviewers: Roofing Production Manager
+  `22PT7gAjFxyX`, Construction Production Manager `22PEWd9dRa5k`,
+  Admin `22PBAjexsjjX`
+- Walkthrough submitters: Sales Team `22PEWdJcCip7`, Sales Team
+  Manager `22PWktxywW8z`, Admin `22PBAjexsjjX`
+- Walkthrough reviewers: Front Office `22PEWd4hUQ2j`, Accounts Manager
+  `22PQcyVsGZTt`, Admin `22PBAjexsjjX`
 
 ## Punch items → JT tasks
 
@@ -71,12 +94,15 @@ The pipeline is strictly linear (no status is ever re-entered), so
 automations can safely key off status transitions. A rejected repair
 moves the job back from `Punch Review` to `Punch List`.
 
-## Payment milestones (PROPOSED — pending confirmation with Shawn)
+## Payment milestones (CONFIRMED — agreed with Shawn, roofing jobs)
 
 - 40% due when the inspection form submission is approved by its
   reviewer (the job leaves `Final Inspection`). One-time, dated,
-  photo-backed event.
+  photo-backed event. The sales rep's walkthrough visit carries this
+  milestone conversation.
 - Final 10% due on status → `Job Completed` (fires once).
+- `Pending Final Payment` additionally requires a submitted
+  DB Customer Walkthrough form.
 
 Other job custom fields the app reads: Project Manager `22PC4DSTx7tg`,
 Job Type `22PBzhnUydgC` (option "Roofing"), Sales Rep `22PBzhswJYd8`.
@@ -97,7 +123,3 @@ Job Type `22PBzhnUydgC` (option "Roofing"), Sales Rep `22PBzhswJYd8`.
    (Node/TypeScript Pave client + webhook receiver + voice pipeline).
 2. Register a webhook via `createWebhook` once the sync server has a URL.
 3. Obtain a JobTread API grant key for the sync server (org settings).
-4. Pending decisions: add Sales Team (`22PEWdJcCip7`) as submitters on
-   both forms (reps inspecting far jobs); create a "DB Customer
-   Walkthrough" form for sales reps and pick which milestone it gates;
-   confirm payment terms with Shawn.
