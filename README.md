@@ -40,6 +40,10 @@ Design mockups (one file per screen, laid out by `canvas.json`):
 | `Send.dc.html` | Finish & send to JobTread |
 | `PunchList.dc.html` | Punch crew — assigned repairs for a job |
 | `PunchItem.dc.html` | One repair — what to do, materials, AFTER photo gate |
+| `PMHome.dc.html` | PM — inspections & repairs queue (reports to review, repairs in flight) |
+| `PMReview.dc.html` | PM — inspection results with problem reports, set status Punch List |
+| `PMAssign.dc.html` | PM — assign a repair: crew member, due date, materials |
+| `PMVerify.dc.html` | PM — verify before/after photos, approve & close or send back |
 
 Key design decisions:
 
