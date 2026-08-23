@@ -22,8 +22,9 @@ repair work — wired into JobTread and the DB Production board.
    assigns repairs on the Production board.
 5. The **punch crew** sees assigned repairs in the same app: where to
    go, what to do, what to bring, before/after photos, and a big
-   "Terminado" button. The PM verifies and moves the JT status to
-   **Punch List** → **Job Completed**.
+   "Terminado" button. When the last repair closes, the job moves to
+   **Punch Review** automatically; the PM reviews the photos and notes,
+   then sets **Job Completed**.
 
 ## design/
 
@@ -69,7 +70,7 @@ Key design decisions:
   once every report is assigned or dismissed.
 - **JT is the system of record** — checklists come from JT Forms,
   queue and assignments come from the Production board (job Status:
-  Production → Final Inspection → Punch List → Job Completed), and all
+  Production → Final Inspection → Punch List → Punch Review → Job Completed), and all
   results land back on the JT job.
 
 Customer names and addresses in the mockups are sample data; PM names
