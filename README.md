@@ -59,6 +59,10 @@ Key design decisions:
   returns; the app says so in plain words ("Sin señal, no pasa nada").
 - **Photo gates** — cleanup proof photos and AFTER photos on repairs
   are required before items can close.
+- **Reports can be dismissed** — the PM can mark a report
+  no-action-needed with a reason (e.g. pre-existing damage); the photo
+  and note stay on the JT job as documentation, and closeout unlocks
+  once every report is assigned or dismissed.
 - **JT is the system of record** — checklists come from JT Forms,
   queue and assignments come from the Production board (job Status:
   Production → Final Inspection → Punch List → Job Completed), and all

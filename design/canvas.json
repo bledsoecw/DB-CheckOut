@@ -18,7 +18,7 @@
   "annotations": [
     { "id": "flow-note", "x": 0, "y": -180, "w": 380, "text": "DB CheckOut — Spanish-first crew app, wired to JobTread.\nTop: how it connects to the JT Production board & JT Forms.\nThis row, left to right: job queue → job home → inspection checklist → report a problem (photo + voice ES/EN → English note) → cleanup checklist → send to JobTread.\nCustomers & addresses are sample data; PM names and statuses come from your JobTread." },
     { "id": "punch-note", "x": 980, "y": 1104, "w": 320, "text": "Punch crew flow — same app. The PM assigns repairs on the JT Production board; the crew sees where to go, what to do, what to bring, and checks off each repair with before/after photos. The PM verifies and JT status moves to Job Completed." },
-    { "id": "pm-note", "x": 0, "y": 1988, "w": 460, "text": "PM side — the desktop Production Board (far right) is the PM's main surface, synced with JT statuses; the four phone screens are the same tools on the go. Crew notes arrive as drafts: the PM edits the English note into the work order before assigning — the crew gets it in Spanish + English. Approvals write to JobTread: task closed, status advanced." }
+    { "id": "pm-note", "x": 0, "y": 1988, "w": 460, "text": "PM side — the desktop Production Board (far right) is the PM's main surface, synced with JT statuses; the four phone screens are the same tools on the go. Crew notes arrive as drafts: the PM edits the English note into the work order before assigning — the crew gets it in Spanish + English. Approvals write to JobTread: task closed, status advanced. A report can also be dismissed as no-action-needed with a reason — its photo \u0026 note stay on the JT job as documentation." }
   ],
   "launch": { "view": "canvas" }
 }
