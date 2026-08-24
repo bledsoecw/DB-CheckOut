@@ -44,7 +44,12 @@ export interface ChecklistSubmission {
   texts?: Record<string, string>;
 }
 
-/** POST /jobs/:id/reports — a problem report that becomes an unassigned punch task. */
+/**
+ * POST /jobs/:id/reports — a problem report. Becomes an unassigned punch
+ * task for the PM/Service Manager to assign, unless the crew corrected it
+ * on the spot (fixedOnSite) — then the task is created already complete,
+ * purely as documentation of the correction.
+ */
 export interface ProblemReport {
   /** Short location, e.g. "Rear slope — pipe boot". */
   location: string;
@@ -54,6 +59,12 @@ export interface ProblemReport {
   heardText?: string;
   /** Reporter display name (until per-user auth lands). */
   reportedBy?: string;
+  /** Crew corrected it during the visit ("correct it rather than report it"). */
+  fixedOnSite?: boolean;
+  /** Materials and time the on-site correction took. */
+  materialsNote?: string;
+  /** Who did the original work, when known — factual, for management review. */
+  originalCrew?: string;
 }
 
 export interface ApiError {

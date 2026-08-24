@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PaveClient, PaveQuery } from "../src/pave";
-import { createReportTask, listPipelineJobs, submitForm, toQueueJob } from "../src/jt";
+import { completeTask, createReportTask, listPipelineJobs, submitForm, toQueueJob } from "../src/jt";
 import { CUSTOM_FIELDS, INSPECTION_FORM, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 function fakePave(responder: (q: PaveQuery) => unknown): { client: PaveClient; queries: PaveQuery[] } {
@@ -101,6 +101,44 @@ test("createReportTask creates an unassigned Punch List to-do with the English n
   assert.match(description, /Replace it\./);
   assert.match(description, /La bota del tubo/);
   assert.match(description, /José R\./);
+  assert.equal(dollar["progress"], undefined);
+});
+
+test("createReportTask with fixedOnSite creates the task already complete as documentation", async () => {
+  const { client, queries } = fakePave(() => ({ createTask: { createdTask: { id: "t2" } } }));
+  await createReportTask(client, "job1", {
+    location: "Rear slope — pipe boot",
+    englishNote: "Pipe boot was cracked.",
+    fixedOnSite: true,
+    materialsNote: "1 pipe boot, 20 min",
+    originalCrew: "Vasquez crew",
+  });
+  const dollar = (queries[0]["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(dollar["name"], "FIXED ON SITE: Rear slope — pipe boot");
+  assert.equal(dollar["progress"], 1);
+  const description = String(dollar["description"]);
+  assert.match(description, /Corrected on site/);
+  assert.match(description, /Materials & time: 1 pipe boot, 20 min/);
+  assert.match(description, /Original work by: Vasquez crew/);
+});
+
+test("completeTask without a note only sets progress", async () => {
+  const { client, queries } = fakePave(() => ({}));
+  await completeTask(client, "t1");
+  assert.equal(queries.length, 1);
+  const dollar = (queries[0]["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.deepEqual(dollar, { id: "t1", progress: 1 });
+});
+
+test("completeTask with a note appends the correction to the task description", async () => {
+  const { client, queries } = fakePave((q) =>
+    "task" in q ? { task: { description: "Reconnect the downspout." } } : {},
+  );
+  await completeTask(client, "t1", "2 straps, 15 min");
+  assert.equal(queries.length, 2);
+  const dollar = (queries[1]["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(dollar["progress"], 1);
+  assert.equal(dollar["description"], "Reconnect the downspout.\n\n✔ Done — 2 straps, 15 min");
 });
 
 test("toQueueJob tolerates missing custom fields", () => {

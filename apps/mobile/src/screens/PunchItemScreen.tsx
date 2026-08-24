@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -15,9 +15,10 @@ type Props = NativeStackScreenProps<RootStackParamList, "PunchItem">;
 
 export default function PunchItemScreen({ navigation, route }: Props) {
   const { jobId, taskId } = route.params;
-  const { t, t2 } = useLang();
+  const { t, t2, lang } = useLang();
   const [task, setTask] = useState<PunchTask | null>(null);
   const [afterUri, setAfterUri] = useState<string | null>(null);
+  const [doneNote, setDoneNote] = useState("");
   const [sending, setSending] = useState(false);
   const { setAfterPhoto } = useVisit(jobId);
 
@@ -41,7 +42,7 @@ export default function PunchItemScreen({ navigation, route }: Props) {
     setSending(true);
     try {
       // TODO(M2): upload the AFTER photo as a JT file tied to this task.
-      await completePunchTask(taskId, jobId);
+      await completePunchTask(taskId, jobId, doneNote);
       navigation.goBack();
     } finally {
       setSending(false);
@@ -83,6 +84,18 @@ export default function PunchItemScreen({ navigation, route }: Props) {
             </View>
           )}
         </Pressable>
+
+        <TextInput
+          value={doneNote}
+          onChangeText={setDoneNote}
+          placeholder={
+            lang === "es"
+              ? "¿Qué hiciste? Materiales y tiempo (opcional)"
+              : "What did you do? Materials & time (optional)"
+          }
+          placeholderTextColor="#9AA8B8"
+          style={styles.noteInput}
+        />
 
         <BigButton
           bi={{ es: "Terminado", en: "Done" }}
@@ -131,5 +144,14 @@ const styles = StyleSheet.create({
   },
   photoEmptyTitle: { fontSize: 15, fontWeight: "700", color: colors.ink },
   photoEmptySub: { fontSize: 11.5, color: colors.muted },
+  noteInput: {
+    backgroundColor: colors.card,
+    borderWidth: 1.5,
+    borderColor: "#D9E1EB",
+    borderRadius: 10,
+    padding: 11,
+    fontSize: 14,
+    color: colors.ink,
+  },
   footnote: { textAlign: "center", fontSize: 11.5, color: "#66788C" },
 });

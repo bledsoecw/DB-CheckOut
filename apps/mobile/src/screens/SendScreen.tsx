@@ -73,13 +73,13 @@ export default function SendScreen({ navigation, route }: Props) {
               {state.reports.length} {t("problemsReported")}
             </Text>
             {state.reports.map((r, i) => (
-              <Text key={i} style={styles.reportLine}>
-                • {r.location}
+              <Text key={i} style={r.fixedOnSite ? styles.reportLineFixed : styles.reportLine}>
+                {r.fixedOnSite ? "✔" : "•"} {r.location}
               </Text>
             ))}
-            <Text style={styles.reportsSub}>
-              {t("pmAssigns")}
-            </Text>
+            {state.reports.some((r) => !r.fixedOnSite) ? (
+              <Text style={styles.reportsSub}>{t("pmAssigns")}</Text>
+            ) : null}
           </Card>
         ) : null}
 
@@ -146,6 +146,7 @@ const styles = StyleSheet.create({
   },
   reportsTitle: { fontSize: 15, fontWeight: "700", color: "#9A3D0C" },
   reportLine: { fontSize: 13, color: "#9A3D0C" },
+  reportLineFixed: { fontSize: 13, color: colors.greenDark },
   reportsSub: { fontSize: 11.5, color: "#B36A44" },
   footnote: { textAlign: "center", fontSize: 11.5, color: "#66788C" },
 });

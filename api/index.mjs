@@ -210,27 +210,44 @@ async function submitForm(pave, formId, jobId, values) {
   return res.createFormSubmission.createdFormSubmission?.id ?? "";
 }
 async function createReportTask(pave, jobId, report) {
-  const heard = report.heardText ? `
-
-Crew said (verbatim): "${report.heardText}"` : "";
-  const by = report.reportedBy ? `
-Reported by: ${report.reportedBy}` : "";
+  const fixed = report.fixedOnSite === true;
+  const lines = [report.englishNote];
+  if (fixed) lines.push("\u2714 Corrected on site during the visit.");
+  if (report.materialsNote) lines.push(`Materials & time: ${report.materialsNote}`);
+  if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
+  if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
+  if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
   const res = await pave.query({
     createTask: {
       $: {
         targetId: jobId,
         taskTypeId: TASK_TYPES.punchList,
         isToDo: true,
-        name: `REPORT: ${report.location}`,
-        description: `${report.englishNote}${heard}${by}`
+        name: `${fixed ? "FIXED ON SITE" : "REPORT"}: ${report.location}`,
+        description: lines.join("\n\n").slice(0, 4096),
+        ...fixed ? { progress: 1 } : {}
       },
       createdTask: { id: {} }
     }
   });
   return res.createTask.createdTask?.id ?? "";
 }
-async function completeTask(pave, taskId) {
-  await pave.query({ updateTask: { $: { id: taskId, progress: 1 } } });
+async function completeTask(pave, taskId, note) {
+  const trimmed = note?.trim();
+  if (!trimmed) {
+    await pave.query({ updateTask: { $: { id: taskId, progress: 1 } } });
+    return;
+  }
+  const res = await pave.query({
+    task: { $: { id: taskId }, description: {} }
+  });
+  const done = `\u2714 Done \u2014 ${trimmed}`;
+  const description = res.task?.description ? `${res.task.description}
+
+${done}` : done;
+  await pave.query({
+    updateTask: { $: { id: taskId, progress: 1, description: description.slice(0, 4096) } }
+  });
 }
 async function setJobStatus(pave, jobId, status) {
   await pave.query({
@@ -317,7 +334,7 @@ function createHandler(deps) {
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = await readBody(req);
-        await completeTask(deps.pave, parts[1]);
+        await completeTask(deps.pave, parts[1], body.note);
         const flipped = body.jobId ? await applyPunchReviewFlip(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }

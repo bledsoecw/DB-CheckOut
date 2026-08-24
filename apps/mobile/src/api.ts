@@ -163,5 +163,5 @@ export const submitCleanup = (jobId: string, sub: ChecklistSubmission) =>
   post(`/jobs/${jobId}/cleanup`, sub);
 export const sendReport = (jobId: string, report: ProblemReport) =>
   post(`/jobs/${jobId}/reports`, report);
-export const completePunchTask = (taskId: string, jobId: string) =>
-  post(`/tasks/${taskId}/complete`, { jobId });
+export const completePunchTask = (taskId: string, jobId: string, note?: string) =>
+  post(`/tasks/${taskId}/complete`, { jobId, ...(note?.trim() ? { note: note.trim() } : {}) });

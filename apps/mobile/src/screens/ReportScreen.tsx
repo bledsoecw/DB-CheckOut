@@ -25,6 +25,9 @@ export default function ReportScreen({ navigation, route }: Props) {
   const [side, setSide] = useState<string>("back");
   const [detail, setDetail] = useState("");
   const [note, setNote] = useState("");
+  const [fixedOnSite, setFixedOnSite] = useState(false);
+  const [materials, setMaterials] = useState("");
+  const [originalCrew, setOriginalCrew] = useState("");
   const [photoUri, setPhotoUri] = useState<string | null>(null);
 
   const takePhoto = async () => {
@@ -39,7 +42,14 @@ export default function ReportScreen({ navigation, route }: Props) {
     const location = `${sideLabel?.en ?? side}${detail ? ` — ${detail}` : ""}`;
     // Voice pipeline lands in M2: until then the typed note IS the English note.
     // TODO(M2): attach photoUri as a JT file on the job/task.
-    addReport({ location, englishNote: note.trim(), reportedBy: undefined });
+    addReport({
+      location,
+      englishNote: note.trim(),
+      reportedBy: undefined,
+      fixedOnSite: fixedOnSite || undefined,
+      materialsNote: fixedOnSite && materials.trim() ? materials.trim() : undefined,
+      originalCrew: originalCrew.trim() || undefined,
+    });
     navigation.goBack();
   };
 
@@ -113,14 +123,74 @@ export default function ReportScreen({ navigation, route }: Props) {
           <Text style={styles.noteTag}>{t("englishNote").toUpperCase()}</Text>
         </Card>
 
+        <View>
+          <Text style={styles.label}>
+            {lang === "es" ? "¿Ya lo arreglaste?" : "Did you fix it already?"}{" "}
+            <Text style={styles.labelSub}>
+              {lang === "es" ? "Did you fix it already?" : "¿Ya lo arreglaste?"}
+            </Text>
+          </Text>
+          <View style={styles.sides}>
+            <Pressable
+              onPress={() => setFixedOnSite(true)}
+              style={[styles.side, fixedOnSite ? styles.sideFixed : null]}
+            >
+              <Text style={[styles.sideText, fixedOnSite ? styles.sideTextOn : null]}>
+                {lang === "es" ? "Sí, lo arreglé" : "Yes, I fixed it"}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setFixedOnSite(false)}
+              style={[styles.side, !fixedOnSite ? styles.sideOn : null]}
+            >
+              <Text style={[styles.sideText, !fixedOnSite ? styles.sideTextOn : null]}>
+                {lang === "es" ? "No, necesita cuadrilla" : "No, needs a crew"}
+              </Text>
+            </Pressable>
+          </View>
+          {fixedOnSite ? (
+            <TextInput
+              value={materials}
+              onChangeText={setMaterials}
+              placeholder={
+                lang === "es"
+                  ? "Materiales y tiempo: 2 botas, 30 min…"
+                  : "Materials & time: 2 pipe boots, 30 min…"
+              }
+              placeholderTextColor="#9AA8B8"
+              style={styles.input}
+            />
+          ) : null}
+        </View>
+
+        <TextInput
+          value={originalCrew}
+          onChangeText={setOriginalCrew}
+          placeholder={
+            lang === "es"
+              ? "¿Qué cuadrilla hizo el trabajo? (si sabes, opcional)"
+              : "Which crew did the original work? (if known, optional)"
+          }
+          placeholderTextColor="#9AA8B8"
+          style={styles.input}
+        />
+
         <BigButton
-          bi={{ es: "Enviar reporte", en: "Send report" }}
-          color={colors.orange}
+          bi={
+            fixedOnSite
+              ? { es: "Guardar lo que arreglé", en: "Save what I fixed" }
+              : { es: "Enviar reporte", en: "Send report" }
+          }
+          color={fixedOnSite ? colors.greenDark : colors.orange}
           disabled={note.trim().length === 0}
           onPress={send}
         />
         <Text style={styles.footnote}>
-          {t("pmAssigns")} · {t2("pmAssigns")}
+          {fixedOnSite
+            ? lang === "es"
+              ? "Queda documentado en JobTread — nadie tiene que regresar."
+              : "Documented in JobTread — nobody has to come back."
+            : `${t("pmAssigns")} · ${t2("pmAssigns")}`}
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -170,6 +240,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sideOn: { backgroundColor: colors.blue, borderColor: colors.blue },
+  sideFixed: { backgroundColor: colors.greenDark, borderColor: colors.greenDark },
   sideText: { fontSize: 12.5, fontWeight: "700", color: colors.muted },
   sideTextOn: { color: "#fff" },
   input: {

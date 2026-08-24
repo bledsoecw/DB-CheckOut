@@ -175,24 +175,33 @@ export async function submitForm(
 }
 
 /**
- * A crew problem report becomes an UNASSIGNED to-do task of type Punch List.
- * The PM assigns it (and edits the work order) on the Production board.
+ * A crew problem report becomes a to-do task of type Punch List.
+ * - Default: UNASSIGNED, for the Service Manager / PM to turn into a work
+ *   order on the Production board.
+ * - fixedOnSite: created already complete (progress 1) — the crew corrected
+ *   it during the visit; the task is the documentation of that correction.
  */
 export async function createReportTask(
   pave: PaveClient,
   jobId: string,
   report: ProblemReport,
 ): Promise<string> {
-  const heard = report.heardText ? `\n\nCrew said (verbatim): "${report.heardText}"` : "";
-  const by = report.reportedBy ? `\nReported by: ${report.reportedBy}` : "";
+  const fixed = report.fixedOnSite === true;
+  const lines = [report.englishNote];
+  if (fixed) lines.push("✔ Corrected on site during the visit.");
+  if (report.materialsNote) lines.push(`Materials & time: ${report.materialsNote}`);
+  if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
+  if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
+  if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
   const res = await pave.query<{ createTask: { createdTask?: { id: string } } }>({
     createTask: {
       $: {
         targetId: jobId,
         taskTypeId: TASK_TYPES.punchList,
         isToDo: true,
-        name: `REPORT: ${report.location}`,
-        description: `${report.englishNote}${heard}${by}`,
+        name: `${fixed ? "FIXED ON SITE" : "REPORT"}: ${report.location}`,
+        description: lines.join("\n\n").slice(0, 4096),
+        ...(fixed ? { progress: 1 } : {}),
       },
       createdTask: { id: {} },
     },
@@ -200,9 +209,25 @@ export async function createReportTask(
   return res.createTask.createdTask?.id ?? "";
 }
 
-/** Mark a punch task finished (crew pressed Terminado; after photo enforced app-side). */
-export async function completeTask(pave: PaveClient, taskId: string): Promise<void> {
-  await pave.query({ updateTask: { $: { id: taskId, progress: 1 } } });
+/**
+ * Mark a punch task finished (crew pressed Terminado; after photo enforced
+ * app-side). An optional note (materials, time, what was done) is appended
+ * to the task description so the correction is documented on the job.
+ */
+export async function completeTask(pave: PaveClient, taskId: string, note?: string): Promise<void> {
+  const trimmed = note?.trim();
+  if (!trimmed) {
+    await pave.query({ updateTask: { $: { id: taskId, progress: 1 } } });
+    return;
+  }
+  const res = await pave.query<{ task: { description: string | null } | null }>({
+    task: { $: { id: taskId }, description: {} },
+  });
+  const done = `✔ Done — ${trimmed}`;
+  const description = res.task?.description ? `${res.task.description}\n\n${done}` : done;
+  await pave.query({
+    updateTask: { $: { id: taskId, progress: 1, description: description.slice(0, 4096) } },
+  });
 }
 
 /** Move the job's Status custom field. */

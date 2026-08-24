@@ -80,6 +80,23 @@ assignee (taskAssignment), due date, and photos attached to the job
 tagged to the task. The existing **Inspection** task type
 (`22PNJDrm6TsA`) can be used to schedule the inspection visit itself.
 
+Task naming conventions (per Shawn's Service & QC Team Responsibilities
+doc — "correct it rather than simply report it"):
+
+- `REPORT: <location>` — crew found a problem that needs a return trip.
+  Created **unassigned**, progress 0; the Service Manager / PM edits it
+  into a work order and assigns it on the Production board.
+- `FIXED ON SITE: <location>` — crew corrected it during the visit.
+  Created already **complete** (progress 1); it exists purely as
+  documentation (what was found, materials & time, who did the original
+  work when known). Nothing to assign.
+- Completing a punch task with a crew note appends
+  `✔ Done — <materials/time note>` to the task description.
+
+Assignments to Alberto & Yahir come primarily through the **Service
+Manager**, with coordination from the Roofing PM — the board surfaces we
+label "PM" serve both roles.
+
 ## Status conventions (job custom field `22PBAjfWVVv9` "Status")
 
 | Status value | Meaning for DB CheckOut |

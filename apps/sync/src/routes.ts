@@ -104,8 +104,8 @@ export function createHandler(deps: RouterDeps) {
 
       // Crew finished a punch task -> mark complete, maybe flip to Punch Review.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
-        const body = (await readBody(req)) as { jobId?: string };
-        await completeTask(deps.pave, parts[1]);
+        const body = (await readBody(req)) as { jobId?: string; note?: string };
+        await completeTask(deps.pave, parts[1], body.note);
         const flipped = body.jobId ? await applyPunchReviewFlip(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }
