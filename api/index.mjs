@@ -13,6 +13,7 @@ function loadEnv(source = process.env) {
     workspaceDomain: (source.GOOGLE_WORKSPACE_DOMAIN ?? "deitemeyerbrothers.com").toLowerCase(),
     allowedEmails: (source.GOOGLE_ALLOWED_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
+    publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     port: Number(source.PORT ?? 8787)
   };
 }
@@ -416,6 +417,36 @@ ${done}` : done;
     updateTask: { $: { id: taskId, progress: 1, description: description.slice(0, 4096) } }
   });
 }
+async function uploadPhoto(pave, jobId, photo, fetchImpl = fetch) {
+  const up = await pave.query({
+    createUploadRequest: {
+      $: { organizationId: ORGANIZATION_ID, size: photo.data.length, type: photo.contentType },
+      createdUploadRequest: { id: {}, url: {}, method: {}, headers: {} }
+    }
+  });
+  const request = up.createUploadRequest.createdUploadRequest;
+  if (!request) throw new Error("JobTread did not return an upload request");
+  const sent = await fetchImpl(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: new Uint8Array(photo.data)
+  });
+  if (!sent.ok) throw new Error(`Photo upload failed: ${sent.status}`);
+  const stamp = (/* @__PURE__ */ new Date()).toISOString().slice(0, 16).replace("T", " ");
+  const res = await pave.query({
+    createFile: {
+      $: {
+        targetId: photo.taskId ?? jobId,
+        targetType: photo.taskId ? "task" : "job",
+        name: `${photo.label} ${stamp} \u2014 ${photo.byName}`,
+        uploadRequestId: request.id,
+        description: `Uploaded from DB CheckOut by ${photo.byName}`
+      },
+      createdFile: { id: {} }
+    }
+  });
+  return res.createFile.createdFile?.id ?? "";
+}
 async function setJobStatus(pave, jobId, status) {
   await pave.query({
     updateJob: {
@@ -461,6 +492,26 @@ async function readBody(req, limit = 5e6) {
 }
 function checklistValues(sub) {
   return { ...sub.answers, ...sub.texts ?? {} };
+}
+var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT"]);
+var MAX_PHOTO_BYTES = 4e6;
+function decodePhoto(imageBase64) {
+  if (typeof imageBase64 !== "string" || !imageBase64) return null;
+  let contentType = "image/jpeg";
+  let b64 = imageBase64;
+  const dataUri = /^data:([\w/+.-]+);base64,(.*)$/s.exec(imageBase64);
+  if (dataUri) {
+    contentType = dataUri[1];
+    b64 = dataUri[2];
+  }
+  if (!contentType.startsWith("image/")) return null;
+  try {
+    const data = Buffer.from(b64, "base64");
+    if (data.length === 0 || data.length > MAX_PHOTO_BYTES) return null;
+    return { data, contentType };
+  } catch {
+    return null;
+  }
 }
 function createHandler(deps) {
   return async function handle(req, res) {
@@ -526,7 +577,39 @@ function createHandler(deps) {
             ...report,
             reportedBy: session.name
           });
-          return json(res, 200, { taskId: id });
+          let photoUploaded = false;
+          const photo = decodePhoto(report.photoBase64);
+          if (photo) {
+            try {
+              await uploadPhoto(deps.pave, jobId, {
+                label: "REPORT",
+                ...photo,
+                taskId: id || void 0,
+                byName: session.name
+              });
+              photoUploaded = true;
+            } catch {
+              photoUploaded = false;
+            }
+          }
+          return json(res, 200, { taskId: id, photoUploaded });
+        }
+        if (parts[2] === "photos") {
+          const body = await readBody(req);
+          const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
+          if (!PHOTO_LABELS.has(label)) {
+            return json(res, 400, { error: "label must be BEFORE, AFTER or REPORT" });
+          }
+          const photo = decodePhoto(body.imageBase64);
+          if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });
+          const upload = {
+            label,
+            ...photo,
+            taskId: typeof body.taskId === "string" && body.taskId ? body.taskId : void 0,
+            byName: session.name
+          };
+          const fileId = await uploadPhoto(deps.pave, jobId, upload);
+          return json(res, 200, { fileId });
         }
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
@@ -552,14 +635,37 @@ function extractJobId(body) {
   return null;
 }
 
+// apps/sync/src/webhookRegistration.ts
+var WEBHOOK_EVENT_TYPES = ["taskCreated", "taskUpdated", "taskDeleted", "jobUpdated"];
+async function ensureWebhook(pave, publicUrl, webhookSecret) {
+  if (!publicUrl || !webhookSecret) return "skipped";
+  const target = `${publicUrl.replace(/\/$/, "")}/webhooks/jobtread/${webhookSecret}`;
+  const res = await pave.query({
+    organization: {
+      $: { id: ORGANIZATION_ID },
+      webhooks: { $: { size: 50 }, nodes: { id: {}, url: {} } }
+    }
+  });
+  if (res.organization.webhooks.nodes.some((w) => w.url === target)) return "exists";
+  await pave.query({
+    createWebhook: {
+      $: { organizationId: ORGANIZATION_ID, url: target, eventTypes: WEBHOOK_EVENT_TYPES }
+    }
+  });
+  return "created";
+}
+
 // apps/sync/src/vercel-entry.ts
 var handler = null;
 async function entry(req, res) {
   try {
     if (!handler) {
       const env = loadEnv();
+      const pave = createPaveClient(env.jtGrantKey);
+      void ensureWebhook(pave, env.publicUrl, env.webhookSecret).catch(() => {
+      });
       handler = createHandler({
-        pave: createPaveClient(env.jtGrantKey),
+        pave,
         sessionSecret: env.sessionSecret,
         googleClientId: env.googleClientId,
         workspaceDomain: env.workspaceDomain,

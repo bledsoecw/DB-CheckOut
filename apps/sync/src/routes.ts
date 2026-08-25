@@ -29,6 +29,8 @@ import {
   getJob,
   listPipelineJobs,
   submitForm,
+  uploadPhoto,
+  type PhotoUpload,
 } from "./jt";
 import { applyPunchReviewFlip } from "./punchReview";
 
@@ -69,6 +71,29 @@ async function readBody(req: IncomingMessage, limit = 5_000_000): Promise<unknow
 
 function checklistValues(sub: ChecklistSubmission): Record<string, string> {
   return { ...sub.answers, ...(sub.texts ?? {}) };
+}
+
+const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPORT"]);
+const MAX_PHOTO_BYTES = 4_000_000;
+
+/** Accepts a data URI or bare base64; returns bytes + content type or null. */
+export function decodePhoto(imageBase64: unknown): { data: Buffer; contentType: string } | null {
+  if (typeof imageBase64 !== "string" || !imageBase64) return null;
+  let contentType = "image/jpeg";
+  let b64 = imageBase64;
+  const dataUri = /^data:([\w/+.-]+);base64,(.*)$/s.exec(imageBase64);
+  if (dataUri) {
+    contentType = dataUri[1];
+    b64 = dataUri[2];
+  }
+  if (!contentType.startsWith("image/")) return null;
+  try {
+    const data = Buffer.from(b64, "base64");
+    if (data.length === 0 || data.length > MAX_PHOTO_BYTES) return null;
+    return { data, contentType };
+  } catch {
+    return null;
+  }
 }
 
 export function createHandler(deps: RouterDeps) {
@@ -150,7 +175,45 @@ export function createHandler(deps: RouterDeps) {
             ...report,
             reportedBy: session.name,
           });
-          return json(res, 200, { taskId: id });
+          // The report must never be lost to a photo hiccup — best-effort.
+          let photoUploaded = false;
+          const photo = decodePhoto(report.photoBase64);
+          if (photo) {
+            try {
+              await uploadPhoto(deps.pave, jobId, {
+                label: "REPORT",
+                ...photo,
+                taskId: id || undefined,
+                byName: session.name,
+              });
+              photoUploaded = true;
+            } catch {
+              photoUploaded = false;
+            }
+          }
+          return json(res, 200, { taskId: id, photoUploaded });
+        }
+
+        if (parts[2] === "photos") {
+          const body = (await readBody(req)) as {
+            label?: unknown;
+            taskId?: unknown;
+            imageBase64?: unknown;
+          };
+          const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
+          if (!PHOTO_LABELS.has(label)) {
+            return json(res, 400, { error: "label must be BEFORE, AFTER or REPORT" });
+          }
+          const photo = decodePhoto(body.imageBase64);
+          if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });
+          const upload: PhotoUpload = {
+            label: label as PhotoUpload["label"],
+            ...photo,
+            taskId: typeof body.taskId === "string" && body.taskId ? body.taskId : undefined,
+            byName: session.name,
+          };
+          const fileId = await uploadPhoto(deps.pave, jobId, upload);
+          return json(res, 200, { fileId });
         }
       }
 

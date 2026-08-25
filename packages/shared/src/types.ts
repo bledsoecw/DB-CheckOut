@@ -89,6 +89,8 @@ export interface ProblemReport {
   materialsNote?: string;
   /** Who did the original work, when known — factual, for management review. */
   originalCrew?: string;
+  /** Photo of the problem (data URI, downscaled client-side); attached to the JT task. */
+  photoBase64?: string;
 }
 
 export interface ApiError {

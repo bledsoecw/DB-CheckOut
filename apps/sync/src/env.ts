@@ -10,6 +10,8 @@ export interface Env {
   allowedEmails: string[];
   /** Validates the JobTread webhook URL path. Webhook is disabled until set. */
   webhookSecret: string;
+  /** Public base URL of this deployment, used to self-register the webhook. */
+  publicUrl: string;
   port: number;
 }
 
@@ -28,6 +30,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
+    publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     port: Number(source.PORT ?? 8787),
   };
 }

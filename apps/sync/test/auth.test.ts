@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { assertAllowedIdentity, mintSession, SESSION_TTL_SECONDS, verifySession } from "../src/auth";
-import { createHandler, type RouterDeps } from "../src/routes";
+import { createHandler, decodePhoto, type RouterDeps } from "../src/routes";
 import type { PaveClient, PaveQuery } from "../src/pave";
 
 const SECRET = "test-secret";
@@ -151,4 +151,16 @@ test("reports are stamped with the signed-in name, not the client's claim", asyn
   const dollar = (queries[0]["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
   assert.match(String(dollar["description"]), /Reported by: Yahir Gonzalez/);
   assert.doesNotMatch(String(dollar["description"]), /Spoofed/);
+});
+
+test("decodePhoto accepts data URIs and bare base64, rejects junk", () => {
+  const bytes = Buffer.from("hello").toString("base64");
+  assert.deepEqual(decodePhoto(`data:image/png;base64,${bytes}`), {
+    data: Buffer.from("hello"),
+    contentType: "image/png",
+  });
+  assert.equal(decodePhoto(`data:text/html;base64,${bytes}`), null);
+  assert.equal(decodePhoto(""), null);
+  assert.equal(decodePhoto(undefined), null);
+  assert.equal(decodePhoto(bytes)?.contentType, "image/jpeg");
 });

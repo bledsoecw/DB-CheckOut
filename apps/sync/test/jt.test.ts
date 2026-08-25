@@ -10,7 +10,9 @@ import {
   submitForm,
   toQueueJob,
   toScopeLines,
+  uploadPhoto,
 } from "../src/jt";
+import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
 import { CUSTOM_FIELDS, INSPECTION_FORM, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 function fakePave(responder: (q: PaveQuery) => unknown): { client: PaveClient; queries: PaveQuery[] } {
@@ -226,6 +228,86 @@ test("listSoldScope never breaks the job detail — errors become an empty scope
     throw new Error("Request Entity Too Large");
   });
   assert.deepEqual(await listSoldScope(client, "job1"), []);
+});
+
+test("uploadPhoto requests an upload, sends the bytes, attaches the file to the task", async () => {
+  const { client, queries } = fakePave((q) =>
+    "createUploadRequest" in q
+      ? {
+          createUploadRequest: {
+            createdUploadRequest: {
+              id: "up1",
+              url: "https://uploads.jobtread.com/x",
+              method: "PUT",
+              headers: { "x-key": "v" },
+            },
+          },
+        }
+      : { createFile: { createdFile: { id: "f1" } } },
+  );
+  const sent: Array<{ url: string; init: RequestInit }> = [];
+  const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+    sent.push({ url: String(url), init: init ?? {} });
+    return { ok: true, status: 200 } as Response;
+  }) as typeof fetch;
+
+  const fileId = await uploadPhoto(
+    client,
+    "job1",
+    { label: "AFTER", data: Buffer.from("img"), contentType: "image/jpeg", taskId: "t9", byName: "Yahir Gonzalez" },
+    fakeFetch,
+  );
+  assert.equal(fileId, "f1");
+  assert.equal(sent[0].url, "https://uploads.jobtread.com/x");
+  assert.equal(sent[0].init.method, "PUT");
+  const createDollar = (queries[1]["createFile"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(createDollar["targetId"], "t9");
+  assert.equal(createDollar["targetType"], "task");
+  assert.equal(createDollar["uploadRequestId"], "up1");
+  assert.match(String(createDollar["name"]), /^AFTER .*Yahir Gonzalez$/);
+});
+
+test("uploadPhoto without a task attaches to the job", async () => {
+  const { client, queries } = fakePave((q) =>
+    "createUploadRequest" in q
+      ? { createUploadRequest: { createdUploadRequest: { id: "up1", url: "u", method: "PUT", headers: {} } } }
+      : { createFile: { createdFile: { id: "f2" } } },
+  );
+  const okFetch = (async () => ({ ok: true, status: 200 }) as Response) as typeof fetch;
+  await uploadPhoto(client, "job1", { label: "REPORT", data: Buffer.from("x"), contentType: "image/png", byName: "A" }, okFetch);
+  const createDollar = (queries[1]["createFile"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(createDollar["targetId"], "job1");
+  assert.equal(createDollar["targetType"], "job");
+});
+
+test("ensureWebhook creates once, skips existing, skips unconfigured", async () => {
+  const make = (existingUrl: string | null) =>
+    fakePave((q) =>
+      "organization" in q
+        ? {
+            organization: {
+              webhooks: { nodes: existingUrl ? [{ id: "w1", url: existingUrl }] : [] },
+            },
+          }
+        : { createWebhook: {} },
+    );
+
+  const fresh = make(null);
+  assert.equal(await ensureWebhook(fresh.client, "https://x.example", "sec"), "created");
+  const createDollar = (fresh.queries[1]["createWebhook"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(createDollar["url"], "https://x.example/webhooks/jobtread/sec");
+  assert.deepEqual(createDollar["eventTypes"], WEBHOOK_EVENT_TYPES);
+
+  const already = make("https://x.example/webhooks/jobtread/sec");
+  assert.equal(await ensureWebhook(already.client, "https://x.example/", "sec"), "exists");
+  assert.equal(already.queries.length, 1);
+
+  const other = make("https://script.google.com/whatever");
+  assert.equal(await ensureWebhook(other.client, "https://x.example", "sec"), "created");
+
+  const off = make(null);
+  assert.equal(await ensureWebhook(off.client, "https://x.example", ""), "skipped");
+  assert.equal(off.queries.length, 0);
 });
 
 test("toQueueJob tolerates missing custom fields", () => {

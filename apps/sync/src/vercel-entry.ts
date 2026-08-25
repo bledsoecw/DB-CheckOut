@@ -17,6 +17,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadEnv } from "./env";
 import { createPaveClient } from "./pave";
 import { createHandler } from "./routes";
+import { ensureWebhook } from "./webhookRegistration";
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
@@ -26,8 +27,11 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
   try {
     if (!handler) {
       const env = loadEnv();
+      const pave = createPaveClient(env.jtGrantKey);
+      // Fire-and-forget: retried on the next cold start if it doesn't land.
+      void ensureWebhook(pave, env.publicUrl, env.webhookSecret).catch(() => {});
       handler = createHandler({
-        pave: createPaveClient(env.jtGrantKey),
+        pave,
         sessionSecret: env.sessionSecret,
         googleClientId: env.googleClientId,
         workspaceDomain: env.workspaceDomain,

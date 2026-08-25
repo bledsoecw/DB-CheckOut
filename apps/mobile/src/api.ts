@@ -203,3 +203,9 @@ export const sendReport = (jobId: string, report: ProblemReport) =>
   post(`/jobs/${jobId}/reports`, report);
 export const completePunchTask = (taskId: string, jobId: string, note?: string) =>
   post(`/tasks/${taskId}/complete`, { jobId, ...(note?.trim() ? { note: note.trim() } : {}) });
+export const uploadJobPhoto = (
+  jobId: string,
+  label: "BEFORE" | "AFTER" | "REPORT",
+  imageBase64: string,
+  taskId?: string,
+) => post(`/jobs/${jobId}/photos`, { label, imageBase64, ...(taskId ? { taskId } : {}) });

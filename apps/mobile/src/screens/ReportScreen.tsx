@@ -6,6 +6,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../App";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
+import { downscalePhoto } from "../photo";
 import { useVisit } from "../store";
 import { colors } from "../theme";
 
@@ -37,11 +38,11 @@ export default function ReportScreen({ navigation, route }: Props) {
     if (!result.canceled && result.assets[0]) setPhotoUri(result.assets[0].uri);
   };
 
-  const send = () => {
+  const send = async () => {
     const sideLabel = SIDES.find((s) => s.key === side);
     const location = `${sideLabel?.en ?? side}${detail ? ` — ${detail}` : ""}`;
     // Voice pipeline lands in M2: until then the typed note IS the English note.
-    // TODO(M2): attach photoUri as a JT file on the job/task.
+    const photoBase64 = photoUri ? await downscalePhoto(photoUri) : undefined;
     addReport({
       location,
       englishNote: note.trim(),
@@ -49,6 +50,7 @@ export default function ReportScreen({ navigation, route }: Props) {
       fixedOnSite: fixedOnSite || undefined,
       materialsNote: fixedOnSite && materials.trim() ? materials.trim() : undefined,
       originalCrew: originalCrew.trim() || undefined,
+      photoBase64,
     });
     navigation.goBack();
   };

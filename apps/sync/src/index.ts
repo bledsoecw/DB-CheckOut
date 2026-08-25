@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { loadEnv } from "./env";
 import { createPaveClient } from "./pave";
 import { createHandler } from "./routes";
+import { ensureWebhook } from "./webhookRegistration";
 
 const env = loadEnv();
 const pave = createPaveClient(env.jtGrantKey);
@@ -20,5 +21,7 @@ const server = createServer((req, res) => {
 
 server.listen(env.port, () => {
   console.log(`DB CheckOut sync listening on :${env.port}`);
-  console.log(`Webhook URL path: /webhooks/jobtread/<WEBHOOK_SECRET>`);
+  void ensureWebhook(pave, env.publicUrl, env.webhookSecret)
+    .then((r) => console.log(`JobTread webhook: ${r}`))
+    .catch((err) => console.log(`JobTread webhook registration failed: ${err}`));
 });

@@ -5,9 +5,10 @@ import * as ImagePicker from "expo-image-picker";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { PunchTask } from "@shared/types";
 import type { RootStackParamList } from "../../App";
-import { completePunchTask, getJob } from "../api";
+import { completePunchTask, getJob, uploadJobPhoto } from "../api";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
+import { downscalePhoto } from "../photo";
 import { useVisit } from "../store";
 import { colors } from "../theme";
 
@@ -15,8 +16,9 @@ type Props = NativeStackScreenProps<RootStackParamList, "PunchItem">;
 
 export default function PunchItemScreen({ navigation, route }: Props) {
   const { jobId, taskId } = route.params;
-  const { t, t2, lang } = useLang();
+  const { t, t2, lang, p } = useLang();
   const [task, setTask] = useState<PunchTask | null>(null);
+  const [beforeUri, setBeforeUri] = useState<string | null>(null);
   const [afterUri, setAfterUri] = useState<string | null>(null);
   const [doneNote, setDoneNote] = useState("");
   const [sending, setSending] = useState(false);
@@ -28,12 +30,16 @@ export default function PunchItemScreen({ navigation, route }: Props) {
       .catch(() => {});
   }, [jobId, taskId]);
 
-  const takeAfterPhoto = async () => {
+  const takePhoto = async (kind: "before" | "after") => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) return;
     const result = await ImagePicker.launchCameraAsync({ quality: 0.6 });
-    if (!result.canceled && result.assets[0]) {
-      setAfterUri(result.assets[0].uri);
+    if (result.canceled || !result.assets[0]) return;
+    const uri = await downscalePhoto(result.assets[0].uri);
+    if (kind === "before") {
+      setBeforeUri(uri);
+    } else {
+      setAfterUri(uri);
       setAfterPhoto(taskId);
     }
   };
@@ -41,7 +47,9 @@ export default function PunchItemScreen({ navigation, route }: Props) {
   const finish = async () => {
     setSending(true);
     try {
-      // TODO(M2): upload the AFTER photo as a JT file tied to this task.
+      // Photos land in JobTread attached to this task (queued if offline).
+      if (beforeUri) await uploadJobPhoto(jobId, "BEFORE", beforeUri, taskId);
+      if (afterUri) await uploadJobPhoto(jobId, "AFTER", afterUri, taskId);
       await completePunchTask(taskId, jobId, doneNote);
       navigation.goBack();
     } finally {
@@ -72,18 +80,28 @@ export default function PunchItemScreen({ navigation, route }: Props) {
           <Text style={styles.description}>{task?.description ?? ""}</Text>
         </Card>
 
-        <Pressable onPress={takeAfterPhoto}>
-          {afterUri ? (
-            <Image source={{ uri: afterUri }} style={styles.photo} />
-          ) : (
-            <View style={styles.photoEmpty}>
-              <Text style={styles.photoEmptyTitle}>{t("afterPhoto")}</Text>
-              <Text style={styles.photoEmptySub}>
-                {t("afterPhotoRequired")} · {t2("afterPhotoRequired")}
-              </Text>
-            </View>
-          )}
-        </Pressable>
+        <View style={styles.photoRow}>
+          <Pressable style={{ flex: 1 }} onPress={() => takePhoto("before")}>
+            {beforeUri ? (
+              <Image source={{ uri: beforeUri }} style={styles.photoHalf} />
+            ) : (
+              <View style={[styles.photoEmpty, styles.photoHalfEmpty]}>
+                <Text style={styles.photoEmptyTitle}>{p({ es: "Foto de antes", en: "Before photo" })}</Text>
+                <Text style={styles.photoEmptySub}>{p({ es: "Opcional", en: "Optional" })}</Text>
+              </View>
+            )}
+          </Pressable>
+          <Pressable style={{ flex: 1 }} onPress={() => takePhoto("after")}>
+            {afterUri ? (
+              <Image source={{ uri: afterUri }} style={styles.photoHalf} />
+            ) : (
+              <View style={[styles.photoEmpty, styles.photoHalfEmpty]}>
+                <Text style={styles.photoEmptyTitle}>{t("afterPhoto")}</Text>
+                <Text style={styles.photoEmptySub}>{t("afterPhotoRequired")}</Text>
+              </View>
+            )}
+          </Pressable>
+        </View>
 
         <TextInput
           value={doneNote}
@@ -131,6 +149,9 @@ const styles = StyleSheet.create({
   whatLabelSub: { color: "#9AA8B8", fontWeight: "600", letterSpacing: 0 },
   description: { fontSize: 15, color: colors.ink, lineHeight: 21 },
   photo: { width: "100%", height: 200, borderRadius: 16 },
+  photoRow: { flexDirection: "row", gap: 10 },
+  photoHalf: { width: "100%", height: 140, borderRadius: 16 },
+  photoHalfEmpty: { height: 140 },
   photoEmpty: {
     height: 120,
     borderRadius: 16,

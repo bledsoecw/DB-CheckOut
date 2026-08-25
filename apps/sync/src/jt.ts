@@ -343,6 +343,67 @@ export async function completeTask(pave: PaveClient, taskId: string, note?: stri
   });
 }
 
+export interface PhotoUpload {
+  /** BEFORE / AFTER a repair, or the photo on a problem REPORT. */
+  label: "BEFORE" | "AFTER" | "REPORT";
+  data: Buffer;
+  contentType: string;
+  /** Attach to this punch task; without it the photo lands on the job. */
+  taskId?: string;
+  /** Signed-in crew member, stamped into the file name and description. */
+  byName: string;
+}
+
+/**
+ * Upload a photo to JobTread: createUploadRequest -> send the bytes to the
+ * returned URL -> createFile attached to the task (or job).
+ */
+export async function uploadPhoto(
+  pave: PaveClient,
+  jobId: string,
+  photo: PhotoUpload,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const up = await pave.query<{
+    createUploadRequest: {
+      createdUploadRequest?: {
+        id: string;
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+      };
+    };
+  }>({
+    createUploadRequest: {
+      $: { organizationId: ORGANIZATION_ID, size: photo.data.length, type: photo.contentType },
+      createdUploadRequest: { id: {}, url: {}, method: {}, headers: {} },
+    },
+  });
+  const request = up.createUploadRequest.createdUploadRequest;
+  if (!request) throw new Error("JobTread did not return an upload request");
+  const sent = await fetchImpl(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: new Uint8Array(photo.data),
+  });
+  if (!sent.ok) throw new Error(`Photo upload failed: ${sent.status}`);
+
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const res = await pave.query<{ createFile: { createdFile?: { id: string } } }>({
+    createFile: {
+      $: {
+        targetId: photo.taskId ?? jobId,
+        targetType: photo.taskId ? "task" : "job",
+        name: `${photo.label} ${stamp} — ${photo.byName}`,
+        uploadRequestId: request.id,
+        description: `Uploaded from DB CheckOut by ${photo.byName}`,
+      },
+      createdFile: { id: {} },
+    },
+  });
+  return res.createFile.createdFile?.id ?? "";
+}
+
 /** Move the job's Status custom field. */
 export async function setJobStatus(pave: PaveClient, jobId: string, status: string): Promise<void> {
   await pave.query({
