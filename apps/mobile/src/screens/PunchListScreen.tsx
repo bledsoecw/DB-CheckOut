@@ -60,6 +60,21 @@ export default function PunchListScreen({ navigation, route }: Props) {
           </Card>
         ) : null}
 
+        {job && tasks.length === 0 ? (
+          <Card>
+            <Text style={styles.emptyTitle}>
+              {`Sin reparaciones asignadas todavía`}
+            </Text>
+            <Text style={styles.emptyText}>
+              {`La oficina convierte los reportes en órdenes de trabajo. · The office hasn't assigned any repairs for this job yet.`}
+            </Text>
+            <BigButton
+              bi={{ es: "Ver el trabajo", en: "Open the job" }}
+              onPress={() => navigation.navigate("Job", { jobId })}
+            />
+          </Card>
+        ) : null}
+
         {tasks.map((task) => {
           const finished = task.progress >= 1;
           return (
@@ -121,6 +136,8 @@ const styles = StyleSheet.create({
   },
   countText: { color: colors.orange, fontSize: 16, fontWeight: "700" },
   addressCard: { flexDirection: "row", alignItems: "center", gap: 12 },
+  emptyTitle: { fontSize: 15, fontWeight: "700", color: colors.ink, marginBottom: 4 },
+  emptyText: { fontSize: 12.5, color: colors.muted, marginBottom: 12 },
   address: { flex: 1, fontSize: 14.5, fontWeight: "700", color: colors.ink },
   doneCard: { backgroundColor: "#F7FAF7", borderColor: "#D8EADB" },
   taskRow: { flexDirection: "row", alignItems: "center", gap: 12 },

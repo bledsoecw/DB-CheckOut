@@ -86,6 +86,9 @@ export default function QueueScreen({ navigation }: Props) {
 function JobCard({ job, navigation }: { job: QueueJob; navigation: Props["navigation"] }) {
   const { t, p } = useLang();
   const isPunch = job.status === STATUS.punchList || job.status === STATUS.punchReview;
+  // Only route to the repairs list when there are actual repairs; a job
+  // parked at a punch status with no tasks opens like any other job.
+  const hasRepairs = isPunch && job.openPunchCount > 0;
   return (
     <Card>
       <View style={styles.cardTop}>
@@ -117,10 +120,10 @@ function JobCard({ job, navigation }: { job: QueueJob; navigation: Props["naviga
         ) : null}
         <View style={{ flex: 1 }}>
           <BigButton
-            bi={isPunch ? { es: "Ver reparaciones", en: "See the repairs" } : { es: "Empezar", en: "Start" }}
-            color={isPunch ? colors.orange : colors.blue}
+            bi={hasRepairs ? { es: "Ver reparaciones", en: "See the repairs" } : { es: "Empezar", en: "Start" }}
+            color={hasRepairs ? colors.orange : colors.blue}
             onPress={() =>
-              isPunch
+              hasRepairs
                 ? navigation.navigate("PunchList", { jobId: job.id })
                 : navigation.navigate("Job", { jobId: job.id })
             }

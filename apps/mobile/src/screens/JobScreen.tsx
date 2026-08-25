@@ -3,7 +3,7 @@ import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-na
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { JobDetail, ScopeDocument } from "@shared/types";
-import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
+import { CLEANUP_FORM, INSPECTION_FORM, STATUS } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
 import { getJob } from "../api";
 import { BigButton, Card, LangPill } from "../components";
@@ -83,6 +83,17 @@ export default function JobScreen({ navigation, route }: Props) {
           color={colors.orange}
           onPress={() => navigation.navigate("Report", { jobId })}
         />
+        {job &&
+        (job.punchTasks.length > 0 ||
+          job.status === STATUS.punchList ||
+          job.status === STATUS.punchReview) ? (
+          <Tile
+            title={{ es: "Reparaciones", en: "Repairs" }}
+            progress={`${job.punchTasks.filter((t) => t.progress >= 1).length}/${job.punchTasks.length}`}
+            color={colors.orange}
+            onPress={() => navigation.navigate("PunchList", { jobId })}
+          />
+        ) : null}
 
         <BigButton
           bi={{ es: "Terminar y enviar", en: "Finish & send" }}
