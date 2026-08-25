@@ -69,8 +69,8 @@ export default function PunchListScreen({ navigation, route }: Props) {
               {`La oficina convierte los reportes en órdenes de trabajo. · The office hasn't assigned any repairs for this job yet.`}
             </Text>
             <BigButton
-              bi={{ es: "Ver el trabajo", en: "Open the job" }}
-              onPress={() => navigation.navigate("Job", { jobId })}
+              bi={{ es: "Volver", en: "Back" }}
+              onPress={() => navigation.goBack()}
             />
           </Card>
         ) : null}
