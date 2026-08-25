@@ -42,7 +42,7 @@ completion with the automatic **Punch Review** status flip, and a
 webhook receiver. Run it:
 
 ```
-cp apps/sync/.env.example apps/sync/.env   # add JT_GRANT_KEY + APP_TOKEN
+cp apps/sync/.env.example apps/sync/.env   # add JT_GRANT_KEY + auth vars
 node --env-file=apps/sync/.env --import tsx apps/sync/src/index.ts
 ```
 
@@ -51,10 +51,18 @@ Tests & typecheck (no JT key needed): `npm install && npm test && npm run typech
 **Deploying to Vercel:** the repo is Vercel-ready — `api/index.ts` wraps
 the same router as a serverless function and `vercel.json` routes every
 path to it. In Vercel: Add New Project → import this repo → framework
-preset "Other", no build command → set env vars `JT_GRANT_KEY` and
-`APP_TOKEN` (paste values only in Vercel's dashboard, never in the
-repo) → Deploy. The JobTread webhook URL is then
-`https://<project>.vercel.app/webhooks/jobtread/<APP_TOKEN>`.
+preset "Other", no build command → set env vars `JT_GRANT_KEY`,
+`SESSION_SECRET`, `GOOGLE_CLIENT_ID` (and optionally
+`GOOGLE_WORKSPACE_DOMAIN`, `GOOGLE_ALLOWED_EMAILS`, `WEBHOOK_SECRET`;
+paste values only in Vercel's dashboard, never in the repo) → Deploy.
+The JobTread webhook URL is then
+`https://<project>.vercel.app/webhooks/jobtread/<WEBHOOK_SECRET>`.
+
+**Sign-in** is Google Workspace: the gate screen shows a Sign in with
+Google button (accounts on the company domain, plus any addresses in
+`GOOGLE_ALLOWED_EMAILS`). The server verifies the Google ID token and
+mints its own ~monthly session token, and every report and punch
+completion is stamped with the signed-in person's name in JobTread.
 
 **Crew app** (`apps/mobile`) — one Expo codebase, two targets: an
 internal **web app** (the DB pattern — deploy the static export to
@@ -67,15 +75,15 @@ npx expo start --web              # develop in the browser
 npx expo export --platform web    # static build (dist/) for Vercel
 ```
 
-With `SERVER_URL` empty in `src/api.ts` it runs in demo mode on sample
-data; point it at a deployed sync server (plus the matching
-`APP_TOKEN`) for the real queue. All writes go through a persistent
-offline outbox — nothing is lost in a dead spot.
+With no server reachable it runs in demo mode on sample data; served
+from the same Vercel project as the sync server it uses same-origin
+requests and Google sign-in for the real queue. All writes go through
+a persistent offline outbox — nothing is lost in a dead spot.
 
 Not built yet (M2): voice capture + ES/EN→English transcription
 (`apps/sync/src/voice.ts` holds the interface), photo upload to JT
-files, webhook registration, per-user login, and the PM surfaces
-(PMs use JobTread itself meanwhile).
+files, webhook registration, and the PM surfaces (PMs use JobTread
+itself meanwhile).
 
 ## design/
 

@@ -6,7 +6,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "./src/auth";
 import { LangProvider } from "./src/i18n";
 import { colors } from "./src/theme";
-import TeamCodeScreen from "./src/screens/TeamCodeScreen";
+import SignInScreen from "./src/screens/SignInScreen";
 import QueueScreen from "./src/screens/QueueScreen";
 import JobScreen from "./src/screens/JobScreen";
 import ChecklistScreen from "./src/screens/ChecklistScreen";
@@ -32,7 +32,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 function Root() {
   const { ready, mode } = useAuth();
   if (!ready) return null;
-  if (mode === null) return <TeamCodeScreen />;
+  if (mode === null) return <SignInScreen />;
   return (
     <NavigationContainer>
       <Stack.Navigator

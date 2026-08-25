@@ -19,7 +19,7 @@ export function directionsUrl(address: string): string {
 
 export default function QueueScreen({ navigation }: Props) {
   const { t, t2, p } = useLang();
-  const { mode, signOut } = useAuth();
+  const { mode, userName, signOut } = useAuth();
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [queued, setQueued] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -72,7 +72,7 @@ export default function QueueScreen({ navigation }: Props) {
               <Text style={styles.changeText}>
                 {mode === "demo"
                   ? p({ es: "Salir de la demostración", en: "Leave the demo" })
-                  : p({ es: "Cambiar código del equipo", en: "Change team code" })}
+                  : `${p({ es: "Cerrar sesión", en: "Sign out" })}${userName ? ` · ${userName}` : ""}`}
               </Text>
             </Pressable>
           </View>

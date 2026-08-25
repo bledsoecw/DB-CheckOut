@@ -5,7 +5,9 @@
  * apps/sync/src/routes.ts sees the original URL and dispatches as usual.
  * Locally you can still run the plain Node server (apps/sync/src/index.ts).
  *
- * Required Vercel environment variables: JT_GRANT_KEY, APP_TOKEN.
+ * Required Vercel environment variables: JT_GRANT_KEY, SESSION_SECRET,
+ * GOOGLE_CLIENT_ID. Optional: GOOGLE_WORKSPACE_DOMAIN (defaults to
+ * deitemeyerbrothers.com), GOOGLE_ALLOWED_EMAILS, WEBHOOK_SECRET.
  *
  * Any startup/config error is returned as JSON (message + presence booleans,
  * never secret values) instead of Vercel's opaque crash page.
@@ -26,7 +28,11 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
       const env = loadEnv();
       handler = createHandler({
         pave: createPaveClient(env.jtGrantKey),
-        appToken: env.appToken,
+        sessionSecret: env.sessionSecret,
+        googleClientId: env.googleClientId,
+        workspaceDomain: env.workspaceDomain,
+        allowedEmails: env.allowedEmails,
+        webhookSecret: env.webhookSecret,
       });
     }
     await handler(req, res);
@@ -43,7 +49,8 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
         diagnostics: {
           node: process.version,
           hasJtGrantKey: Boolean(process.env.JT_GRANT_KEY),
-          hasAppToken: Boolean(process.env.APP_TOKEN),
+          hasSessionSecret: Boolean(process.env.SESSION_SECRET),
+          hasGoogleClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
         },
       }),
     );

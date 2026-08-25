@@ -9,6 +9,6 @@
   },
   "scripts": {
     "start": "node --import tsx src/index.ts",
-    "test": "node --import tsx --test test/pave.test.ts test/jt.test.ts test/punchReview.test.ts"
+    "test": "node --import tsx --test test/pave.test.ts test/jt.test.ts test/punchReview.test.ts test/auth.test.ts"
   }
 }

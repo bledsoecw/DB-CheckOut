@@ -1,13 +1,15 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import type { AuthMode } from "./api";
-import { clearAuth, loadAuth } from "./api";
+import { clearAuth, currentUserName, loadAuth, setOnUnauthorized } from "./api";
 
 interface AuthContextValue {
   /** null while loading from storage. */
   ready: boolean;
   mode: AuthMode;
+  /** Display name of the signed-in person (null in demo). */
+  userName: string | null;
   setMode: (mode: AuthMode) => void;
-  /** Forget the stored code and go back to the first-open screen. */
+  /** Forget the stored session and go back to the sign-in screen. */
   signOut: () => void;
 }
 
@@ -22,6 +24,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setMode(m);
       setReady(true);
     });
+    // The server rejected our session (monthly expiry) — show the gate again.
+    setOnUnauthorized(() => setMode(null));
+    return () => setOnUnauthorized(null);
   }, []);
 
   const signOut = () => {
@@ -30,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ ready, mode, setMode, signOut }}>
+    <AuthContext.Provider value={{ ready, mode, userName: currentUserName(), setMode, signOut }}>
       {children}
     </AuthContext.Provider>
   );

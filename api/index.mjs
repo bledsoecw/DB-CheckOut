@@ -3,16 +3,16 @@
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
   const jtGrantKey = source.JT_GRANT_KEY ?? "";
-  const appToken = source.APP_TOKEN ?? "";
   if (!jtGrantKey) {
     throw new Error("JT_GRANT_KEY is not set. Create a grant key in JobTread and put it in apps/sync/.env");
   }
-  if (!appToken) {
-    throw new Error("APP_TOKEN is not set. Generate a shared secret for the mobile app (openssl rand -hex 24)");
-  }
   return {
     jtGrantKey,
-    appToken,
+    sessionSecret: source.SESSION_SECRET ?? "",
+    googleClientId: source.GOOGLE_CLIENT_ID ?? "",
+    workspaceDomain: (source.GOOGLE_WORKSPACE_DOMAIN ?? "deitemeyerbrothers.com").toLowerCase(),
+    allowedEmails: (source.GOOGLE_ALLOWED_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
+    webhookSecret: source.WEBHOOK_SECRET ?? "",
     port: Number(source.PORT ?? 8787)
   };
 }
@@ -48,6 +48,106 @@ function createPaveClient(grantKey, fetchImpl = fetch) {
       return JSON.parse(text);
     }
   };
+}
+
+// apps/sync/src/auth.ts
+import {
+  createHmac,
+  createPublicKey,
+  timingSafeEqual,
+  verify as verifySignature
+} from "node:crypto";
+var SESSION_ISSUER = "db-checkout";
+var SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+var b64json = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+function parseB64Json(part) {
+  try {
+    const parsed = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function sessionSignature(secret, signingInput) {
+  return createHmac("sha256", secret).update(signingInput).digest();
+}
+function mintSession(secret, user, nowMs = Date.now()) {
+  const iat = Math.floor(nowMs / 1e3);
+  const header = b64json({ alg: "HS256", typ: "JWT" });
+  const payload = b64json({
+    iss: SESSION_ISSUER,
+    sub: user.email,
+    name: user.name,
+    iat,
+    exp: iat + SESSION_TTL_SECONDS
+  });
+  const signature = sessionSignature(secret, `${header}.${payload}`).toString("base64url");
+  return `${header}.${payload}.${signature}`;
+}
+function verifySession(secret, token, nowMs = Date.now()) {
+  const parts = token.split(".");
+  if (parts.length !== 3 || !secret) return null;
+  const expected = sessionSignature(secret, `${parts[0]}.${parts[1]}`);
+  const actual = Buffer.from(parts[2], "base64url");
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+  const payload = parseB64Json(parts[1]);
+  if (!payload || payload["iss"] !== SESSION_ISSUER) return null;
+  if (typeof payload["exp"] !== "number" || payload["exp"] * 1e3 <= nowMs) return null;
+  const email = payload["sub"];
+  if (typeof email !== "string" || !email) return null;
+  return { email, name: typeof payload["name"] === "string" ? payload["name"] : email };
+}
+var GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+var GOOGLE_ISSUERS = /* @__PURE__ */ new Set(["https://accounts.google.com", "accounts.google.com"]);
+var JWKS_TTL_MS = 60 * 60 * 1e3;
+var jwksCache = null;
+async function googleKeys(fetchImpl, forceRefresh) {
+  const now = Date.now();
+  if (!forceRefresh && jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
+  const res = await fetchImpl(GOOGLE_JWKS_URL);
+  if (!res.ok) throw new Error(`Google JWKS fetch failed: ${res.status}`);
+  const body = await res.json();
+  jwksCache = { keys: body.keys ?? [], fetchedAt: now };
+  return jwksCache.keys;
+}
+async function verifyGoogleCredential(credential, clientId, fetchImpl = fetch, nowMs = Date.now()) {
+  const parts = credential.split(".");
+  if (parts.length !== 3) throw new Error("Malformed credential");
+  const header = parseB64Json(parts[0]);
+  const payload = parseB64Json(parts[1]);
+  if (!header || !payload) throw new Error("Malformed credential");
+  if (header["alg"] !== "RS256") throw new Error("Unexpected algorithm");
+  const kid = header["kid"];
+  let keys = await googleKeys(fetchImpl, false);
+  let jwk = keys.find((k) => k.kid === kid);
+  if (!jwk) {
+    keys = await googleKeys(fetchImpl, true);
+    jwk = keys.find((k) => k.kid === kid);
+  }
+  if (!jwk) throw new Error("Unknown signing key");
+  const publicKey = createPublicKey({ key: jwk, format: "jwk" });
+  const ok = verifySignature(
+    "RSA-SHA256",
+    Buffer.from(`${parts[0]}.${parts[1]}`),
+    publicKey,
+    Buffer.from(parts[2], "base64url")
+  );
+  if (!ok) throw new Error("Bad signature");
+  if (!GOOGLE_ISSUERS.has(String(payload["iss"]))) throw new Error("Bad issuer");
+  if (payload["aud"] !== clientId) throw new Error("Bad audience");
+  if (typeof payload["exp"] !== "number" || payload["exp"] * 1e3 <= nowMs) {
+    throw new Error("Credential expired");
+  }
+  return payload;
+}
+function assertAllowedIdentity(payload, workspaceDomain, allowedEmails) {
+  const email = String(payload["email"] ?? "").toLowerCase();
+  if (!email || payload["email_verified"] !== true) throw new Error("Email not verified");
+  const onDomain = workspaceDomain.length > 0 && (payload["hd"] === workspaceDomain || email.endsWith(`@${workspaceDomain}`));
+  const allowListed = allowedEmails.includes(email);
+  if (!onDomain && !allowListed) throw new Error(`Account not allowed: ${email}`);
+  const name = typeof payload["name"] === "string" && payload["name"] ? payload["name"] : email;
+  return { email, name };
 }
 
 // packages/shared/src/jobtread.ts
@@ -313,6 +413,11 @@ async function applyPunchReviewFlip(pave, jobId) {
 }
 
 // apps/sync/src/routes.ts
+function bearerToken(req) {
+  const header = req.headers["authorization"];
+  if (typeof header !== "string") return "";
+  return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
 function json(res, status, body) {
   const text = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json" });
@@ -340,17 +445,39 @@ function createHandler(deps) {
       if (req.method === "GET" && url.pathname === "/health") {
         return json(res, 200, { ok: true });
       }
+      if (req.method === "GET" && url.pathname === "/auth/config") {
+        return json(res, 200, { googleClientId: deps.googleClientId || null });
+      }
+      if (req.method === "POST" && url.pathname === "/auth/google") {
+        if (!deps.googleClientId || !deps.sessionSecret) {
+          return json(res, 501, { error: "Google sign-in is not configured on the server" });
+        }
+        const body = await readBody(req);
+        if (typeof body.credential !== "string" || !body.credential) {
+          return json(res, 400, { error: "credential is required" });
+        }
+        try {
+          const verify = deps.verifyGoogle ?? verifyGoogleCredential;
+          const payload = await verify(body.credential, deps.googleClientId);
+          const user = assertAllowedIdentity(payload, deps.workspaceDomain, deps.allowedEmails);
+          const token = mintSession(deps.sessionSecret, user);
+          return json(res, 200, { token, name: user.name, email: user.email });
+        } catch {
+          return json(res, 401, { error: "This Google account is not allowed" });
+        }
+      }
       if (req.method === "POST" && parts[0] === "webhooks" && parts[1] === "jobtread") {
-        if (parts[2] !== deps.appToken) return json(res, 401, { error: "Bad webhook token" });
+        if (!deps.webhookSecret || parts[2] !== deps.webhookSecret) {
+          return json(res, 401, { error: "Bad webhook token" });
+        }
         const body = await readBody(req);
         const jobId = extractJobId(body);
         let flipped = null;
         if (jobId) flipped = await applyPunchReviewFlip(deps.pave, jobId);
         return json(res, 200, { ok: true, flipped });
       }
-      if (req.headers["x-app-token"] !== deps.appToken) {
-        return json(res, 401, { error: "Unauthorized" });
-      }
+      const session = deps.sessionSecret ? verifySession(deps.sessionSecret, bearerToken(req)) : null;
+      if (!session) return json(res, 401, { error: "Unauthorized" });
       if (req.method === "GET" && url.pathname === "/queue") {
         return json(res, 200, await listPipelineJobs(deps.pave));
       }
@@ -370,13 +497,17 @@ function createHandler(deps) {
           if (!report.location || !report.englishNote) {
             return json(res, 400, { error: "location and englishNote are required" });
           }
-          const id = await createReportTask(deps.pave, jobId, report);
+          const id = await createReportTask(deps.pave, jobId, {
+            ...report,
+            reportedBy: session.name
+          });
           return json(res, 200, { taskId: id });
         }
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = await readBody(req);
-        await completeTask(deps.pave, parts[1], body.note);
+        const note = body.note?.trim() ? `${body.note.trim()} \u2014 ${session.name}` : session.name;
+        await completeTask(deps.pave, parts[1], note);
         const flipped = body.jobId ? await applyPunchReviewFlip(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }
@@ -404,7 +535,11 @@ async function entry(req, res) {
       const env = loadEnv();
       handler = createHandler({
         pave: createPaveClient(env.jtGrantKey),
-        appToken: env.appToken
+        sessionSecret: env.sessionSecret,
+        googleClientId: env.googleClientId,
+        workspaceDomain: env.workspaceDomain,
+        allowedEmails: env.allowedEmails,
+        webhookSecret: env.webhookSecret
       });
     }
     await handler(req, res);
@@ -421,7 +556,8 @@ async function entry(req, res) {
         diagnostics: {
           node: process.version,
           hasJtGrantKey: Boolean(process.env.JT_GRANT_KEY),
-          hasAppToken: Boolean(process.env.APP_TOKEN)
+          hasSessionSecret: Boolean(process.env.SESSION_SECRET),
+          hasGoogleClientId: Boolean(process.env.GOOGLE_CLIENT_ID)
         }
       })
     );

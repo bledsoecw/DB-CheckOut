@@ -16,61 +16,93 @@ import { MOCK_JOBS, mockJobDetail } from "./mock";
  */
 export const SERVER_URL = "";
 
-const TEAM_CODE_KEY = "db-checkout.teamCode";
+const SESSION_KEY = "db-checkout.session";
+const LEGACY_TEAM_CODE_KEY = "db-checkout.teamCode";
 const DEMO_KEY = "db-checkout.demoMode";
 const OUTBOX_KEY = "db-checkout.outbox";
 const CACHE_PREFIX = "db-checkout.cache.";
 
 /**
- * Auth is a single shared team code (the server's APP_TOKEN), typed once per
- * device on first open and kept in local storage — never baked into the
- * served page. Demo mode browses sample data with no server at all.
+ * Auth is Google Workspace sign-in: the gate screen exchanges a Google ID
+ * token for the server's own long-lived session token, kept in local
+ * storage — never baked into the served page. Demo mode browses sample
+ * data with no server at all.
  */
-let teamCode: string | null = null;
-let demoMode = false;
+interface Session {
+  token: string;
+  name: string;
+  email: string;
+}
 
-export type AuthMode = "team" | "demo" | null;
+let session: Session | null = null;
+let demoMode = false;
+let onUnauthorized: (() => void) | null = null;
+
+export type AuthMode = "google" | "demo" | null;
 
 export async function loadAuth(): Promise<AuthMode> {
-  teamCode = await AsyncStorage.getItem(TEAM_CODE_KEY);
+  // The shared team code is retired; anyone still carrying one signs in again.
+  await AsyncStorage.removeItem(LEGACY_TEAM_CODE_KEY);
+  const raw = await AsyncStorage.getItem(SESSION_KEY);
+  session = raw ? (JSON.parse(raw) as Session) : null;
   demoMode = (await AsyncStorage.getItem(DEMO_KEY)) === "1";
-  if (teamCode) return "team";
+  if (session) return "google";
   return demoMode ? "demo" : null;
 }
 
-/** True if the code lets us read the queue; stores it only on success. */
-export async function saveTeamCode(code: string): Promise<boolean> {
-  const trimmed = code.trim();
-  if (!trimmed) return false;
+/** The Google web client id, or null when the server isn't configured yet. */
+export async function getAuthConfig(): Promise<string | null> {
+  const res = await fetch(`${SERVER_URL}/auth/config`);
+  if (!res.ok) throw new Error(`auth/config -> ${res.status}`);
+  const body = (await res.json()) as { googleClientId: string | null };
+  return body.googleClientId;
+}
+
+/** Exchange a Google ID token for our session; stores it only on success. */
+export async function signInWithGoogle(credential: string): Promise<boolean> {
   try {
-    const res = await fetch(`${SERVER_URL}/queue`, { headers: { "x-app-token": trimmed } });
+    const res = await fetch(`${SERVER_URL}/auth/google`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential }),
+    });
     if (!res.ok) return false;
+    session = (await res.json()) as Session;
   } catch {
     return false;
   }
-  teamCode = trimmed;
   demoMode = false;
-  await AsyncStorage.setItem(TEAM_CODE_KEY, trimmed);
+  await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
   await AsyncStorage.removeItem(DEMO_KEY);
   return true;
 }
 
-export async function enterDemoMode(): Promise<void> {
-  demoMode = true;
-  teamCode = null;
-  await AsyncStorage.setItem(DEMO_KEY, "1");
-  await AsyncStorage.removeItem(TEAM_CODE_KEY);
+/** Display name of the signed-in person (null in demo / signed out). */
+export function currentUserName(): string | null {
+  return session?.name ?? null;
 }
 
-/** Forget the stored code (wrong code, or the office rotated it). */
+/** Called when the server rejects our session (expired or revoked). */
+export function setOnUnauthorized(listener: (() => void) | null): void {
+  onUnauthorized = listener;
+}
+
+export async function enterDemoMode(): Promise<void> {
+  demoMode = true;
+  session = null;
+  await AsyncStorage.setItem(DEMO_KEY, "1");
+  await AsyncStorage.removeItem(SESSION_KEY);
+}
+
+/** Sign out: forget the stored session. */
 export async function clearAuth(): Promise<void> {
-  teamCode = null;
+  session = null;
   demoMode = false;
-  await AsyncStorage.removeItem(TEAM_CODE_KEY);
+  await AsyncStorage.removeItem(SESSION_KEY);
   await AsyncStorage.removeItem(DEMO_KEY);
 }
 
-const connected = () => teamCode != null;
+const connected = () => session != null;
 
 interface OutboxItem {
   path: string;
@@ -83,10 +115,15 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown):
     method,
     headers: {
       "content-type": "application/json",
-      "x-app-token": teamCode ?? "",
+      authorization: `Bearer ${session?.token ?? ""}`,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401 && session) {
+    // Session expired (monthly) or was revoked — back to the sign-in gate.
+    await clearAuth();
+    onUnauthorized?.();
+  }
   if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
   return (await res.json()) as T;
 }
