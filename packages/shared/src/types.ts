@@ -36,8 +36,28 @@ export interface PunchTask {
   assigneeNames: string[];
 }
 
+/** One line of an approved customer order (the record stays English). */
+export interface ScopeLine {
+  name: string;
+  /** Quantity as sold; null when JT has it at 0/blank. */
+  quantity: number | null;
+  unit: string | null;
+  description: string | null;
+}
+
+/** An approved customer-facing document: the original order or an approved change. */
+export interface ScopeDocument {
+  id: string;
+  name: string;
+  issueDate: string | null;
+  price: number;
+  lines: ScopeLine[];
+}
+
 export interface JobDetail extends QueueJob {
   punchTasks: PunchTask[];
+  /** Approved customer orders, oldest first — what was sold, changes included. */
+  soldScope: ScopeDocument[];
 }
 
 /** POST /jobs/:id/inspection and /jobs/:id/cleanup */

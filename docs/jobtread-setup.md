@@ -94,8 +94,10 @@ doc — "correct it rather than simply report it"):
   `✔ Done — <materials/time note>` to the task description.
 
 Assignments to Alberto & Yahir come primarily through the **Service
-Manager**, with coordination from the Roofing PM — the board surfaces we
-label "PM" serve both roles.
+Manager** — that role is **Dave Elick**, the Service/Repair & Warranty
+project manager — with coordination from the Roofing PM. The board
+surfaces we label "PM" serve both roles; on service jobs the job's PM
+field is normally Dave.
 
 ## Status conventions (job custom field `22PBAjfWVVv9` "Status")
 
@@ -147,6 +149,17 @@ are resolved.
 
 Other job custom fields the app reads: Project Manager `22PC4DSTx7tg`,
 Sales Rep `22PBzhswJYd8`.
+
+## Sold scope (job documents)
+
+The job screen shows the sold scope so the crew has the original work
+order and approved changes in hand before inspecting (per Shawn's
+Service & QC doc). Scope = every job **document** with
+`type = customerOrder` and `status = approved`, oldest first — the
+signed estimate plus approved change orders. Invoices, vendor
+orders/bills, and drafts are not scope. Line items come from the
+document's `costItems` (name, quantity, unit, description). Verified
+live 2026-08-25 on job 26-0261.
 
 ## Pave API notes (learned while creating)
 

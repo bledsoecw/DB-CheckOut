@@ -11,7 +11,13 @@ import {
   STATUS,
   TASK_TYPES,
 } from "../../../packages/shared/src/jobtread";
-import type { JobDetail, ProblemReport, PunchTask, QueueJob } from "../../../packages/shared/src/types";
+import type {
+  JobDetail,
+  ProblemReport,
+  PunchTask,
+  QueueJob,
+  ScopeDocument,
+} from "../../../packages/shared/src/types";
 
 // --------------------------------------------------------------------------
 // Raw node shapes as Pave returns them
@@ -28,6 +34,23 @@ interface RawJob {
   name: string;
   customFieldValues: { nodes: RawCfv[] };
   location?: { formattedAddress: string | null } | null;
+}
+
+interface RawDocument {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  price: number;
+  issueDate: string | null;
+  costItems: {
+    nodes: Array<{
+      name: string;
+      description: string | null;
+      quantity: number | null;
+      unit: { name: string } | null;
+    }>;
+  };
 }
 
 interface RawTask {
@@ -77,6 +100,46 @@ const JOB_SELECTION = {
   location: { formattedAddress: {} },
 } as const;
 
+/** Documents selection for the job detail (verified live 2026-08-25). */
+const DOCUMENTS_SELECTION = {
+  $: { size: 25 },
+  nodes: {
+    id: {},
+    name: {},
+    type: {},
+    status: {},
+    price: {},
+    issueDate: {},
+    costItems: {
+      $: { size: 100 },
+      nodes: { name: {}, description: {}, quantity: {}, unit: { name: {} } },
+    },
+  },
+} as const;
+
+/**
+ * The sold scope is every APPROVED customer-facing order on the job — the
+ * original signed estimate plus approved changes — oldest first. Invoices,
+ * vendor orders/bills and anything draft/pending/denied are not scope.
+ */
+export function toSoldScope(docs: RawDocument[]): ScopeDocument[] {
+  return docs
+    .filter((d) => d.type === "customerOrder" && d.status === "approved")
+    .sort((a, b) => (a.issueDate ?? "").localeCompare(b.issueDate ?? ""))
+    .map((d) => ({
+      id: d.id,
+      name: d.name,
+      issueDate: d.issueDate,
+      price: d.price,
+      lines: d.costItems.nodes.map((li) => ({
+        name: li.name,
+        quantity: li.quantity ? li.quantity : null,
+        unit: li.unit?.name ?? null,
+        description: li.description || null,
+      })),
+    }));
+}
+
 // --------------------------------------------------------------------------
 // Queries
 // --------------------------------------------------------------------------
@@ -120,13 +183,17 @@ export async function listPipelineJobs(pave: PaveClient): Promise<QueueJob[]> {
 }
 
 export async function getJob(pave: PaveClient, jobId: string): Promise<JobDetail> {
-  const res = await pave.query<{ job: RawJob | null }>({
-    job: { $: { id: jobId }, ...JOB_SELECTION },
+  const res = await pave.query<{ job: (RawJob & { documents: { nodes: RawDocument[] } }) | null }>({
+    job: { $: { id: jobId }, ...JOB_SELECTION, documents: DOCUMENTS_SELECTION },
   });
   if (!res.job) throw new Error(`Job not found: ${jobId}`);
   const punchTasks = await listPunchTasks(pave, jobId);
   const open = punchTasks.filter((t) => t.progress < 1).length;
-  return { ...toQueueJob(res.job, open), punchTasks };
+  return {
+    ...toQueueJob(res.job, open),
+    punchTasks,
+    soldScope: toSoldScope(res.job.documents?.nodes ?? []),
+  };
 }
 
 export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<PunchTask[]> {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PaveClient, PaveQuery } from "../src/pave";
-import { completeTask, createReportTask, listPipelineJobs, submitForm, toQueueJob } from "../src/jt";
+import { completeTask, createReportTask, listPipelineJobs, submitForm, toQueueJob, toSoldScope } from "../src/jt";
 import { CUSTOM_FIELDS, INSPECTION_FORM, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 function fakePave(responder: (q: PaveQuery) => unknown): { client: PaveClient; queries: PaveQuery[] } {
@@ -157,6 +157,45 @@ test("toQueueJob collects multi-value project types and flags service calls", ()
   assert.deepEqual(job.projectTypes, ["R-Shingles", "R-Warranty"]);
   assert.equal(job.isService, true);
   assert.equal(toQueueJob(rawJob("x", "26-0001", "Closed")).isService, false);
+});
+
+test("toSoldScope keeps only approved customer orders, oldest first", () => {
+  const li = (name: string) => ({ name, description: null, quantity: 2, unit: { name: "Square" } });
+  const doc = (id: string, type: string, status: string, issueDate: string | null) => ({
+    id,
+    name: id,
+    type,
+    status,
+    price: 100,
+    issueDate,
+    costItems: { nodes: [li("Shingles")] },
+  });
+  const scope = toSoldScope([
+    doc("change-order", "customerOrder", "approved", "2026-05-12"),
+    doc("invoice", "customerInvoice", "approved", "2026-04-01"),
+    doc("pending-estimate", "customerOrder", "pending", "2026-05-05"),
+    doc("work-order", "vendorOrder", "approved", "2026-03-14"),
+    doc("original", "customerOrder", "approved", "2026-03-14"),
+  ]);
+  assert.deepEqual(scope.map((d) => d.id), ["original", "change-order"]);
+  assert.deepEqual(scope[0].lines, [
+    { name: "Shingles", quantity: 2, unit: "Square", description: null },
+  ]);
+});
+
+test("toSoldScope drops zero quantities and empty descriptions", () => {
+  const [d] = toSoldScope([
+    {
+      id: "d1",
+      name: "Estimate",
+      type: "customerOrder",
+      status: "approved",
+      price: 0,
+      issueDate: null,
+      costItems: { nodes: [{ name: "Item", description: "", quantity: 0, unit: null }] },
+    },
+  ]);
+  assert.deepEqual(d.lines, [{ name: "Item", quantity: null, unit: null, description: null }]);
 });
 
 test("toQueueJob tolerates missing custom fields", () => {

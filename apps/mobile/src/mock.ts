@@ -31,11 +31,51 @@ export const MOCK_JOBS: QueueJob[] = [
   },
 ];
 
+const MOCK_SCOPE = [
+  {
+    id: "demo-doc-1",
+    name: "Estimate",
+    issueDate: "2026-07-02",
+    price: 18450,
+    lines: [
+      {
+        name: "OC Duration Shingles — Onyx Black",
+        quantity: 32,
+        unit: "Square",
+        description: "Owens Corning Duration architectural shingles, Onyx Black.",
+      },
+      {
+        name: "OC Rhino Synthetic",
+        quantity: 4,
+        unit: "Each",
+        description: "Synthetic underlayment, per 10 SQ roll.",
+      },
+      { name: "High Temp Pipe Boot", quantity: 3, unit: "Each", description: null },
+      { name: "Hauling & Disposal (R)", quantity: null, unit: null, description: null },
+    ],
+  },
+  {
+    id: "demo-doc-2",
+    name: "Change Order — Gutters",
+    issueDate: "2026-07-18",
+    price: 2140,
+    lines: [
+      {
+        name: '5" Seamless Gutters',
+        quantity: 148,
+        unit: "Linear Feet",
+        description: "White aluminum, includes downspouts.",
+      },
+    ],
+  },
+];
+
 export function mockJobDetail(jobId: string): JobDetail {
   const base = MOCK_JOBS.find((j) => j.id === jobId) ?? MOCK_JOBS[0];
   if (base.status === STATUS.punchList) {
     return {
       ...base,
+      soldScope: MOCK_SCOPE,
       punchTasks: [
         {
           id: "demo-task-1",
@@ -64,5 +104,5 @@ export function mockJobDetail(jobId: string): JobDetail {
       ],
     };
   }
-  return { ...base, punchTasks: [] };
+  return { ...base, punchTasks: [], soldScope: MOCK_SCOPE };
 }

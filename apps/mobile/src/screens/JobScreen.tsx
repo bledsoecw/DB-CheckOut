@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { JobDetail } from "@shared/types";
+import type { JobDetail, ScopeDocument } from "@shared/types";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
 import { getJob } from "../api";
@@ -63,6 +63,8 @@ export default function JobScreen({ navigation, route }: Props) {
           </Card>
         ) : null}
 
+        {job && job.soldScope.length > 0 ? <ScopeCard docs={job.soldScope} /> : null}
+
         <Tile
           title={{ es: "Inspección", en: "Inspection" }}
           progress={`${inspectionDone}/${INSPECTION_FORM.optionFields.length}`}
@@ -95,6 +97,67 @@ export default function JobScreen({ navigation, route }: Props) {
         </Text>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
+  const { p, s } = useLang();
+  const [open, setOpen] = useState(false);
+  const [expandedLine, setExpandedLine] = useState<string | null>(null);
+  const lineCount = docs.reduce((n, d) => n + d.lines.length, 0);
+  return (
+    <Card style={{ paddingVertical: 14 }}>
+      <Pressable onPress={() => setOpen((o) => !o)} hitSlop={8}>
+        <View style={styles.scopeHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tileTitle}>{p({ es: "Trabajo vendido", en: "Sold scope" })}</Text>
+            <Text style={styles.tileSub}>
+              {s({ es: "Trabajo vendido", en: "Sold scope" })} · {docs.length}{" "}
+              {p({ es: "documentos", en: "documents" })} · {lineCount}{" "}
+              {p({ es: "líneas", en: "lines" })}
+            </Text>
+          </View>
+          <Text style={styles.chevron}>{open ? "▾" : "›"}</Text>
+        </View>
+      </Pressable>
+      {open
+        ? docs.map((doc) => (
+            <View key={doc.id} style={styles.scopeDoc}>
+              <Text style={styles.scopeDocName}>
+                {doc.name}
+                {doc.issueDate ? `  ·  ${doc.issueDate}` : ""}
+              </Text>
+              {doc.lines.map((line, i) => {
+                const key = `${doc.id}:${i}`;
+                const expanded = expandedLine === key;
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() =>
+                      line.description ? setExpandedLine(expanded ? null : key) : undefined
+                    }
+                  >
+                    <View style={styles.scopeLine}>
+                      <Text style={styles.scopeLineName}>
+                        {line.name}
+                        {line.description ? " …" : ""}
+                      </Text>
+                      {line.quantity != null ? (
+                        <Text style={styles.scopeQty}>
+                          {line.quantity} {line.unit ?? ""}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {expanded && line.description ? (
+                      <Text style={styles.scopeDesc}>{line.description}</Text>
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          ))
+        : null}
+    </Card>
   );
 }
 
@@ -149,6 +212,18 @@ const styles = StyleSheet.create({
   addressCard: { flexDirection: "row", alignItems: "center", gap: 12 },
   address: { fontSize: 14.5, fontWeight: "700", color: colors.ink },
   tile: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 18 },
+  scopeHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
+  scopeDoc: { marginTop: 12, borderTopWidth: 1, borderTopColor: colors.divider, paddingTop: 10 },
+  scopeDocName: { fontSize: 12.5, fontWeight: "700", color: colors.blue, marginBottom: 4 },
+  scopeLine: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 5,
+  },
+  scopeLineName: { flex: 1, fontSize: 14, color: colors.ink },
+  scopeQty: { fontSize: 13, fontWeight: "600", color: colors.muted },
+  scopeDesc: { fontSize: 12.5, color: colors.muted, paddingBottom: 6, paddingLeft: 2 },
   tileTitle: { fontSize: 18, fontWeight: "700", color: colors.ink },
   tileSub: { fontSize: 12, color: colors.faint },
   tileProgress: { fontSize: 16, fontWeight: "700" },
