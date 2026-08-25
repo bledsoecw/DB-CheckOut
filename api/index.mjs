@@ -248,34 +248,62 @@ var JOB_SELECTION = {
   customFieldValues: { $: { size: 25 }, nodes: { value: {}, customField: { id: {} } } },
   location: { formattedAddress: {} }
 };
-var DOCUMENTS_SELECTION = {
+var DOC_META_SELECTION = {
   $: { size: 25 },
-  nodes: {
-    id: {},
-    name: {},
-    type: {},
-    status: {},
-    price: {},
-    issueDate: {},
-    costItems: {
-      $: { size: 100 },
-      nodes: { name: {}, description: {}, quantity: {}, unit: { name: {} } }
-    }
-  }
+  nodes: { id: {}, name: {}, type: {}, status: {}, price: {}, issueDate: {} }
 };
-function toSoldScope(docs) {
-  return docs.filter((d) => d.type === "customerOrder" && d.status === "approved").sort((a, b) => (a.issueDate ?? "").localeCompare(b.issueDate ?? "")).map((d) => ({
-    id: d.id,
-    name: d.name,
-    issueDate: d.issueDate,
-    price: d.price,
-    lines: d.costItems.nodes.map((li) => ({
-      name: li.name,
-      quantity: li.quantity ? li.quantity : null,
-      unit: li.unit?.name ?? null,
-      description: li.description || null
-    }))
+function selectScopeDocs(docs) {
+  return docs.filter((d) => d.type === "customerOrder" && d.status === "approved").sort((a, b) => (a.issueDate ?? "").localeCompare(b.issueDate ?? ""));
+}
+function toScopeLines(nodes) {
+  return nodes.map((li) => ({
+    name: li.name,
+    quantity: li.quantity ? li.quantity : null,
+    unit: li.unit?.name ?? null,
+    description: li.description || null
   }));
+}
+async function listDocumentLines(pave, documentId) {
+  const lines = [];
+  let page = null;
+  for (let i = 0; i < 4; i++) {
+    const res = await pave.query({
+      document: {
+        $: { id: documentId },
+        costItems: {
+          $: { size: 50, ...page ? { page } : {} },
+          nextPage: {},
+          nodes: { name: {}, description: {}, quantity: {}, unit: { name: {} } }
+        }
+      }
+    });
+    const items = res.document?.costItems;
+    lines.push(...toScopeLines(items?.nodes ?? []));
+    if (!items?.nextPage) break;
+    page = items.nextPage;
+  }
+  return lines;
+}
+async function listSoldScope(pave, jobId) {
+  try {
+    const res = await pave.query({
+      job: { $: { id: jobId }, documents: DOC_META_SELECTION }
+    });
+    const docs = selectScopeDocs(res.job?.documents.nodes ?? []);
+    const out = [];
+    for (const d of docs.slice(0, 10)) {
+      out.push({
+        id: d.id,
+        name: d.name,
+        issueDate: d.issueDate,
+        price: d.price,
+        lines: await listDocumentLines(pave, d.id)
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 async function listPipelineJobs(pave) {
   const wanted = /* @__PURE__ */ new Set([STATUS.finalInspection, STATUS.punchList, STATUS.punchReview]);
@@ -303,17 +331,14 @@ async function listPipelineJobs(pave) {
   return out;
 }
 async function getJob(pave, jobId) {
-  const res = await pave.query({
-    job: { $: { id: jobId }, ...JOB_SELECTION, documents: DOCUMENTS_SELECTION }
-  });
+  const [res, punchTasks, soldScope] = await Promise.all([
+    pave.query({ job: { $: { id: jobId }, ...JOB_SELECTION } }),
+    listPunchTasks(pave, jobId),
+    listSoldScope(pave, jobId)
+  ]);
   if (!res.job) throw new Error(`Job not found: ${jobId}`);
-  const punchTasks = await listPunchTasks(pave, jobId);
   const open = punchTasks.filter((t) => t.progress < 1).length;
-  return {
-    ...toQueueJob(res.job, open),
-    punchTasks,
-    soldScope: toSoldScope(res.job.documents?.nodes ?? [])
-  };
+  return { ...toQueueJob(res.job, open), punchTasks, soldScope };
 }
 async function listPunchTasks(pave, jobId) {
   const res = await pave.query({

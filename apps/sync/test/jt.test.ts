@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PaveClient, PaveQuery } from "../src/pave";
-import { completeTask, createReportTask, listPipelineJobs, submitForm, toQueueJob, toSoldScope } from "../src/jt";
+import {
+  completeTask,
+  createReportTask,
+  listPipelineJobs,
+  listSoldScope,
+  selectScopeDocs,
+  submitForm,
+  toQueueJob,
+  toScopeLines,
+} from "../src/jt";
 import { CUSTOM_FIELDS, INSPECTION_FORM, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 function fakePave(responder: (q: PaveQuery) => unknown): { client: PaveClient; queries: PaveQuery[] } {
@@ -159,8 +168,7 @@ test("toQueueJob collects multi-value project types and flags service calls", ()
   assert.equal(toQueueJob(rawJob("x", "26-0001", "Closed")).isService, false);
 });
 
-test("toSoldScope keeps only approved customer orders, oldest first", () => {
-  const li = (name: string) => ({ name, description: null, quantity: 2, unit: { name: "Square" } });
+test("selectScopeDocs keeps only approved customer orders, oldest first", () => {
   const doc = (id: string, type: string, status: string, issueDate: string | null) => ({
     id,
     name: id,
@@ -168,9 +176,8 @@ test("toSoldScope keeps only approved customer orders, oldest first", () => {
     status,
     price: 100,
     issueDate,
-    costItems: { nodes: [li("Shingles")] },
   });
-  const scope = toSoldScope([
+  const scope = selectScopeDocs([
     doc("change-order", "customerOrder", "approved", "2026-05-12"),
     doc("invoice", "customerInvoice", "approved", "2026-04-01"),
     doc("pending-estimate", "customerOrder", "pending", "2026-05-05"),
@@ -178,24 +185,47 @@ test("toSoldScope keeps only approved customer orders, oldest first", () => {
     doc("original", "customerOrder", "approved", "2026-03-14"),
   ]);
   assert.deepEqual(scope.map((d) => d.id), ["original", "change-order"]);
-  assert.deepEqual(scope[0].lines, [
-    { name: "Shingles", quantity: 2, unit: "Square", description: null },
+});
+
+test("toScopeLines drops zero quantities and empty descriptions", () => {
+  assert.deepEqual(toScopeLines([{ name: "Item", description: "", quantity: 0, unit: null }]), [
+    { name: "Item", quantity: null, unit: null, description: null },
+  ]);
+  assert.deepEqual(toScopeLines([{ name: "Shingles", description: "OC", quantity: 2, unit: { name: "Square" } }]), [
+    { name: "Shingles", quantity: 2, unit: "Square", description: "OC" },
   ]);
 });
 
-test("toSoldScope drops zero quantities and empty descriptions", () => {
-  const [d] = toSoldScope([
-    {
-      id: "d1",
-      name: "Estimate",
-      type: "customerOrder",
-      status: "approved",
-      price: 0,
-      issueDate: null,
-      costItems: { nodes: [{ name: "Item", description: "", quantity: 0, unit: null }] },
-    },
-  ]);
-  assert.deepEqual(d.lines, [{ name: "Item", quantity: null, unit: null, description: null }]);
+test("listSoldScope fetches lines per approved order and follows pagination", async () => {
+  const { client, queries } = fakePave((q) => {
+    if ("job" in q) {
+      return {
+        job: {
+          documents: {
+            nodes: [
+              { id: "d1", name: "Estimate", type: "customerOrder", status: "approved", price: 100, issueDate: "2026-07-01" },
+              { id: "junk", name: "Invoice", type: "customerInvoice", status: "approved", price: 1, issueDate: null },
+            ],
+          },
+        },
+      };
+    }
+    const page = ((q["document"] as Record<string, unknown>)["costItems"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+    return page["page"] === "p2"
+      ? { document: { costItems: { nextPage: null, nodes: [{ name: "B", description: null, quantity: 1, unit: null }] } } }
+      : { document: { costItems: { nextPage: "p2", nodes: [{ name: "A", description: null, quantity: 1, unit: null }] } } };
+  });
+  const scope = await listSoldScope(client, "job1");
+  assert.equal(queries.length, 3); // doc list + two line pages, only for the approved order
+  assert.deepEqual(scope.map((d) => d.id), ["d1"]);
+  assert.deepEqual(scope[0].lines.map((l) => l.name), ["A", "B"]);
+});
+
+test("listSoldScope never breaks the job detail — errors become an empty scope", async () => {
+  const { client } = fakePave(() => {
+    throw new Error("Request Entity Too Large");
+  });
+  assert.deepEqual(await listSoldScope(client, "job1"), []);
 });
 
 test("toQueueJob tolerates missing custom fields", () => {

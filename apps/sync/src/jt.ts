@@ -36,22 +36,23 @@ interface RawJob {
   location?: { formattedAddress: string | null } | null;
 }
 
-interface RawDocument {
+interface RawDocumentMeta {
   id: string;
   name: string;
   type: string;
   status: string;
   price: number;
   issueDate: string | null;
-  costItems: {
-    nodes: Array<{
-      name: string;
-      description: string | null;
-      quantity: number | null;
-      unit: { name: string } | null;
-    }>;
-  };
 }
+export type { RawDocumentMeta };
+
+interface RawCostItem {
+  name: string;
+  description: string | null;
+  quantity: number | null;
+  unit: { name: string } | null;
+}
+export type { RawCostItem };
 
 interface RawTask {
   id: string;
@@ -100,21 +101,15 @@ const JOB_SELECTION = {
   location: { formattedAddress: {} },
 } as const;
 
-/** Documents selection for the job detail (verified live 2026-08-25). */
-const DOCUMENTS_SELECTION = {
+/**
+ * Pave rejects queries whose declared nested page sizes multiply out too
+ * large ("Request Entity Too Large" — e.g. documents:25 × costItems:100),
+ * so the sold scope is fetched in small pieces: the document list first,
+ * then line items per approved order, paginated.
+ */
+const DOC_META_SELECTION = {
   $: { size: 25 },
-  nodes: {
-    id: {},
-    name: {},
-    type: {},
-    status: {},
-    price: {},
-    issueDate: {},
-    costItems: {
-      $: { size: 100 },
-      nodes: { name: {}, description: {}, quantity: {}, unit: { name: {} } },
-    },
-  },
+  nodes: { id: {}, name: {}, type: {}, status: {}, price: {}, issueDate: {} },
 } as const;
 
 /**
@@ -122,22 +117,65 @@ const DOCUMENTS_SELECTION = {
  * original signed estimate plus approved changes — oldest first. Invoices,
  * vendor orders/bills and anything draft/pending/denied are not scope.
  */
-export function toSoldScope(docs: RawDocument[]): ScopeDocument[] {
+export function selectScopeDocs(docs: RawDocumentMeta[]): RawDocumentMeta[] {
   return docs
     .filter((d) => d.type === "customerOrder" && d.status === "approved")
-    .sort((a, b) => (a.issueDate ?? "").localeCompare(b.issueDate ?? ""))
-    .map((d) => ({
-      id: d.id,
-      name: d.name,
-      issueDate: d.issueDate,
-      price: d.price,
-      lines: d.costItems.nodes.map((li) => ({
-        name: li.name,
-        quantity: li.quantity ? li.quantity : null,
-        unit: li.unit?.name ?? null,
-        description: li.description || null,
-      })),
-    }));
+    .sort((a, b) => (a.issueDate ?? "").localeCompare(b.issueDate ?? ""));
+}
+
+export function toScopeLines(nodes: RawCostItem[]): ScopeDocument["lines"] {
+  return nodes.map((li) => ({
+    name: li.name,
+    quantity: li.quantity ? li.quantity : null,
+    unit: li.unit?.name ?? null,
+    description: li.description || null,
+  }));
+}
+
+async function listDocumentLines(pave: PaveClient, documentId: string): Promise<ScopeDocument["lines"]> {
+  const lines: ScopeDocument["lines"] = [];
+  let page: string | null = null;
+  for (let i = 0; i < 4; i++) {
+    const res: { document: { costItems: { nextPage: string | null; nodes: RawCostItem[] } } | null } =
+      await pave.query({
+        document: {
+          $: { id: documentId },
+          costItems: {
+            $: { size: 50, ...(page ? { page } : {}) },
+            nextPage: {},
+            nodes: { name: {}, description: {}, quantity: {}, unit: { name: {} } },
+          },
+        },
+      });
+    const items = res.document?.costItems;
+    lines.push(...toScopeLines(items?.nodes ?? []));
+    if (!items?.nextPage) break;
+    page = items.nextPage;
+  }
+  return lines;
+}
+
+/** Scope is helpful context, never blocking: any failure returns []. */
+export async function listSoldScope(pave: PaveClient, jobId: string): Promise<ScopeDocument[]> {
+  try {
+    const res = await pave.query<{ job: { documents: { nodes: RawDocumentMeta[] } } | null }>({
+      job: { $: { id: jobId }, documents: DOC_META_SELECTION },
+    });
+    const docs = selectScopeDocs(res.job?.documents.nodes ?? []);
+    const out: ScopeDocument[] = [];
+    for (const d of docs.slice(0, 10)) {
+      out.push({
+        id: d.id,
+        name: d.name,
+        issueDate: d.issueDate,
+        price: d.price,
+        lines: await listDocumentLines(pave, d.id),
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -183,17 +221,14 @@ export async function listPipelineJobs(pave: PaveClient): Promise<QueueJob[]> {
 }
 
 export async function getJob(pave: PaveClient, jobId: string): Promise<JobDetail> {
-  const res = await pave.query<{ job: (RawJob & { documents: { nodes: RawDocument[] } }) | null }>({
-    job: { $: { id: jobId }, ...JOB_SELECTION, documents: DOCUMENTS_SELECTION },
-  });
+  const [res, punchTasks, soldScope] = await Promise.all([
+    pave.query<{ job: RawJob | null }>({ job: { $: { id: jobId }, ...JOB_SELECTION } }),
+    listPunchTasks(pave, jobId),
+    listSoldScope(pave, jobId),
+  ]);
   if (!res.job) throw new Error(`Job not found: ${jobId}`);
-  const punchTasks = await listPunchTasks(pave, jobId);
   const open = punchTasks.filter((t) => t.progress < 1).length;
-  return {
-    ...toQueueJob(res.job, open),
-    punchTasks,
-    soldScope: toSoldScope(res.job.documents?.nodes ?? []),
-  };
+  return { ...toQueueJob(res.job, open), punchTasks, soldScope };
 }
 
 export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<PunchTask[]> {

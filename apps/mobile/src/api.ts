@@ -132,7 +132,8 @@ async function cached<T>(key: string, fresh: () => Promise<T>, demo: T): Promise
   if (!connected()) return demo;
   try {
     const value = await fresh();
-    await AsyncStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value));
+    // Cache best-effort: a full/blocked storage must not discard fresh data.
+    await AsyncStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value)).catch(() => {});
     void flushOutbox();
     return value;
   } catch {
