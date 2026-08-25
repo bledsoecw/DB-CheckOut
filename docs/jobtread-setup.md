@@ -121,8 +121,32 @@ moves the job back from `Punch Review` to `Punch List`.
 - `Pending Final Payment` additionally requires a submitted
   DB Customer Walkthrough form.
 
+## Job classification (Job Type & Project Type)
+
+Convention agreed 2026-08-25:
+
+- **Job Type `22PBzhnUydgC` is the division only**: `Roofing` or
+  `Construction`. The old third option `Service/Repair` is retired —
+  it double-encoded what Project Type already says.
+- **Project Type `22PC7idvhRzp` is the kind of work** (multi-value).
+  `R-` values are roofing work, `C-` construction. The service markers
+  are **`R-Repairs/Service` and `R-Warranty`** — any job carrying one
+  of them is a service call (the app shows a Servicio badge via
+  `SERVICE_PROJECT_TYPES` in `packages/shared/src/jobtread.ts`).
+  Service jobs flow through the normal pipeline statuses.
+
+Data migration executed 2026-08-25 via the Pave API: 346 jobs moved off
+`Service/Repair` (302 → Roofing, 44 → Construction) and 47 jobs with no
+Job Type were filled from their Project Type prefix (43 Roofing,
+4 Construction). Only when every Project Type on the job shared one
+prefix was it auto-changed; 137 ambiguous jobs (mixed R-/C-, no Project
+Type, or Job Type contradicting the prefix) were left untouched on a
+review list. The `Service/Repair` option itself still needs to be
+removed from the field's options in JT settings once the review jobs
+are resolved.
+
 Other job custom fields the app reads: Project Manager `22PC4DSTx7tg`,
-Job Type `22PBzhnUydgC` (option "Roofing"), Sales Rep `22PBzhswJYd8`.
+Sales Rep `22PBzhswJYd8`.
 
 ## Pave API notes (learned while creating)
 

@@ -41,7 +41,8 @@ export default function JobScreen({ navigation, route }: Props) {
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{job?.name ?? "…"}</Text>
           <Text style={styles.subtitle}>
-            {job?.number} {job?.projectManager ? `· PM: ${job.projectManager}` : ""}
+            {job?.number} {job?.isService ? "· Servicio " : ""}
+            {job?.projectManager ? `· PM: ${job.projectManager}` : ""}
           </Text>
         </View>
         <LangPill />

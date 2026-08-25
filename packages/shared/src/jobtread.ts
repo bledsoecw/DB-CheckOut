@@ -16,9 +16,19 @@ export const ORGANIZATION_ID = "22PBAjem8SSC";
 export const CUSTOM_FIELDS = {
   status: "22PBAjfWVVv9",
   jobType: "22PBzhnUydgC",
+  /** Multi-value: a job can carry several Project Types (e.g. R-Shingles + R-Metal). */
+  projectType: "22PC7idvhRzp",
   projectManager: "22PC4DSTx7tg",
   salesRep: "22PBzhswJYd8",
 } as const;
+
+/**
+ * Project Type values that mark a job as a service call (the service lane).
+ * Job Type is the division only (Roofing | Construction) — since the
+ * 2026-08-25 cleanup the retired "Service/Repair" Job Type is no longer
+ * used; what kind of work it is lives on Project Type.
+ */
+export const SERVICE_PROJECT_TYPES: readonly string[] = ["R-Repairs/Service", "R-Warranty"];
 
 /** Pipeline statuses DB CheckOut reads and writes (job Status field). */
 export const STATUS = {

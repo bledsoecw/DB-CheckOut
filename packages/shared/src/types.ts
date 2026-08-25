@@ -14,6 +14,10 @@ export interface QueueJob {
   name: string;
   status: string;
   jobType: string | null;
+  /** All Project Type values on the job (multi-value in JT). */
+  projectTypes: string[];
+  /** True when any Project Type marks this as a service call (R-Repairs/Service, R-Warranty). */
+  isService: boolean;
   projectManager: string | null;
   salesRep: string | null;
   /** Street address when the JT job has a location; used for the directions link. */

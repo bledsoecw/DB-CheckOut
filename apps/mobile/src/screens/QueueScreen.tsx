@@ -84,14 +84,21 @@ export default function QueueScreen({ navigation }: Props) {
 }
 
 function JobCard({ job, navigation }: { job: QueueJob; navigation: Props["navigation"] }) {
-  const { t } = useLang();
+  const { t, p } = useLang();
   const isPunch = job.status === STATUS.punchList || job.status === STATUS.punchReview;
   return (
     <Card>
       <View style={styles.cardTop}>
-        <Text style={[styles.badge, isPunch ? styles.badgeOrange : styles.badgeBlue]}>
-          {isPunch ? `${t("repairs").toUpperCase()} · ${job.openPunchCount}` : t("inspection").toUpperCase()}
-        </Text>
+        <View style={styles.badges}>
+          <Text style={[styles.badge, isPunch ? styles.badgeOrange : styles.badgeBlue]}>
+            {isPunch ? `${t("repairs").toUpperCase()} · ${job.openPunchCount}` : t("inspection").toUpperCase()}
+          </Text>
+          {job.isService ? (
+            <Text style={[styles.badge, styles.badgeGreen]}>
+              {p({ es: "SERVICIO", en: "SERVICE" })}
+            </Text>
+          ) : null}
+        </View>
         <Text style={styles.number}>{job.number}</Text>
       </View>
       <Text style={styles.jobName}>{job.name}</Text>
@@ -147,6 +154,7 @@ const styles = StyleSheet.create({
   offlineTitle: { fontSize: 13.5, fontWeight: "700", color: colors.amberInk },
   offlineDetail: { fontSize: 11.5, color: "#8A6A2B" },
   cardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  badges: { flexDirection: "row", gap: 6 },
   badge: {
     fontSize: 11,
     fontWeight: "700",
@@ -157,6 +165,7 @@ const styles = StyleSheet.create({
   },
   badgeBlue: { backgroundColor: colors.blueTint, color: colors.blue },
   badgeOrange: { backgroundColor: colors.orangeTint, color: colors.orange },
+  badgeGreen: { backgroundColor: colors.greenTint, color: colors.greenDark },
   number: { fontSize: 12, fontWeight: "600", color: colors.muted },
   jobName: { fontSize: 18, fontWeight: "700", color: colors.ink, marginTop: 8 },
   address: { fontSize: 13.5, color: colors.muted, marginTop: 2 },

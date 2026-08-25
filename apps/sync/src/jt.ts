@@ -7,6 +7,7 @@ import type { PaveClient } from "./pave";
 import {
   CUSTOM_FIELDS,
   ORGANIZATION_ID,
+  SERVICE_PROJECT_TYPES,
   STATUS,
   TASK_TYPES,
 } from "../../../packages/shared/src/jobtread";
@@ -44,13 +45,23 @@ function cfv(job: RawJob, fieldId: string): string | null {
   return hit == null || hit.value == null ? null : String(hit.value);
 }
 
+/** All values of a multi-value custom field (Project Type can have several). */
+function cfvAll(job: RawJob, fieldId: string): string[] {
+  return job.customFieldValues.nodes
+    .filter((n) => n.customField.id === fieldId && n.value != null)
+    .map((n) => String(n.value));
+}
+
 export function toQueueJob(job: RawJob, openPunchCount = 0): QueueJob {
+  const projectTypes = cfvAll(job, CUSTOM_FIELDS.projectType);
   return {
     id: job.id,
     number: job.number,
     name: job.name,
     status: cfv(job, CUSTOM_FIELDS.status) ?? "",
     jobType: cfv(job, CUSTOM_FIELDS.jobType),
+    projectTypes,
+    isService: projectTypes.some((t) => SERVICE_PROJECT_TYPES.includes(t)),
     projectManager: cfv(job, CUSTOM_FIELDS.projectManager),
     salesRep: cfv(job, CUSTOM_FIELDS.salesRep),
     address: job.location?.formattedAddress ?? null,

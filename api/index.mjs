@@ -55,9 +55,12 @@ var ORGANIZATION_ID = "22PBAjem8SSC";
 var CUSTOM_FIELDS = {
   status: "22PBAjfWVVv9",
   jobType: "22PBzhnUydgC",
+  /** Multi-value: a job can carry several Project Types (e.g. R-Shingles + R-Metal). */
+  projectType: "22PC7idvhRzp",
   projectManager: "22PC4DSTx7tg",
   salesRep: "22PBzhswJYd8"
 };
+var SERVICE_PROJECT_TYPES = ["R-Repairs/Service", "R-Warranty"];
 var STATUS = {
   production: "Production",
   finalInspection: "Final Inspection",
@@ -119,13 +122,19 @@ function cfv(job, fieldId) {
   const hit = job.customFieldValues.nodes.find((n) => n.customField.id === fieldId);
   return hit == null || hit.value == null ? null : String(hit.value);
 }
+function cfvAll(job, fieldId) {
+  return job.customFieldValues.nodes.filter((n) => n.customField.id === fieldId && n.value != null).map((n) => String(n.value));
+}
 function toQueueJob(job, openPunchCount = 0) {
+  const projectTypes = cfvAll(job, CUSTOM_FIELDS.projectType);
   return {
     id: job.id,
     number: job.number,
     name: job.name,
     status: cfv(job, CUSTOM_FIELDS.status) ?? "",
     jobType: cfv(job, CUSTOM_FIELDS.jobType),
+    projectTypes,
+    isService: projectTypes.some((t) => SERVICE_PROJECT_TYPES.includes(t)),
     projectManager: cfv(job, CUSTOM_FIELDS.projectManager),
     salesRep: cfv(job, CUSTOM_FIELDS.salesRep),
     address: job.location?.formattedAddress ?? null,

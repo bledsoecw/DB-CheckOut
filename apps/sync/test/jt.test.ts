@@ -141,6 +141,24 @@ test("completeTask with a note appends the correction to the task description", 
   assert.equal(dollar["description"], "Reconnect the downspout.\n\n✔ Done — 2 straps, 15 min");
 });
 
+test("toQueueJob collects multi-value project types and flags service calls", () => {
+  const job = toQueueJob({
+    id: "s",
+    number: "26-0500",
+    name: "26-0500 Estes_Service",
+    customFieldValues: {
+      nodes: [
+        { value: "Roofing", customField: { id: CUSTOM_FIELDS.jobType } },
+        { value: "R-Shingles", customField: { id: CUSTOM_FIELDS.projectType } },
+        { value: "R-Warranty", customField: { id: CUSTOM_FIELDS.projectType } },
+      ],
+    },
+  });
+  assert.deepEqual(job.projectTypes, ["R-Shingles", "R-Warranty"]);
+  assert.equal(job.isService, true);
+  assert.equal(toQueueJob(rawJob("x", "26-0001", "Closed")).isService, false);
+});
+
 test("toQueueJob tolerates missing custom fields", () => {
   const job = toQueueJob({
     id: "x",
@@ -151,4 +169,6 @@ test("toQueueJob tolerates missing custom fields", () => {
   assert.equal(job.status, "");
   assert.equal(job.projectManager, null);
   assert.equal(job.address, null);
+  assert.deepEqual(job.projectTypes, []);
+  assert.equal(job.isService, false);
 });
