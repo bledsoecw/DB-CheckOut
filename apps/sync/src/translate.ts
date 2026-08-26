@@ -48,6 +48,44 @@ async function geminiTranslate(
   return parsed.map((t, i) => (typeof t === "string" && t ? t : texts[i]));
 }
 
+const SUMMARY_PROMPT =
+  "You write for a roofing/construction field crew about to inspect a finished job. " +
+  "Given the sold scope below (documents and line items), write a short summary of " +
+  "the work that was sold: 2-4 plain sentences, main work first, then notable " +
+  "extras/change orders. No prices. Keep brand/product names and measurements as-is. " +
+  'Return ONLY JSON: {"en": "<English summary>", "es": "<Latin American Spanish summary>"}';
+
+const summaryCache = new Map<string, { en: string; es: string }>();
+
+/** Bilingual crew summary of the sold scope; cached per exact scope content. */
+export async function summarizeScope(
+  scopeText: string,
+  env: Pick<Env, "geminiApiKey" | "geminiModel">,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ en: string; es: string }> {
+  if (!env.geminiApiKey) throw new Error("Summaries are not configured");
+  const hit = summaryCache.get(scopeText);
+  if (hit) return hit;
+  const res = await fetchImpl(`${GEMINI_URL}/${env.geminiModel}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${SUMMARY_PROMPT}\n\n${scopeText}` }] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini request failed: ${res.status}`);
+  const body = (await res.json()) as GeminiResponse;
+  const raw = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const parsed = JSON.parse(raw) as { en?: unknown; es?: unknown };
+  if (typeof parsed.en !== "string" || typeof parsed.es !== "string") {
+    throw new Error("Gemini returned a malformed summary");
+  }
+  const summary = { en: parsed.en, es: parsed.es };
+  summaryCache.set(scopeText, summary);
+  return summary;
+}
+
 /** Translate to Spanish with caching; missing config throws (route turns it into 501). */
 export async function translateToSpanish(
   texts: string[],

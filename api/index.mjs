@@ -253,8 +253,11 @@ var JOB_SELECTION = {
 };
 var DOC_META_SELECTION = {
   $: { size: 25 },
-  nodes: { id: {}, name: {}, type: {}, status: {}, price: {}, issueDate: {} }
+  nodes: { id: {}, name: {}, number: {}, type: {}, status: {}, price: {}, issueDate: {} }
 };
+function jtDocumentUrl(jobId, documentId) {
+  return `https://app.jobtread.com/jobs/${jobId}/documents/${documentId}`;
+}
 function selectScopeDocs(docs) {
   return docs.filter((d) => d.type === "customerOrder" && d.status === "approved").sort((a, b) => (a.issueDate ?? "").localeCompare(b.issueDate ?? ""));
 }
@@ -298,8 +301,10 @@ async function listSoldScope(pave, jobId) {
       out.push({
         id: d.id,
         name: d.name,
+        number: d.number,
         issueDate: d.issueDate,
         price: d.price,
+        jtUrl: jtDocumentUrl(jobId, d.id),
         lines: await listDocumentLines(pave, d.id)
       });
     }
@@ -495,6 +500,33 @@ ${JSON.stringify(texts)}` }] }],
   }
   return parsed.map((t, i) => typeof t === "string" && t ? t : texts[i]);
 }
+var SUMMARY_PROMPT = 'You write for a roofing/construction field crew about to inspect a finished job. Given the sold scope below (documents and line items), write a short summary of the work that was sold: 2-4 plain sentences, main work first, then notable extras/change orders. No prices. Keep brand/product names and measurements as-is. Return ONLY JSON: {"en": "<English summary>", "es": "<Latin American Spanish summary>"}';
+var summaryCache = /* @__PURE__ */ new Map();
+async function summarizeScope(scopeText, env, fetchImpl = fetch) {
+  if (!env.geminiApiKey) throw new Error("Summaries are not configured");
+  const hit = summaryCache.get(scopeText);
+  if (hit) return hit;
+  const res = await fetchImpl(`${GEMINI_URL}/${env.geminiModel}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${SUMMARY_PROMPT}
+
+${scopeText}` }] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
+    })
+  });
+  if (!res.ok) throw new Error(`Gemini request failed: ${res.status}`);
+  const body = await res.json();
+  const raw = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const parsed = JSON.parse(raw);
+  if (typeof parsed.en !== "string" || typeof parsed.es !== "string") {
+    throw new Error("Gemini returned a malformed summary");
+  }
+  const summary = { en: parsed.en, es: parsed.es };
+  summaryCache.set(scopeText, summary);
+  return summary;
+}
 async function translateToSpanish(texts, env, fetchImpl = fetch) {
   if (!env.geminiApiKey) throw new Error("Translation is not configured");
   const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
@@ -606,6 +638,16 @@ function createHandler(deps) {
       }
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
         return json(res, 200, await getJob(deps.pave, parts[1]));
+      }
+      if (req.method === "GET" && parts[0] === "jobs" && parts[2] === "scope-summary") {
+        if (!deps.geminiApiKey) return json(res, 501, { error: "Summaries are not configured" });
+        const scope = await listSoldScope(deps.pave, parts[1]);
+        if (scope.length === 0) return json(res, 200, { en: "", es: "" });
+        const scopeText = scope.map(
+          (d) => `${d.name}${d.number ? ` #${d.number}` : ""} (${d.issueDate ?? "no date"}):
+` + d.lines.map((l) => `- ${l.name}${l.quantity ? ` (${l.quantity} ${l.unit ?? ""})` : ""}`).join("\n")
+        ).join("\n\n");
+        return json(res, 200, await summarizeScope(scopeText, deps));
       }
       if (req.method === "POST" && parts[0] === "jobs" && parts.length === 3) {
         const jobId = parts[1];

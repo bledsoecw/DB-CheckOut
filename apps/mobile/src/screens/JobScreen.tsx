@@ -3,10 +3,10 @@ import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "r
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { JobDetail, ScopeDocument } from "@shared/types";
+import type { JobDetail, ScopeDocument, ScopeSummary } from "@shared/types";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getJob, uploadJobPhoto } from "../api";
+import { getJob, getScopeSummary, uploadJobPhoto } from "../api";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
 import { downscalePhoto } from "../photo";
@@ -68,7 +68,7 @@ export default function JobScreen({ navigation, route }: Props) {
 
         <PhotosCard jobId={jobId} />
 
-        {job && job.soldScope.length > 0 ? <ScopeCard docs={job.soldScope} /> : null}
+        {job && job.soldScope.length > 0 ? <ScopeCard jobId={jobId} docs={job.soldScope} /> : null}
 
         <Tile
           title={{ es: "Inspección", en: "Inspection" }}
@@ -165,17 +165,38 @@ function PhotosCard({ jobId }: { jobId: string }) {
   );
 }
 
-function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
+function ScopeCard({ jobId, docs }: { jobId: string; docs: ScopeDocument[] }) {
   const { p, s, lang } = useLang();
   const [open, setOpen] = useState(false);
+  const [openDocs, setOpenDocs] = useState<Record<string, boolean>>({});
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
-  const lineCount = docs.reduce((n, d) => n + d.lines.length, 0);
-  // In ES mode the JT text (names, descriptions) is machine-translated once
-  // the card is opened; EN mode always shows the record as written.
+  const [summary, setSummary] = useState<ScopeSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || summary) return;
+    let on = true;
+    setSummaryLoading(true);
+    getScopeSummary(jobId)
+      .then((sm) => {
+        if (on) setSummary(sm);
+      })
+      .finally(() => {
+        if (on) setSummaryLoading(false);
+      });
+    return () => {
+      on = false;
+    };
+  }, [open, summary, jobId]);
+
+  // Line items of expanded documents get machine-translated in ES mode.
   const es = useSpanish(
-    open ? docs.flatMap((d) => [d.name, ...d.lines.flatMap((l) => [l.name, l.description])]) : [],
+    docs
+      .filter((d) => openDocs[d.id])
+      .flatMap((d) => d.lines.flatMap((l) => [l.name, l.description])),
     lang === "es",
   );
+
   return (
     <Card style={{ paddingVertical: 14 }}>
       <Pressable onPress={() => setOpen((o) => !o)} hitSlop={8}>
@@ -184,50 +205,84 @@ function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
             <Text style={styles.tileTitle}>{p({ es: "Trabajo vendido", en: "Sold scope" })}</Text>
             <Text style={styles.tileSub}>
               {s({ es: "Trabajo vendido", en: "Sold scope" })} · {docs.length}{" "}
-              {p({ es: "documentos", en: "documents" })} · {lineCount}{" "}
-              {p({ es: "líneas", en: "lines" })}
+              {p({ es: "documentos", en: "documents" })}
             </Text>
           </View>
           <Text style={styles.chevron}>{open ? "▾" : "›"}</Text>
         </View>
       </Pressable>
-      {open
-        ? docs.map((doc) => (
-            <View key={doc.id} style={styles.scopeDoc}>
-              <Text style={styles.scopeDocName}>
-                {es(doc.name)}
-                {doc.issueDate ? `  ·  ${doc.issueDate}` : ""}
-              </Text>
-              {doc.lines.map((line, i) => {
-                const key = `${doc.id}:${i}`;
-                const expanded = expandedLine === key;
-                return (
-                  <Pressable
-                    key={key}
-                    onPress={() =>
-                      line.description ? setExpandedLine(expanded ? null : key) : undefined
-                    }
-                  >
-                    <View style={[styles.scopeLine, i > 0 ? styles.scopeLineDivider : null]}>
-                      <Text style={styles.scopeLineName}>
-                        {es(line.name)}
-                        {line.description ? " …" : ""}
-                      </Text>
-                      {line.quantity != null ? (
-                        <Text style={styles.scopeQty}>
-                          {line.quantity} {line.unit ?? ""}
-                        </Text>
-                      ) : null}
-                    </View>
-                    {expanded && line.description ? (
-                      <Text style={styles.scopeDesc}>{es(line.description)}</Text>
-                    ) : null}
+
+      {open ? (
+        <View style={{ marginTop: 10 }}>
+          {summary ? (
+            <Text style={styles.scopeSummary}>{lang === "es" ? summary.es : summary.en}</Text>
+          ) : summaryLoading ? (
+            <Text style={styles.scopeSummaryLoading}>
+              {p({ es: "Generando resumen…", en: "Generating summary…" })}
+            </Text>
+          ) : null}
+
+          {docs.map((doc) => {
+            const docOpen = openDocs[doc.id] === true;
+            return (
+              <View key={doc.id} style={styles.scopeDoc}>
+                <View style={styles.scopeDocRow}>
+                  <Pressable style={{ flex: 1 }} onPress={() => Linking.openURL(doc.jtUrl)} hitSlop={6}>
+                    <Text style={styles.scopeDocLink}>
+                      {doc.name}
+                      {doc.number != null ? ` #${doc.number}` : ""} ↗
+                    </Text>
+                    <Text style={styles.scopeDocMeta}>
+                      {doc.issueDate ?? ""} · {p({ es: "ver en JobTread", en: "review in JobTread" })}
+                    </Text>
                   </Pressable>
-                );
-              })}
-            </View>
-          ))
-        : null}
+                  <Pressable
+                    onPress={() => setOpenDocs((prev) => ({ ...prev, [doc.id]: !docOpen }))}
+                    hitSlop={8}
+                    style={styles.scopeToggle}
+                  >
+                    <Text style={styles.scopeToggleText}>
+                      {docOpen
+                        ? p({ es: "Ocultar", en: "Hide" })
+                        : `${doc.lines.length} ${p({ es: "partidas", en: "items" })} ›`}
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {docOpen
+                  ? doc.lines.map((line, i) => {
+                      const key = `${doc.id}:${i}`;
+                      const expanded = expandedLine === key;
+                      return (
+                        <Pressable
+                          key={key}
+                          onPress={() =>
+                            line.description ? setExpandedLine(expanded ? null : key) : undefined
+                          }
+                        >
+                          <View style={[styles.scopeLine, i > 0 ? styles.scopeLineDivider : null]}>
+                            <Text style={styles.scopeLineName}>
+                              {es(line.name)}
+                              {line.description ? " …" : ""}
+                            </Text>
+                            {line.quantity != null ? (
+                              <Text style={styles.scopeQty}>
+                                {line.quantity} {line.unit ?? ""}
+                              </Text>
+                            ) : null}
+                          </View>
+                          {expanded && line.description ? (
+                            <Text style={styles.scopeDesc}>{es(line.description)}</Text>
+                          ) : null}
+                        </Pressable>
+                      );
+                    })
+                  : null}
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
     </Card>
   );
 }
@@ -285,7 +340,18 @@ const styles = StyleSheet.create({
   tile: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 18 },
   scopeHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
   scopeDoc: { marginTop: 12, borderTopWidth: 1, borderTopColor: colors.divider, paddingTop: 10 },
-  scopeDocName: { fontSize: 12.5, fontWeight: "700", color: colors.blue, marginBottom: 4 },
+  scopeDocRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  scopeDocLink: { fontSize: 14.5, fontWeight: "700", color: colors.blue },
+  scopeDocMeta: { fontSize: 11.5, color: colors.faint, marginTop: 1 },
+  scopeToggle: {
+    backgroundColor: colors.blueTint,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  scopeToggleText: { fontSize: 12.5, fontWeight: "700", color: colors.blue },
+  scopeSummary: { fontSize: 14.5, color: colors.ink, lineHeight: 21, marginBottom: 4 },
+  scopeSummaryLoading: { fontSize: 12.5, color: colors.faint, fontStyle: "italic" },
   scopeLine: {
     flexDirection: "row",
     justifyContent: "space-between",

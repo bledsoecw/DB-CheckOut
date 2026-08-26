@@ -35,8 +35,10 @@ const MOCK_SCOPE = [
   {
     id: "demo-doc-1",
     name: "Estimate",
+    number: 4,
     issueDate: "2026-07-02",
     price: 18450,
+    jtUrl: "https://app.jobtread.com",
     lines: [
       {
         name: "OC Duration Shingles — Onyx Black",
@@ -57,8 +59,10 @@ const MOCK_SCOPE = [
   {
     id: "demo-doc-2",
     name: "Change Order — Gutters",
+    number: 7,
     issueDate: "2026-07-18",
     price: 2140,
+    jtUrl: "https://app.jobtread.com",
     lines: [
       {
         name: '5" Seamless Gutters',

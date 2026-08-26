@@ -6,7 +6,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { ChecklistSubmission, JobDetail, ProblemReport, QueueJob } from "@shared/types";
+import type { ChecklistSubmission, JobDetail, ProblemReport, QueueJob, ScopeSummary } from "@shared/types";
 import { MOCK_JOBS, mockJobDetail } from "./mock";
 
 /**
@@ -203,6 +203,27 @@ export const sendReport = (jobId: string, report: ProblemReport) =>
   post(`/jobs/${jobId}/reports`, report);
 export const completePunchTask = (taskId: string, jobId: string, note?: string) =>
   post(`/tasks/${taskId}/complete`, { jobId, ...(note?.trim() ? { note: note.trim() } : {}) });
+const DEMO_SUMMARY: ScopeSummary = {
+  en: "Full tear-off and re-shingle with OC Duration architectural shingles (32 SQ), new synthetic underlayment and three pipe boots, haul-off included. A change order added 148 LF of 5\" seamless gutters with downspouts.",
+  es: "Retiro completo y reinstalación de tejas arquitectónicas OC Duration (32 SQ), con membrana sintética nueva y tres botas de tubo; incluye acarreo de escombro. Una orden de cambio agregó 148 pies lineales de canales sin costura de 5\" con bajantes.",
+};
+
+/** Bilingual sold-scope summary; null when unavailable (offline/unconfigured). */
+export async function getScopeSummary(jobId: string): Promise<ScopeSummary | null> {
+  if (demoMode) return DEMO_SUMMARY;
+  if (!connected()) return null;
+  const key = `${CACHE_PREFIX}scopeSummary.${jobId}`;
+  try {
+    const summary = await request<ScopeSummary>("GET", `/jobs/${jobId}/scope-summary`);
+    if (!summary.en && !summary.es) return null;
+    await AsyncStorage.setItem(key, JSON.stringify(summary)).catch(() => {});
+    return summary;
+  } catch {
+    const stale = await AsyncStorage.getItem(key).catch(() => null);
+    return stale ? (JSON.parse(stale) as ScopeSummary) : null;
+  }
+}
+
 /** Spanish translations for JT text; null when unavailable (offline/unconfigured/demo). */
 export async function translateBatch(texts: string[]): Promise<string[] | null> {
   if (demoMode || !connected() || texts.length === 0) return null;

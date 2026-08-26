@@ -39,6 +39,7 @@ interface RawJob {
 interface RawDocumentMeta {
   id: string;
   name: string;
+  number: number | null;
   type: string;
   status: string;
   price: number;
@@ -109,8 +110,13 @@ const JOB_SELECTION = {
  */
 const DOC_META_SELECTION = {
   $: { size: 25 },
-  nodes: { id: {}, name: {}, type: {}, status: {}, price: {}, issueDate: {} },
+  nodes: { id: {}, name: {}, number: {}, type: {}, status: {}, price: {}, issueDate: {} },
 } as const;
+
+/** JT web deep link for a document (constructed; the API exposes no URLs). */
+export function jtDocumentUrl(jobId: string, documentId: string): string {
+  return `https://app.jobtread.com/jobs/${jobId}/documents/${documentId}`;
+}
 
 /**
  * The sold scope is every APPROVED customer-facing order on the job — the
@@ -167,8 +173,10 @@ export async function listSoldScope(pave: PaveClient, jobId: string): Promise<Sc
       out.push({
         id: d.id,
         name: d.name,
+        number: d.number,
         issueDate: d.issueDate,
         price: d.price,
+        jtUrl: jtDocumentUrl(jobId, d.id),
         lines: await listDocumentLines(pave, d.id),
       });
     }

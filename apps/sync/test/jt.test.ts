@@ -174,6 +174,7 @@ test("selectScopeDocs keeps only approved customer orders, oldest first", () => 
   const doc = (id: string, type: string, status: string, issueDate: string | null) => ({
     id,
     name: id,
+    number: 4,
     type,
     status,
     price: 100,
@@ -205,8 +206,8 @@ test("listSoldScope fetches lines per approved order and follows pagination", as
         job: {
           documents: {
             nodes: [
-              { id: "d1", name: "Estimate", type: "customerOrder", status: "approved", price: 100, issueDate: "2026-07-01" },
-              { id: "junk", name: "Invoice", type: "customerInvoice", status: "approved", price: 1, issueDate: null },
+              { id: "d1", name: "Estimate", number: 4, type: "customerOrder", status: "approved", price: 100, issueDate: "2026-07-01" },
+              { id: "junk", name: "Invoice", number: 9, type: "customerInvoice", status: "approved", price: 1, issueDate: null },
             ],
           },
         },
@@ -220,6 +221,8 @@ test("listSoldScope fetches lines per approved order and follows pagination", as
   const scope = await listSoldScope(client, "job1");
   assert.equal(queries.length, 3); // doc list + two line pages, only for the approved order
   assert.deepEqual(scope.map((d) => d.id), ["d1"]);
+  assert.equal(scope[0].number, 4);
+  assert.match(scope[0].jtUrl, /app\.jobtread\.com\/jobs\/job1\/documents\/d1$/);
   assert.deepEqual(scope[0].lines.map((l) => l.name), ["A", "B"]);
 });
 

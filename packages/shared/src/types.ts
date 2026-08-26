@@ -49,9 +49,19 @@ export interface ScopeLine {
 export interface ScopeDocument {
   id: string;
   name: string;
+  /** JT document number, e.g. Estimate #4. */
+  number: number | null;
   issueDate: string | null;
   price: number;
+  /** Deep link to review this document in JobTread. */
+  jtUrl: string;
   lines: ScopeLine[];
+}
+
+/** GET /jobs/:id/scope-summary — crew-facing summary of the sold work. */
+export interface ScopeSummary {
+  en: string;
+  es: string;
 }
 
 export interface JobDetail extends QueueJob {

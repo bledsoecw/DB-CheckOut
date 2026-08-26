@@ -28,12 +28,13 @@ import {
   createReportTask,
   getJob,
   listPipelineJobs,
+  listSoldScope,
   submitForm,
   uploadPhoto,
   type PhotoUpload,
 } from "./jt";
 import { applyPunchReviewFlip } from "./punchReview";
-import { translateToSpanish, TRANSLATE_LIMITS } from "./translate";
+import { summarizeScope, translateToSpanish, TRANSLATE_LIMITS } from "./translate";
 
 export interface RouterDeps {
   pave: PaveClient;
@@ -177,6 +178,23 @@ export function createHandler(deps: RouterDeps) {
 
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
         return json(res, 200, await getJob(deps.pave, parts[1]));
+      }
+
+      // Bilingual crew summary of the sold scope (Gemini; cached per content).
+      if (req.method === "GET" && parts[0] === "jobs" && parts[2] === "scope-summary") {
+        if (!deps.geminiApiKey) return json(res, 501, { error: "Summaries are not configured" });
+        const scope = await listSoldScope(deps.pave, parts[1]);
+        if (scope.length === 0) return json(res, 200, { en: "", es: "" });
+        const scopeText = scope
+          .map(
+            (d) =>
+              `${d.name}${d.number ? ` #${d.number}` : ""} (${d.issueDate ?? "no date"}):\n` +
+              d.lines
+                .map((l) => `- ${l.name}${l.quantity ? ` (${l.quantity} ${l.unit ?? ""})` : ""}`)
+                .join("\n"),
+          )
+          .join("\n\n");
+        return json(res, 200, await summarizeScope(scopeText, deps));
       }
 
       if (req.method === "POST" && parts[0] === "jobs" && parts.length === 3) {
