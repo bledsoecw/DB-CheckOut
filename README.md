@@ -48,6 +48,8 @@ node --env-file=apps/sync/.env --import tsx apps/sync/src/index.ts
 
 Tests & typecheck (no JT key needed): `npm install && npm test && npm run typecheck`
 
+Production deploys build from the `main` branch.
+
 **Deploying to Vercel:** the repo is Vercel-ready — `api/index.ts` wraps
 the same router as a serverless function and `vercel.json` routes every
 path to it. In Vercel: Add New Project → import this repo → framework
