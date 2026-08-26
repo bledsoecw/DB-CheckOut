@@ -107,7 +107,12 @@ export function createHandler(deps: RouterDeps) {
 
     try {
       if (req.method === "GET" && url.pathname === "/health") {
-        return json(res, 200, { ok: true });
+        return json(res, 200, {
+          ok: true,
+          signIn: Boolean(deps.googleClientId && deps.sessionSecret),
+          gemini: Boolean(deps.geminiApiKey),
+          webhook: Boolean(deps.webhookSecret),
+        });
       }
 
       // Which sign-in method the app should offer (the client id is public).

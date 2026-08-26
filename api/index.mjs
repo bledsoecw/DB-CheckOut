@@ -480,20 +480,31 @@ var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var TRANSLATE_LIMITS = { maxTexts: 100, maxTextLength: 4e3 };
 var PROMPT = "Translate each string in the JSON array from English to Latin American Spanish for a roofing/construction field crew. Keep brand names, product names, model numbers, measurements and numbers unchanged. Keep it natural and concise. Return ONLY a JSON array of the translated strings, same length, same order.";
 var cache = /* @__PURE__ */ new Map();
-async function geminiTranslate(texts, apiKey, model, fetchImpl) {
-  const res = await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `${PROMPT}
+async function geminiGenerate(prompt, env, fetchImpl) {
+  const models = [.../* @__PURE__ */ new Set([env.geminiModel, "gemini-2.0-flash", "gemini-1.5-flash"])];
+  let lastError = "";
+  for (const model of models) {
+    const res = await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
+      })
+    });
+    if (res.ok) {
+      const body = await res.json();
+      return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    }
+    lastError = `Gemini request failed: ${res.status} (${model})`;
+    if (res.status !== 404 && res.status !== 400) break;
+  }
+  throw new Error(lastError || "Gemini request failed");
+}
+async function geminiTranslate(texts, env, fetchImpl) {
+  const raw = await geminiGenerate(`${PROMPT}
 
-${JSON.stringify(texts)}` }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
-    })
-  });
-  if (!res.ok) throw new Error(`Gemini request failed: ${res.status}`);
-  const body = await res.json();
-  const raw = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+${JSON.stringify(texts)}`, env, fetchImpl);
   const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed) || parsed.length !== texts.length) {
     throw new Error("Gemini returned a mismatched translation array");
@@ -506,19 +517,9 @@ async function summarizeScope(scopeText, env, fetchImpl = fetch) {
   if (!env.geminiApiKey) throw new Error("Summaries are not configured");
   const hit = summaryCache.get(scopeText);
   if (hit) return hit;
-  const res = await fetchImpl(`${GEMINI_URL}/${env.geminiModel}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `${SUMMARY_PROMPT}
+  const raw = await geminiGenerate(`${SUMMARY_PROMPT}
 
-${scopeText}` }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
-    })
-  });
-  if (!res.ok) throw new Error(`Gemini request failed: ${res.status}`);
-  const body = await res.json();
-  const raw = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+${scopeText}`, env, fetchImpl);
   const parsed = JSON.parse(raw);
   if (typeof parsed.en !== "string" || typeof parsed.es !== "string") {
     throw new Error("Gemini returned a malformed summary");
@@ -531,7 +532,7 @@ async function translateToSpanish(texts, env, fetchImpl = fetch) {
   if (!env.geminiApiKey) throw new Error("Translation is not configured");
   const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
   if (missing.length > 0) {
-    const translated = await geminiTranslate(missing, env.geminiApiKey, env.geminiModel, fetchImpl);
+    const translated = await geminiTranslate(missing, env, fetchImpl);
     missing.forEach((t, i) => cache.set(t, translated[i]));
   }
   return texts.map((t) => cache.get(t) ?? t);
@@ -588,7 +589,12 @@ function createHandler(deps) {
     const parts = url.pathname.split("/").filter(Boolean);
     try {
       if (req.method === "GET" && url.pathname === "/health") {
-        return json(res, 200, { ok: true });
+        return json(res, 200, {
+          ok: true,
+          signIn: Boolean(deps.googleClientId && deps.sessionSecret),
+          gemini: Boolean(deps.geminiApiKey),
+          webhook: Boolean(deps.webhookSecret)
+        });
       }
       if (req.method === "GET" && url.pathname === "/auth/config") {
         return json(res, 200, { googleClientId: deps.googleClientId || null });

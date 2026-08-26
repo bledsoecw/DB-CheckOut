@@ -24,23 +24,43 @@ interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 }
 
+/**
+ * One generateContent call, trying the configured model first and falling
+ * back to widely-available older models when the key's API version doesn't
+ * know it (404/model errors vary by key vintage).
+ */
+async function geminiGenerate(
+  prompt: string,
+  env: Pick<Env, "geminiApiKey" | "geminiModel">,
+  fetchImpl: typeof fetch,
+): Promise<string> {
+  const models = [...new Set([env.geminiModel, "gemini-2.0-flash", "gemini-1.5-flash"])];
+  let lastError = "";
+  for (const model of models) {
+    const res = await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+      }),
+    });
+    if (res.ok) {
+      const body = (await res.json()) as GeminiResponse;
+      return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    }
+    lastError = `Gemini request failed: ${res.status} (${model})`;
+    if (res.status !== 404 && res.status !== 400) break; // real failure, not a model-name miss
+  }
+  throw new Error(lastError || "Gemini request failed");
+}
+
 async function geminiTranslate(
   texts: string[],
-  apiKey: string,
-  model: string,
+  env: Pick<Env, "geminiApiKey" | "geminiModel">,
   fetchImpl: typeof fetch,
 ): Promise<string[]> {
-  const res = await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `${PROMPT}\n\n${JSON.stringify(texts)}` }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.1 },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini request failed: ${res.status}`);
-  const body = (await res.json()) as GeminiResponse;
-  const raw = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const raw = await geminiGenerate(`${PROMPT}\n\n${JSON.stringify(texts)}`, env, fetchImpl);
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed) || parsed.length !== texts.length) {
     throw new Error("Gemini returned a mismatched translation array");
@@ -66,17 +86,7 @@ export async function summarizeScope(
   if (!env.geminiApiKey) throw new Error("Summaries are not configured");
   const hit = summaryCache.get(scopeText);
   if (hit) return hit;
-  const res = await fetchImpl(`${GEMINI_URL}/${env.geminiModel}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `${SUMMARY_PROMPT}\n\n${scopeText}` }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini request failed: ${res.status}`);
-  const body = (await res.json()) as GeminiResponse;
-  const raw = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const raw = await geminiGenerate(`${SUMMARY_PROMPT}\n\n${scopeText}`, env, fetchImpl);
   const parsed = JSON.parse(raw) as { en?: unknown; es?: unknown };
   if (typeof parsed.en !== "string" || typeof parsed.es !== "string") {
     throw new Error("Gemini returned a malformed summary");
@@ -95,7 +105,7 @@ export async function translateToSpanish(
   if (!env.geminiApiKey) throw new Error("Translation is not configured");
   const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
   if (missing.length > 0) {
-    const translated = await geminiTranslate(missing, env.geminiApiKey, env.geminiModel, fetchImpl);
+    const translated = await geminiTranslate(missing, env, fetchImpl);
     missing.forEach((t, i) => cache.set(t, translated[i]));
   }
   return texts.map((t) => cache.get(t) ?? t);
