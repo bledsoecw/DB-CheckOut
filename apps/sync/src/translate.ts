@@ -57,28 +57,43 @@ async function discoverModel(apiKey: string, fetchImpl: typeof fetch): Promise<s
   return best;
 }
 
-/** One generateContent call; on a model-name miss, discover a working model. */
+/**
+ * One generateContent call; on a model-name miss, discover a working model.
+ * Thinking is disabled where supported (thinkingBudget 0) — flash models
+ * default it on, which is far too slow for translation/summary inside a
+ * serverless time limit; models that reject the knob get a retry without it.
+ */
 async function geminiGenerate(
   prompt: string,
   env: Pick<Env, "geminiApiKey" | "geminiModel">,
   fetchImpl: typeof fetch,
 ): Promise<string> {
-  const attempt = async (model: string) =>
+  const attempt = async (model: string, capThinking: boolean) =>
     fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+          ...(capThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+        },
       }),
     });
 
+  const tryModel = async (model: string) => {
+    let res = await attempt(model, true);
+    if (res.status === 400) res = await attempt(model, false);
+    return res;
+  };
+
   let model = discoveredModel ?? env.geminiModel;
-  let res = await attempt(model);
+  let res = await tryModel(model);
   if (res.status === 404 || res.status === 400) {
     model = await discoverModel(env.geminiApiKey, fetchImpl);
     discoveredModel = model;
-    res = await attempt(model);
+    res = await tryModel(model);
   }
   if (!res.ok) throw new Error(`Gemini request failed: ${res.status} (${model})`);
   const body = (await res.json()) as GeminiResponse;

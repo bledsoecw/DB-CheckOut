@@ -168,9 +168,8 @@ export async function listSoldScope(pave: PaveClient, jobId: string): Promise<Sc
       job: { $: { id: jobId }, documents: DOC_META_SELECTION },
     });
     const docs = selectScopeDocs(res.job?.documents.nodes ?? []);
-    const out: ScopeDocument[] = [];
-    for (const d of docs.slice(0, 10)) {
-      out.push({
+    return await Promise.all(
+      docs.slice(0, 10).map(async (d) => ({
         id: d.id,
         name: d.name,
         number: d.number,
@@ -178,9 +177,8 @@ export async function listSoldScope(pave: PaveClient, jobId: string): Promise<Sc
         price: d.price,
         jtUrl: jtDocumentUrl(jobId, d.id),
         lines: await listDocumentLines(pave, d.id),
-      });
-    }
-    return out;
+      })),
+    );
   } catch {
     return [];
   }

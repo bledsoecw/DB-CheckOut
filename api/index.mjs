@@ -296,9 +296,8 @@ async function listSoldScope(pave, jobId) {
       job: { $: { id: jobId }, documents: DOC_META_SELECTION }
     });
     const docs = selectScopeDocs(res.job?.documents.nodes ?? []);
-    const out = [];
-    for (const d of docs.slice(0, 10)) {
-      out.push({
+    return await Promise.all(
+      docs.slice(0, 10).map(async (d) => ({
         id: d.id,
         name: d.name,
         number: d.number,
@@ -306,9 +305,8 @@ async function listSoldScope(pave, jobId) {
         price: d.price,
         jtUrl: jtDocumentUrl(jobId, d.id),
         lines: await listDocumentLines(pave, d.id)
-      });
-    }
-    return out;
+      }))
+    );
   } catch {
     return [];
   }
@@ -501,20 +499,29 @@ async function discoverModel(apiKey, fetchImpl) {
   return best;
 }
 async function geminiGenerate(prompt, env, fetchImpl) {
-  const attempt = async (model2) => fetchImpl(`${GEMINI_URL}/${model2}:generateContent`, {
+  const attempt = async (model2, capThinking) => fetchImpl(`${GEMINI_URL}/${model2}:generateContent`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.2,
+        ...capThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}
+      }
     })
   });
+  const tryModel = async (model2) => {
+    let res2 = await attempt(model2, true);
+    if (res2.status === 400) res2 = await attempt(model2, false);
+    return res2;
+  };
   let model = discoveredModel ?? env.geminiModel;
-  let res = await attempt(model);
+  let res = await tryModel(model);
   if (res.status === 404 || res.status === 400) {
     model = await discoverModel(env.geminiApiKey, fetchImpl);
     discoveredModel = model;
-    res = await attempt(model);
+    res = await tryModel(model);
   }
   if (!res.ok) throw new Error(`Gemini request failed: ${res.status} (${model})`);
   const body = await res.json();
