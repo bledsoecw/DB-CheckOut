@@ -9,6 +9,7 @@ import { completePunchTask, getJob, uploadJobPhoto } from "../api";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
 import { downscalePhoto } from "../photo";
+import { useSpanish } from "../translate";
 import { useVisit } from "../store";
 import { colors } from "../theme";
 
@@ -23,6 +24,7 @@ export default function PunchItemScreen({ navigation, route }: Props) {
   const [doneNote, setDoneNote] = useState("");
   const [sending, setSending] = useState(false);
   const { setAfterPhoto } = useVisit(jobId);
+  const es = useSpanish([task?.name, task?.description], lang === "es");
 
   useEffect(() => {
     getJob(jobId)
@@ -65,7 +67,7 @@ export default function PunchItemScreen({ navigation, route }: Props) {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title} numberOfLines={1}>
-            {task?.name.replace(/^REPORT: /, "") ?? "…"}
+            {task ? es(task.name).replace(/^REPORT: /, "") : "…"}
           </Text>
           <Text style={styles.subtitle}>{t("repairs")}</Text>
         </View>
@@ -77,7 +79,10 @@ export default function PunchItemScreen({ navigation, route }: Props) {
           <Text style={styles.whatLabel}>
             {t("whatToDo")} <Text style={styles.whatLabelSub}>{t2("whatToDo")}</Text>
           </Text>
-          <Text style={styles.description}>{task?.description ?? ""}</Text>
+          <Text style={styles.description}>{es(task?.description)}</Text>
+          {lang === "es" && task?.description ? (
+            <Text style={styles.translated}>Traducción automática · tap EN arriba para el original</Text>
+          ) : null}
         </Card>
 
         <View style={styles.photoRow}>
@@ -148,6 +153,7 @@ const styles = StyleSheet.create({
   whatLabel: { fontSize: 12, fontWeight: "700", letterSpacing: 1, color: colors.orange },
   whatLabelSub: { color: "#9AA8B8", fontWeight: "600", letterSpacing: 0 },
   description: { fontSize: 15, color: colors.ink, lineHeight: 21 },
+  translated: { fontSize: 10.5, color: colors.faint, marginTop: 2 },
   photo: { width: "100%", height: 200, borderRadius: 16 },
   photoRow: { flexDirection: "row", gap: 10 },
   photoHalf: { width: "100%", height: 140, borderRadius: 16 },

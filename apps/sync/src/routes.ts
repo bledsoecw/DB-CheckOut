@@ -33,10 +33,13 @@ import {
   type PhotoUpload,
 } from "./jt";
 import { applyPunchReviewFlip } from "./punchReview";
+import { translateToSpanish, TRANSLATE_LIMITS } from "./translate";
 
 export interface RouterDeps {
   pave: PaveClient;
   sessionSecret: string;
+  geminiApiKey: string;
+  geminiModel: string;
   googleClientId: string;
   workspaceDomain: string;
   allowedEmails: string[];
@@ -149,6 +152,24 @@ export function createHandler(deps: RouterDeps) {
         ? verifySession(deps.sessionSecret, bearerToken(req))
         : null;
       if (!session) return json(res, 401, { error: "Unauthorized" });
+
+      // ES translation of JobTread text (scope lines, punch work orders).
+      if (req.method === "POST" && url.pathname === "/translate") {
+        if (!deps.geminiApiKey) return json(res, 501, { error: "Translation is not configured" });
+        const body = (await readBody(req)) as { texts?: unknown };
+        const texts = Array.isArray(body.texts)
+          ? body.texts.filter((t): t is string => typeof t === "string" && t.length > 0)
+          : [];
+        if (
+          texts.length === 0 ||
+          texts.length > TRANSLATE_LIMITS.maxTexts ||
+          texts.some((t) => t.length > TRANSLATE_LIMITS.maxTextLength)
+        ) {
+          return json(res, 400, { error: "texts must be 1-100 strings, each under 4000 chars" });
+        }
+        const translations = await translateToSpanish(texts, deps);
+        return json(res, 200, { translations });
+      }
 
       if (req.method === "GET" && url.pathname === "/queue") {
         return json(res, 200, await listPipelineJobs(deps.pave));

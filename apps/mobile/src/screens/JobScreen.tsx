@@ -11,6 +11,7 @@ import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
 import { downscalePhoto } from "../photo";
 import { useVisit } from "../store";
+import { useSpanish } from "../translate";
 import { colors } from "../theme";
 import { directionsUrl } from "./QueueScreen";
 
@@ -165,10 +166,16 @@ function PhotosCard({ jobId }: { jobId: string }) {
 }
 
 function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
-  const { p, s } = useLang();
+  const { p, s, lang } = useLang();
   const [open, setOpen] = useState(false);
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
   const lineCount = docs.reduce((n, d) => n + d.lines.length, 0);
+  // In ES mode the JT text (names, descriptions) is machine-translated once
+  // the card is opened; EN mode always shows the record as written.
+  const es = useSpanish(
+    open ? docs.flatMap((d) => [d.name, ...d.lines.flatMap((l) => [l.name, l.description])]) : [],
+    lang === "es",
+  );
   return (
     <Card style={{ paddingVertical: 14 }}>
       <Pressable onPress={() => setOpen((o) => !o)} hitSlop={8}>
@@ -188,7 +195,7 @@ function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
         ? docs.map((doc) => (
             <View key={doc.id} style={styles.scopeDoc}>
               <Text style={styles.scopeDocName}>
-                {doc.name}
+                {es(doc.name)}
                 {doc.issueDate ? `  ·  ${doc.issueDate}` : ""}
               </Text>
               {doc.lines.map((line, i) => {
@@ -203,7 +210,7 @@ function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
                   >
                     <View style={[styles.scopeLine, i > 0 ? styles.scopeLineDivider : null]}>
                       <Text style={styles.scopeLineName}>
-                        {line.name}
+                        {es(line.name)}
                         {line.description ? " …" : ""}
                       </Text>
                       {line.quantity != null ? (
@@ -213,7 +220,7 @@ function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
                       ) : null}
                     </View>
                     {expanded && line.description ? (
-                      <Text style={styles.scopeDesc}>{line.description}</Text>
+                      <Text style={styles.scopeDesc}>{es(line.description)}</Text>
                     ) : null}
                   </Pressable>
                 );

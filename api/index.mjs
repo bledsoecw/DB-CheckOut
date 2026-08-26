@@ -14,6 +14,8 @@ function loadEnv(source = process.env) {
     allowedEmails: (source.GOOGLE_ALLOWED_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
+    geminiApiKey: source.GEMINI_API_KEY ?? "",
+    geminiModel: source.GEMINI_MODEL ?? "gemini-2.5-flash",
     port: Number(source.PORT ?? 8787)
   };
 }
@@ -468,6 +470,41 @@ async function applyPunchReviewFlip(pave, jobId) {
   return STATUS.punchReview;
 }
 
+// apps/sync/src/translate.ts
+var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+var TRANSLATE_LIMITS = { maxTexts: 100, maxTextLength: 4e3 };
+var PROMPT = "Translate each string in the JSON array from English to Latin American Spanish for a roofing/construction field crew. Keep brand names, product names, model numbers, measurements and numbers unchanged. Keep it natural and concise. Return ONLY a JSON array of the translated strings, same length, same order.";
+var cache = /* @__PURE__ */ new Map();
+async function geminiTranslate(texts, apiKey, model, fetchImpl) {
+  const res = await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${PROMPT}
+
+${JSON.stringify(texts)}` }] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
+    })
+  });
+  if (!res.ok) throw new Error(`Gemini request failed: ${res.status}`);
+  const body = await res.json();
+  const raw = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed) || parsed.length !== texts.length) {
+    throw new Error("Gemini returned a mismatched translation array");
+  }
+  return parsed.map((t, i) => typeof t === "string" && t ? t : texts[i]);
+}
+async function translateToSpanish(texts, env, fetchImpl = fetch) {
+  if (!env.geminiApiKey) throw new Error("Translation is not configured");
+  const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
+  if (missing.length > 0) {
+    const translated = await geminiTranslate(missing, env.geminiApiKey, env.geminiModel, fetchImpl);
+    missing.forEach((t, i) => cache.set(t, translated[i]));
+  }
+  return texts.map((t) => cache.get(t) ?? t);
+}
+
 // apps/sync/src/routes.ts
 function bearerToken(req) {
   const header = req.headers["authorization"];
@@ -554,6 +591,16 @@ function createHandler(deps) {
       }
       const session = deps.sessionSecret ? verifySession(deps.sessionSecret, bearerToken(req)) : null;
       if (!session) return json(res, 401, { error: "Unauthorized" });
+      if (req.method === "POST" && url.pathname === "/translate") {
+        if (!deps.geminiApiKey) return json(res, 501, { error: "Translation is not configured" });
+        const body = await readBody(req);
+        const texts = Array.isArray(body.texts) ? body.texts.filter((t) => typeof t === "string" && t.length > 0) : [];
+        if (texts.length === 0 || texts.length > TRANSLATE_LIMITS.maxTexts || texts.some((t) => t.length > TRANSLATE_LIMITS.maxTextLength)) {
+          return json(res, 400, { error: "texts must be 1-100 strings, each under 4000 chars" });
+        }
+        const translations = await translateToSpanish(texts, deps);
+        return json(res, 200, { translations });
+      }
       if (req.method === "GET" && url.pathname === "/queue") {
         return json(res, 200, await listPipelineJobs(deps.pave));
       }
@@ -667,6 +714,8 @@ async function entry(req, res) {
       handler = createHandler({
         pave,
         sessionSecret: env.sessionSecret,
+        geminiApiKey: env.geminiApiKey,
+        geminiModel: env.geminiModel,
         googleClientId: env.googleClientId,
         workspaceDomain: env.workspaceDomain,
         allowedEmails: env.allowedEmails,

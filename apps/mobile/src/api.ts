@@ -203,6 +203,17 @@ export const sendReport = (jobId: string, report: ProblemReport) =>
   post(`/jobs/${jobId}/reports`, report);
 export const completePunchTask = (taskId: string, jobId: string, note?: string) =>
   post(`/tasks/${taskId}/complete`, { jobId, ...(note?.trim() ? { note: note.trim() } : {}) });
+/** Spanish translations for JT text; null when unavailable (offline/unconfigured/demo). */
+export async function translateBatch(texts: string[]): Promise<string[] | null> {
+  if (demoMode || !connected() || texts.length === 0) return null;
+  try {
+    const res = await request<{ translations: string[] }>("POST", "/translate", { texts });
+    return res.translations;
+  } catch {
+    return null;
+  }
+}
+
 export const uploadJobPhoto = (
   jobId: string,
   label: "BEFORE" | "AFTER" | "REPORT" | "INSPECTION",

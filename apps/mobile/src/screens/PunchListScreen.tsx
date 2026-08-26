@@ -7,6 +7,7 @@ import type { RootStackParamList } from "../../App";
 import { getJob } from "../api";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
+import { useSpanish } from "../translate";
 import { colors } from "../theme";
 import { directionsUrl } from "./QueueScreen";
 
@@ -14,7 +15,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "PunchList">;
 
 export default function PunchListScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
-  const { t, t2 } = useLang();
+  const { t, t2, lang } = useLang();
   const [job, setJob] = useState<JobDetail | null>(null);
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export default function PunchListScreen({ navigation, route }: Props) {
 
   const tasks = job?.punchTasks ?? [];
   const done = tasks.filter((task) => task.progress >= 1).length;
+  const es = useSpanish(tasks.flatMap((task) => [task.name, task.description]), lang === "es");
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -90,11 +92,11 @@ export default function PunchListScreen({ navigation, route }: Props) {
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.taskName, finished ? styles.taskNameDone : null]}>
-                      {task.name.replace(/^REPORT: /, "")}
+                      {es(task.name).replace(/^REPORT: /, "")}
                     </Text>
                     {task.description ? (
                       <Text style={styles.taskDesc} numberOfLines={finished ? 1 : 3}>
-                        {task.description}
+                        {es(task.description)}
                       </Text>
                     ) : null}
                   </View>

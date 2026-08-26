@@ -91,6 +91,8 @@ function deps(queries: PaveQuery[]): RouterDeps {
   return {
     pave,
     sessionSecret: SECRET,
+    geminiApiKey: "",
+    geminiModel: "gemini-test",
     googleClientId: "client-id.apps.googleusercontent.com",
     workspaceDomain: "deitemeyerbrothers.com",
     allowedEmails: [],
@@ -163,4 +165,16 @@ test("decodePhoto accepts data URIs and bare base64, rejects junk", () => {
   assert.equal(decodePhoto(""), null);
   assert.equal(decodePhoto(undefined), null);
   assert.equal(decodePhoto(bytes)?.contentType, "image/jpeg");
+});
+
+test("POST /translate is gated on auth and configuration", async () => {
+  const handle = createHandler(deps([]));
+  const noAuth = fakeHttp("POST", "/translate", {}, { texts: ["Hello"] });
+  await handle(noAuth.req, noAuth.res);
+  assert.equal(noAuth.out.status, 401);
+
+  const token = mintSession(SECRET, USER);
+  const unconfigured = fakeHttp("POST", "/translate", { authorization: `Bearer ${token}` }, { texts: ["Hello"] });
+  await handle(unconfigured.req, unconfigured.res);
+  assert.equal(unconfigured.out.status, 501);
 });

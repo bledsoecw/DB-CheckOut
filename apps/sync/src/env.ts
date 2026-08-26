@@ -12,6 +12,9 @@ export interface Env {
   webhookSecret: string;
   /** Public base URL of this deployment, used to self-register the webhook. */
   publicUrl: string;
+  /** Gemini API key for ES translation of JT text. Disabled until set. */
+  geminiApiKey: string;
+  geminiModel: string;
   port: number;
 }
 
@@ -31,6 +34,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
+    geminiApiKey: source.GEMINI_API_KEY ?? "",
+    geminiModel: source.GEMINI_MODEL ?? "gemini-2.5-flash",
     port: Number(source.PORT ?? 8787),
   };
 }

@@ -33,6 +33,8 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
       handler = createHandler({
         pave,
         sessionSecret: env.sessionSecret,
+        geminiApiKey: env.geminiApiKey,
+        geminiModel: env.geminiModel,
         googleClientId: env.googleClientId,
         workspaceDomain: env.workspaceDomain,
         allowedEmails: env.allowedEmails,

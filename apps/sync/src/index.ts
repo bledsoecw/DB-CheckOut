@@ -9,6 +9,8 @@ const pave = createPaveClient(env.jtGrantKey);
 const handler = createHandler({
   pave,
   sessionSecret: env.sessionSecret,
+  geminiApiKey: env.geminiApiKey,
+  geminiModel: env.geminiModel,
   googleClientId: env.googleClientId,
   workspaceDomain: env.workspaceDomain,
   allowedEmails: env.allowedEmails,
