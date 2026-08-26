@@ -672,7 +672,12 @@ function createHandler(deps) {
           (d) => `${d.name}${d.number ? ` #${d.number}` : ""} (${d.issueDate ?? "no date"}):
 ` + d.lines.map((l) => `- ${l.name}${l.quantity ? ` (${l.quantity} ${l.unit ?? ""})` : ""}`).join("\n")
         ).join("\n\n");
-        return json(res, 200, await summarizeScope(scopeText, deps));
+        try {
+          return json(res, 200, await summarizeScope(scopeText, deps));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return json(res, 502, { error: `summary generation: ${message}` });
+        }
       }
       if (req.method === "POST" && parts[0] === "jobs" && parts.length === 3) {
         const jobId = parts[1];

@@ -124,7 +124,15 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown):
     await clearAuth();
     onUnauthorized?.();
   }
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
+  if (!res.ok) {
+    let reason = "";
+    try {
+      reason = String(((await res.json()) as { error?: string }).error ?? "");
+    } catch {
+      // non-JSON error body
+    }
+    throw new Error(reason || `${method} ${path} -> ${res.status}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -220,11 +228,7 @@ export async function getScopeSummary(jobId: string): Promise<ScopeSummaryResult
   if (!connected()) return { summary: null };
   const key = `${CACHE_PREFIX}scopeSummary.${jobId}`;
   try {
-    const res = await fetch(`${SERVER_URL}/jobs/${jobId}/scope-summary`, {
-      headers: { authorization: `Bearer ${session?.token ?? ""}` },
-    });
-    const body = (await res.json()) as ScopeSummary & { error?: string };
-    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    const body = await request<ScopeSummary>("GET", `/jobs/${jobId}/scope-summary`);
     if (!body.en && !body.es) return { summary: null };
     const summary = { en: body.en, es: body.es };
     await AsyncStorage.setItem(key, JSON.stringify(summary)).catch(() => {});
