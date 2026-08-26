@@ -24,20 +24,47 @@ interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 }
 
+/** Model discovered from the key's own model list when the configured one is gone. */
+let discoveredModel: string | null = null;
+
 /**
- * One generateContent call, trying the configured model first and falling
- * back to widely-available older models when the key's API version doesn't
- * know it (404/model errors vary by key vintage).
+ * Google retires Gemini models on a rolling basis, so a hardcoded name rots.
+ * When the configured model 404s, ask the API which models this key can use
+ * and pick the newest stable flash-class one.
  */
+async function discoverModel(apiKey: string, fetchImpl: typeof fetch): Promise<string> {
+  const res = await fetchImpl(`${GEMINI_URL}?pageSize=200`, {
+    headers: { "x-goog-api-key": apiKey },
+  });
+  if (!res.ok) throw new Error(`Gemini model list failed: ${res.status}`);
+  const body = (await res.json()) as {
+    models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+  };
+  const usable = (body.models ?? [])
+    .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+    .map((m) => String(m.name ?? "").replace(/^models\//, ""))
+    .filter(Boolean);
+  const score = (name: string): number => {
+    const version = Number(/gemini-(\d+(?:\.\d+)?)/.exec(name)?.[1] ?? 0);
+    let points = version * 100;
+    if (name.includes("flash")) points += 40;
+    if (/preview|exp|image|tts|live|audio|embedding|thinking/.test(name)) points -= 500;
+    if (name.includes("lite")) points -= 5;
+    return points;
+  };
+  const best = [...usable].sort((a, b) => score(b) - score(a))[0];
+  if (!best) throw new Error("No usable Gemini model on this key");
+  return best;
+}
+
+/** One generateContent call; on a model-name miss, discover a working model. */
 async function geminiGenerate(
   prompt: string,
   env: Pick<Env, "geminiApiKey" | "geminiModel">,
   fetchImpl: typeof fetch,
 ): Promise<string> {
-  const models = [...new Set([env.geminiModel, "gemini-2.0-flash", "gemini-1.5-flash"])];
-  let lastError = "";
-  for (const model of models) {
-    const res = await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
+  const attempt = async (model: string) =>
+    fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
       body: JSON.stringify({
@@ -45,14 +72,17 @@ async function geminiGenerate(
         generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
       }),
     });
-    if (res.ok) {
-      const body = (await res.json()) as GeminiResponse;
-      return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-    }
-    lastError = `Gemini request failed: ${res.status} (${model})`;
-    if (res.status !== 404 && res.status !== 400) break; // real failure, not a model-name miss
+
+  let model = discoveredModel ?? env.geminiModel;
+  let res = await attempt(model);
+  if (res.status === 404 || res.status === 400) {
+    model = await discoverModel(env.geminiApiKey, fetchImpl);
+    discoveredModel = model;
+    res = await attempt(model);
   }
-  throw new Error(lastError || "Gemini request failed");
+  if (!res.ok) throw new Error(`Gemini request failed: ${res.status} (${model})`);
+  const body = (await res.json()) as GeminiResponse;
+  return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 }
 
 async function geminiTranslate(

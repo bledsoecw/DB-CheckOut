@@ -38,3 +38,47 @@ test("translateToSpanish throws when unconfigured and on mismatched output", asy
   })) as unknown as typeof fetch;
   await assert.rejects(() => translateToSpanish(["only-one-brand-new-string"], env, badFetch));
 });
+
+test("a retired model name triggers discovery of the key's newest flash model", async () => {
+  const seen: string[] = [];
+  const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes(":generateContent")) {
+      const model = /models\/([^:]+):/.exec(u)?.[1] ?? "";
+      seen.push(model);
+      if (model !== "gemini-4.1-flash") return { ok: false, status: 404 } as Response;
+      const body = JSON.parse(String(init?.body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
+      const texts = JSON.parse(body.contents[0].parts[0].text.split("\n\n")[1]) as string[];
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: JSON.stringify(texts.map((t) => `ES:${t}`)) }] } }],
+        }),
+      } as Response;
+    }
+    // model list
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        models: [
+          { name: "models/gemini-4.1-pro", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-4.1-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-4.1-flash-preview", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-4.1-flash-lite", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/imagen-4", supportedGenerationMethods: ["predict"] },
+        ],
+      }),
+    } as Response;
+  }) as typeof fetch;
+
+  const out = await translateToSpanish(["fresh-string-for-discovery"], { geminiApiKey: "k", geminiModel: "gemini-9-gone" }, fakeFetch);
+  assert.deepEqual(out, ["ES:fresh-string-for-discovery"]);
+  assert.deepEqual(seen, ["gemini-9-gone", "gemini-4.1-flash"]);
+
+  // Discovered model is remembered — no re-discovery on the next call.
+  const out2 = await translateToSpanish(["second-fresh-string"], { geminiApiKey: "k", geminiModel: "gemini-9-gone" }, fakeFetch);
+  assert.deepEqual(out2, ["ES:second-fresh-string"]);
+  assert.equal(seen[seen.length - 1], "gemini-4.1-flash");
+});

@@ -480,26 +480,45 @@ var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var TRANSLATE_LIMITS = { maxTexts: 100, maxTextLength: 4e3 };
 var PROMPT = "Translate each string in the JSON array from English to Latin American Spanish for a roofing/construction field crew. Keep brand names, product names, model numbers, measurements and numbers unchanged. Keep it natural and concise. Return ONLY a JSON array of the translated strings, same length, same order.";
 var cache = /* @__PURE__ */ new Map();
+var discoveredModel = null;
+async function discoverModel(apiKey, fetchImpl) {
+  const res = await fetchImpl(`${GEMINI_URL}?pageSize=200`, {
+    headers: { "x-goog-api-key": apiKey }
+  });
+  if (!res.ok) throw new Error(`Gemini model list failed: ${res.status}`);
+  const body = await res.json();
+  const usable = (body.models ?? []).filter((m) => m.supportedGenerationMethods?.includes("generateContent")).map((m) => String(m.name ?? "").replace(/^models\//, "")).filter(Boolean);
+  const score = (name) => {
+    const version = Number(/gemini-(\d+(?:\.\d+)?)/.exec(name)?.[1] ?? 0);
+    let points = version * 100;
+    if (name.includes("flash")) points += 40;
+    if (/preview|exp|image|tts|live|audio|embedding|thinking/.test(name)) points -= 500;
+    if (name.includes("lite")) points -= 5;
+    return points;
+  };
+  const best = [...usable].sort((a, b) => score(b) - score(a))[0];
+  if (!best) throw new Error("No usable Gemini model on this key");
+  return best;
+}
 async function geminiGenerate(prompt, env, fetchImpl) {
-  const models = [.../* @__PURE__ */ new Set([env.geminiModel, "gemini-2.0-flash", "gemini-1.5-flash"])];
-  let lastError = "";
-  for (const model of models) {
-    const res = await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
-      })
-    });
-    if (res.ok) {
-      const body = await res.json();
-      return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-    }
-    lastError = `Gemini request failed: ${res.status} (${model})`;
-    if (res.status !== 404 && res.status !== 400) break;
+  const attempt = async (model2) => fetchImpl(`${GEMINI_URL}/${model2}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
+    })
+  });
+  let model = discoveredModel ?? env.geminiModel;
+  let res = await attempt(model);
+  if (res.status === 404 || res.status === 400) {
+    model = await discoverModel(env.geminiApiKey, fetchImpl);
+    discoveredModel = model;
+    res = await attempt(model);
   }
-  throw new Error(lastError || "Gemini request failed");
+  if (!res.ok) throw new Error(`Gemini request failed: ${res.status} (${model})`);
+  const body = await res.json();
+  return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 }
 async function geminiTranslate(texts, env, fetchImpl) {
   const raw = await geminiGenerate(`${PROMPT}
