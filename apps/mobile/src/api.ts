@@ -208,19 +208,31 @@ const DEMO_SUMMARY: ScopeSummary = {
   es: "Retiro completo y reinstalación de tejas arquitectónicas OC Duration (32 SQ), con membrana sintética nueva y tres botas de tubo; incluye acarreo de escombro. Una orden de cambio agregó 148 pies lineales de canales sin costura de 5\" con bajantes.",
 };
 
-/** Bilingual sold-scope summary; null when unavailable (offline/unconfigured). */
-export async function getScopeSummary(jobId: string): Promise<ScopeSummary | null> {
-  if (demoMode) return DEMO_SUMMARY;
-  if (!connected()) return null;
+export interface ScopeSummaryResult {
+  summary: ScopeSummary | null;
+  /** Server-reported reason when generation failed (surfaced in the UI). */
+  error?: string;
+}
+
+/** Bilingual sold-scope summary; error carries the server's reason. */
+export async function getScopeSummary(jobId: string): Promise<ScopeSummaryResult> {
+  if (demoMode) return { summary: DEMO_SUMMARY };
+  if (!connected()) return { summary: null };
   const key = `${CACHE_PREFIX}scopeSummary.${jobId}`;
   try {
-    const summary = await request<ScopeSummary>("GET", `/jobs/${jobId}/scope-summary`);
-    if (!summary.en && !summary.es) return null;
+    const res = await fetch(`${SERVER_URL}/jobs/${jobId}/scope-summary`, {
+      headers: { authorization: `Bearer ${session?.token ?? ""}` },
+    });
+    const body = (await res.json()) as ScopeSummary & { error?: string };
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    if (!body.en && !body.es) return { summary: null };
+    const summary = { en: body.en, es: body.es };
     await AsyncStorage.setItem(key, JSON.stringify(summary)).catch(() => {});
-    return summary;
-  } catch {
+    return { summary };
+  } catch (err) {
     const stale = await AsyncStorage.getItem(key).catch(() => null);
-    return stale ? (JSON.parse(stale) as ScopeSummary) : null;
+    if (stale) return { summary: JSON.parse(stale) as ScopeSummary };
+    return { summary: null, error: err instanceof Error ? err.message : String(err) };
   }
 }
 

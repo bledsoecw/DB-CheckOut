@@ -171,6 +171,7 @@ function ScopeCard({ jobId, docs }: { jobId: string; docs: ScopeDocument[] }) {
   const [openDocs, setOpenDocs] = useState<Record<string, boolean>>({});
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
   const [summary, setSummary] = useState<ScopeSummary | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => {
@@ -178,8 +179,10 @@ function ScopeCard({ jobId, docs }: { jobId: string; docs: ScopeDocument[] }) {
     let on = true;
     setSummaryLoading(true);
     getScopeSummary(jobId)
-      .then((sm) => {
-        if (on) setSummary(sm);
+      .then((result) => {
+        if (!on) return;
+        setSummary(result.summary);
+        setSummaryError(result.error ?? null);
       })
       .finally(() => {
         if (on) setSummaryLoading(false);
@@ -219,6 +222,10 @@ function ScopeCard({ jobId, docs }: { jobId: string; docs: ScopeDocument[] }) {
           ) : summaryLoading ? (
             <Text style={styles.scopeSummaryLoading}>
               {p({ es: "Generando resumen…", en: "Generating summary…" })}
+            </Text>
+          ) : summaryError ? (
+            <Text style={styles.scopeSummaryLoading}>
+              {p({ es: "Resumen no disponible", en: "Summary unavailable" })} · {summaryError}
             </Text>
           ) : null}
 
