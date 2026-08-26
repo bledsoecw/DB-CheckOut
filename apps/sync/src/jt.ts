@@ -345,7 +345,7 @@ export async function completeTask(pave: PaveClient, taskId: string, note?: stri
 
 export interface PhotoUpload {
   /** BEFORE / AFTER a repair, or the photo on a problem REPORT. */
-  label: "BEFORE" | "AFTER" | "REPORT";
+  label: "BEFORE" | "AFTER" | "REPORT" | "INSPECTION";
   data: Buffer;
   contentType: string;
   /** Attach to this punch task; without it the photo lands on the job. */

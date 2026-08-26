@@ -73,7 +73,7 @@ function checklistValues(sub: ChecklistSubmission): Record<string, string> {
   return { ...sub.answers, ...(sub.texts ?? {}) };
 }
 
-const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPORT"]);
+const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
 const MAX_PHOTO_BYTES = 4_000_000;
 
 /** Accepts a data URI or bare base64; returns bytes + content type or null. */

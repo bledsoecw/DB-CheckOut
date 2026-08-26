@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import * as ImagePicker from "expo-image-picker";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { JobDetail, ScopeDocument } from "@shared/types";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getJob } from "../api";
+import { getJob, uploadJobPhoto } from "../api";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
+import { downscalePhoto } from "../photo";
 import { useVisit } from "../store";
 import { colors } from "../theme";
 import { directionsUrl } from "./QueueScreen";
@@ -63,6 +65,8 @@ export default function JobScreen({ navigation, route }: Props) {
           </Card>
         ) : null}
 
+        <PhotosCard jobId={jobId} />
+
         {job && job.soldScope.length > 0 ? <ScopeCard docs={job.soldScope} /> : null}
 
         <Tile
@@ -108,6 +112,58 @@ export default function JobScreen({ navigation, route }: Props) {
   );
 }
 
+interface VisitPhoto {
+  uri: string;
+  status: "sending" | "sent" | "queued";
+}
+
+/** Snap job-condition photos any time; each one is saved to the JT job. */
+function PhotosCard({ jobId }: { jobId: string }) {
+  const { p, s } = useLang();
+  const [photos, setPhotos] = useState<VisitPhoto[]>([]);
+
+  const take = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) return;
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.6 });
+    if (result.canceled || !result.assets[0]) return;
+    const uri = await downscalePhoto(result.assets[0].uri);
+    const index = photos.length;
+    setPhotos((prev) => [...prev, { uri, status: "sending" }]);
+    const status = await uploadJobPhoto(jobId, "INSPECTION", uri);
+    setPhotos((prev) => prev.map((ph, i) => (i === index ? { ...ph, status } : ph)));
+  };
+
+  return (
+    <Card>
+      <View style={styles.photosHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.tileTitle}>{p({ es: "Fotos de la visita", en: "Visit photos" })}</Text>
+          <Text style={styles.tileSub}>
+            {s({ es: "Fotos de la visita", en: "Visit photos" })} ·{" "}
+            {p({ es: "se guardan en JobTread", en: "saved to JobTread" })}
+          </Text>
+        </View>
+        <Pressable onPress={take} style={styles.photoAdd} hitSlop={8}>
+          <Text style={styles.photoAddText}>{p({ es: "📷 Tomar foto", en: "📷 Take photo" })}</Text>
+        </Pressable>
+      </View>
+      {photos.length > 0 ? (
+        <View style={styles.photoGrid}>
+          {photos.map((ph, i) => (
+            <View key={i} style={styles.photoThumbWrap}>
+              <Image source={{ uri: ph.uri }} style={styles.photoThumb} />
+              <Text style={styles.photoStatus}>
+                {ph.status === "sending" ? "…" : ph.status === "sent" ? "✓" : "⏳"}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </Card>
+  );
+}
+
 function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
   const { p, s } = useLang();
   const [open, setOpen] = useState(false);
@@ -145,7 +201,7 @@ function ScopeCard({ docs }: { docs: ScopeDocument[] }) {
                       line.description ? setExpandedLine(expanded ? null : key) : undefined
                     }
                   >
-                    <View style={styles.scopeLine}>
+                    <View style={[styles.scopeLine, i > 0 ? styles.scopeLineDivider : null]}>
                       <Text style={styles.scopeLineName}>
                         {line.name}
                         {line.description ? " …" : ""}
@@ -227,7 +283,31 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     gap: 12,
-    paddingVertical: 5,
+    paddingVertical: 7,
+  },
+  scopeLineDivider: { borderTopWidth: 1, borderTopColor: colors.divider },
+  photosHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
+  photoAdd: {
+    backgroundColor: colors.blueTint,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  photoAddText: { color: colors.blue, fontSize: 14, fontWeight: "700" },
+  photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
+  photoThumbWrap: { position: "relative" },
+  photoThumb: { width: 72, height: 72, borderRadius: 10 },
+  photoStatus: {
+    position: "absolute",
+    right: 4,
+    bottom: 4,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    borderRadius: 8,
+    paddingHorizontal: 5,
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.greenDark,
+    overflow: "hidden",
   },
   scopeLineName: { flex: 1, fontSize: 14, color: colors.ink },
   scopeQty: { fontSize: 13, fontWeight: "600", color: colors.muted },

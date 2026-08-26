@@ -493,7 +493,7 @@ async function readBody(req, limit = 5e6) {
 function checklistValues(sub) {
   return { ...sub.answers, ...sub.texts ?? {} };
 }
-var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT"]);
+var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
 var MAX_PHOTO_BYTES = 4e6;
 function decodePhoto(imageBase64) {
   if (typeof imageBase64 !== "string" || !imageBase64) return null;
