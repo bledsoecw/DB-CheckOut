@@ -15,7 +15,7 @@ function loadEnv(source = process.env) {
     webhookSecret: source.WEBHOOK_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     geminiApiKey: source.GEMINI_API_KEY ?? "",
-    geminiModel: source.GEMINI_MODEL ?? "gemini-2.5-flash",
+    geminiModel: source.GEMINI_MODEL ?? "gemini-flash-lite-latest",
     port: Number(source.PORT ?? 8787)
   };
 }
@@ -491,7 +491,7 @@ async function discoverModel(apiKey, fetchImpl) {
     let points = version * 100;
     if (name.includes("flash")) points += 40;
     if (/preview|exp|image|tts|live|audio|embedding|thinking/.test(name)) points -= 500;
-    if (name.includes("lite")) points -= 5;
+    if (name.includes("lite")) points += 20;
     return points;
   };
   const best = [...usable].sort((a, b) => score(b) - score(a))[0];

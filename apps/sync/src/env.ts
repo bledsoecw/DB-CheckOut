@@ -35,7 +35,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     webhookSecret: source.WEBHOOK_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     geminiApiKey: source.GEMINI_API_KEY ?? "",
-    geminiModel: source.GEMINI_MODEL ?? "gemini-2.5-flash",
+    geminiModel: source.GEMINI_MODEL ?? "gemini-flash-lite-latest",
     port: Number(source.PORT ?? 8787),
   };
 }

@@ -30,7 +30,9 @@ let discoveredModel: string | null = null;
 /**
  * Google retires Gemini models on a rolling basis, so a hardcoded name rots.
  * When the configured model 404s, ask the API which models this key can use
- * and pick the newest stable flash-class one.
+ * and pick the newest stable flash-LITE one — this workload (translate
+ * strings, three-sentence summaries) wants the high-throughput lane, not a
+ * reasoning flagship that burns the function limit thinking.
  */
 async function discoverModel(apiKey: string, fetchImpl: typeof fetch): Promise<string> {
   const res = await fetchImpl(`${GEMINI_URL}?pageSize=200`, {
@@ -49,7 +51,7 @@ async function discoverModel(apiKey: string, fetchImpl: typeof fetch): Promise<s
     let points = version * 100;
     if (name.includes("flash")) points += 40;
     if (/preview|exp|image|tts|live|audio|embedding|thinking/.test(name)) points -= 500;
-    if (name.includes("lite")) points -= 5;
+    if (name.includes("lite")) points += 20;
     return points;
   };
   const best = [...usable].sort((a, b) => score(b) - score(a))[0];

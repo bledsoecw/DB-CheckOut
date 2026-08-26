@@ -46,7 +46,7 @@ test("a retired model name triggers discovery of the key's newest flash model", 
     if (u.includes(":generateContent")) {
       const model = /models\/([^:]+):/.exec(u)?.[1] ?? "";
       seen.push(model);
-      if (model !== "gemini-4.1-flash") return { ok: false, status: 404 } as Response;
+      if (model !== "gemini-4.1-flash-lite") return { ok: false, status: 404 } as Response;
       const body = JSON.parse(String(init?.body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
       const texts = JSON.parse(body.contents[0].parts[0].text.split("\n\n")[1]) as string[];
       return {
@@ -75,10 +75,10 @@ test("a retired model name triggers discovery of the key's newest flash model", 
 
   const out = await translateToSpanish(["fresh-string-for-discovery"], { geminiApiKey: "k", geminiModel: "gemini-9-gone" }, fakeFetch);
   assert.deepEqual(out, ["ES:fresh-string-for-discovery"]);
-  assert.deepEqual(seen, ["gemini-9-gone", "gemini-4.1-flash"]);
+  assert.deepEqual(seen, ["gemini-9-gone", "gemini-4.1-flash-lite"]);
 
   // Discovered model is remembered — no re-discovery on the next call.
   const out2 = await translateToSpanish(["second-fresh-string"], { geminiApiKey: "k", geminiModel: "gemini-9-gone" }, fakeFetch);
   assert.deepEqual(out2, ["ES:second-fresh-string"]);
-  assert.equal(seen[seen.length - 1], "gemini-4.1-flash");
+  assert.equal(seen[seen.length - 1], "gemini-4.1-flash-lite");
 });
