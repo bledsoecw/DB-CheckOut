@@ -58,33 +58,55 @@ async function discoverModel(apiKey: string, fetchImpl: typeof fetch): Promise<s
 }
 
 /**
- * One generateContent call; on a model-name miss, discover a working model.
- * Thinking is disabled where supported (thinkingBudget 0) — flash models
- * default it on, which is far too slow for translation/summary inside a
- * serverless time limit; models that reject the knob get a retry without it.
+ * Minimum-thinking controls, newest naming first: Gemini 3 uses
+ * thinkingLevel, 2.5 uses thinkingBudget; unknown knobs get a 400, so the
+ * ladder walks down to "no knob". Full thinking is far too slow for
+ * translation/summary work inside a serverless time limit.
  */
+const THINKING_VARIANTS: Array<Record<string, unknown> | null> = [
+  { thinkingLevel: "low" },
+  { thinkingBudget: 0 },
+  null,
+];
+let workingVariant = 0;
+const GEMINI_CALL_TIMEOUT_MS = 45_000;
+
+/** One generateContent call; on a model-name miss, discover a working model. */
 async function geminiGenerate(
   prompt: string,
   env: Pick<Env, "geminiApiKey" | "geminiModel">,
   fetchImpl: typeof fetch,
 ): Promise<string> {
-  const attempt = async (model: string, capThinking: boolean) =>
-    fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.2,
-          ...(capThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
-        },
-      }),
-    });
+  const attempt = async (model: string, variant: Record<string, unknown> | null) => {
+    try {
+      return await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
+        signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.2,
+            maxOutputTokens: 8192,
+            ...(variant ? { thinkingConfig: variant } : {}),
+          },
+        }),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new Error(`Gemini timed out after ${GEMINI_CALL_TIMEOUT_MS / 1000}s (${model})`);
+      }
+      throw err;
+    }
+  };
 
   const tryModel = async (model: string) => {
-    let res = await attempt(model, true);
-    if (res.status === 400) res = await attempt(model, false);
+    let res = await attempt(model, THINKING_VARIANTS[workingVariant]);
+    for (let i = workingVariant + 1; res.status === 400 && i < THINKING_VARIANTS.length; i++) {
+      res = await attempt(model, THINKING_VARIANTS[i]);
+      if (res.status !== 400) workingVariant = i;
+    }
     return res;
   };
 

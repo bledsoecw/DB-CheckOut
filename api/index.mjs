@@ -498,22 +498,43 @@ async function discoverModel(apiKey, fetchImpl) {
   if (!best) throw new Error("No usable Gemini model on this key");
   return best;
 }
+var THINKING_VARIANTS = [
+  { thinkingLevel: "low" },
+  { thinkingBudget: 0 },
+  null
+];
+var workingVariant = 0;
+var GEMINI_CALL_TIMEOUT_MS = 45e3;
 async function geminiGenerate(prompt, env, fetchImpl) {
-  const attempt = async (model2, capThinking) => fetchImpl(`${GEMINI_URL}/${model2}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.2,
-        ...capThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}
+  const attempt = async (model2, variant) => {
+    try {
+      return await fetchImpl(`${GEMINI_URL}/${model2}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
+        signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.2,
+            maxOutputTokens: 8192,
+            ...variant ? { thinkingConfig: variant } : {}
+          }
+        })
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new Error(`Gemini timed out after ${GEMINI_CALL_TIMEOUT_MS / 1e3}s (${model2})`);
       }
-    })
-  });
+      throw err;
+    }
+  };
   const tryModel = async (model2) => {
-    let res2 = await attempt(model2, true);
-    if (res2.status === 400) res2 = await attempt(model2, false);
+    let res2 = await attempt(model2, THINKING_VARIANTS[workingVariant]);
+    for (let i = workingVariant + 1; res2.status === 400 && i < THINKING_VARIANTS.length; i++) {
+      res2 = await attempt(model2, THINKING_VARIANTS[i]);
+      if (res2.status !== 400) workingVariant = i;
+    }
     return res2;
   };
   let model = discoveredModel ?? env.geminiModel;
@@ -675,10 +696,13 @@ function createHandler(deps) {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Summaries are not configured" });
         const scope = await listSoldScope(deps.pave, parts[1]);
         if (scope.length === 0) return json(res, 200, { en: "", es: "" });
-        const scopeText = scope.map(
-          (d) => `${d.name}${d.number ? ` #${d.number}` : ""} (${d.issueDate ?? "no date"}):
-` + d.lines.map((l) => `- ${l.name}${l.quantity ? ` (${l.quantity} ${l.unit ?? ""})` : ""}`).join("\n")
-        ).join("\n\n");
+        const scopeText = scope.map((d) => {
+          const lines = d.lines.slice(0, 40);
+          const extra = d.lines.length - lines.length;
+          return `${d.name}${d.number ? ` #${d.number}` : ""} (${d.issueDate ?? "no date"}):
+` + lines.map((l) => `- ${l.name}${l.quantity ? ` (${l.quantity} ${l.unit ?? ""})` : ""}`).join("\n") + (extra > 0 ? `
+- (+${extra} more items)` : "");
+        }).join("\n\n");
         try {
           return json(res, 200, await summarizeScope(scopeText, deps));
         } catch (err) {

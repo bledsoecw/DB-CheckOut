@@ -191,13 +191,17 @@ export function createHandler(deps: RouterDeps) {
         const scope = await listSoldScope(deps.pave, parts[1]);
         if (scope.length === 0) return json(res, 200, { en: "", es: "" });
         const scopeText = scope
-          .map(
-            (d) =>
+          .map((d) => {
+            const lines = d.lines.slice(0, 40);
+            const extra = d.lines.length - lines.length;
+            return (
               `${d.name}${d.number ? ` #${d.number}` : ""} (${d.issueDate ?? "no date"}):\n` +
-              d.lines
+              lines
                 .map((l) => `- ${l.name}${l.quantity ? ` (${l.quantity} ${l.unit ?? ""})` : ""}`)
-                .join("\n"),
-          )
+                .join("\n") +
+              (extra > 0 ? `\n- (+${extra} more items)` : "")
+            );
+          })
           .join("\n\n");
         try {
           return json(res, 200, await summarizeScope(scopeText, deps));
