@@ -80,6 +80,10 @@ export function mockJobDetail(jobId: string): JobDetail {
     return {
       ...base,
       soldScope: MOCK_SCOPE,
+      openPunchTotal: 2,
+      // Demo data carries a mix on purpose: two items belonging to whoever is
+      // holding the phone and one that doesn't, so the Míos / Todos switch has
+      // something real to do.
       punchTasks: [
         {
           id: "demo-task-1",
@@ -87,7 +91,9 @@ export function mockJobDetail(jobId: string): JobDetail {
           description: "Reconnect and strap the downspout.",
           progress: 1,
           endDate: null,
+          assignees: [{ membershipId: "demo-m1", name: "José R.", email: null }],
           assigneeNames: ["José R."],
+          mine: true,
         },
         {
           id: "demo-task-2",
@@ -95,7 +101,9 @@ export function mockJobDetail(jobId: string): JobDetail {
           description: "Replace the 3\" pipe boot and re-seal the surrounding shingles. Bring: 3\" boot, sealant.",
           progress: 0,
           endDate: null,
+          assignees: [{ membershipId: "demo-m1", name: "José R.", email: null }],
           assigneeNames: ["José R."],
+          mine: true,
         },
         {
           id: "demo-task-3",
@@ -103,10 +111,12 @@ export function mockJobDetail(jobId: string): JobDetail {
           description: "Reset siding over step flashing at second course.",
           progress: 0,
           endDate: null,
-          assigneeNames: ["José R."],
+          assignees: [{ membershipId: "demo-m2", name: "Marcos G.", email: null }],
+          assigneeNames: ["Marcos G."],
+          mine: false,
         },
       ],
     };
   }
-  return { ...base, punchTasks: [], soldScope: MOCK_SCOPE };
+  return { ...base, punchTasks: [], soldScope: MOCK_SCOPE, openPunchTotal: 0 };
 }
