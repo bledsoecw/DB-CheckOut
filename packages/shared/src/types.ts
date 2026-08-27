@@ -22,8 +22,20 @@ export interface QueueJob {
   salesRep: string | null;
   /** Street address when the JT job has a location; used for the directions link. */
   address: string | null;
-  /** Open punch tasks assigned to the requesting user (punch crew view). */
+  /**
+   * Open punch tasks assigned to the requesting user. Falls back to every
+   * open item when the caller has no identity (unauthenticated tooling).
+   */
   openPunchCount: number;
+}
+
+/** Somebody a punch item is assigned to in JobTread. */
+export interface Assignee {
+  /** JT membership id — stable, and what the Production Board writes. */
+  membershipId: string;
+  name: string;
+  /** JT account email. Subs are on personal addresses, staff on the domain. */
+  email: string | null;
 }
 
 export interface PunchTask {
@@ -33,7 +45,14 @@ export interface PunchTask {
   /** 0..1 in JT; 1 means the crew finished it. */
   progress: number;
   endDate: string | null;
+  assignees: Assignee[];
   assigneeNames: string[];
+  /**
+   * True when the signed-in crew member is one of the assignees. Decided on
+   * the server, where the session is — the app never has to guess whether
+   * "Alberto Gonzalez" in JT is the person holding the phone.
+   */
+  mine: boolean;
 }
 
 /** One line of an approved customer order (the record stays English). */
@@ -66,6 +85,8 @@ export interface ScopeSummary {
 
 export interface JobDetail extends QueueJob {
   punchTasks: PunchTask[];
+  /** Open punch items on this job, whoever they belong to. */
+  openPunchTotal: number;
   /** Approved customer orders, oldest first — what was sold, changes included. */
   soldScope: ScopeDocument[];
 }

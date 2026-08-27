@@ -5,7 +5,16 @@ import { STATUS } from "../../../packages/shared/src/jobtread";
 import type { PunchTask } from "../../../packages/shared/src/types";
 
 function task(progress: number): PunchTask {
-  return { id: "t", name: "n", description: null, progress, endDate: null, assigneeNames: [] };
+  return {
+    id: "t",
+    name: "n",
+    description: null,
+    progress,
+    endDate: null,
+    assignees: [],
+    assigneeNames: [],
+    mine: false,
+  };
 }
 
 test("flips when every punch task is finished and status is Punch List", () => {

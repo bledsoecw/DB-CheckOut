@@ -182,7 +182,8 @@ export function createHandler(deps: RouterDeps) {
       }
 
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
-        return json(res, 200, await getJob(deps.pave, parts[1]));
+        // The session decides which punch items come back marked as theirs.
+        return json(res, 200, await getJob(deps.pave, parts[1], session ?? undefined));
       }
 
       // Bilingual crew summary of the sold scope (Gemini; cached per content).
