@@ -12,6 +12,7 @@ import {
   TASK_TYPES,
 } from "../../../packages/shared/src/jobtread";
 import type {
+  Assignee,
   JobDetail,
   ProblemReport,
   PunchTask,
@@ -62,7 +63,12 @@ interface RawTask {
   progress: number | null;
   endDate: string | null;
   taskType: { id: string } | null;
-  assignees?: { nodes: Array<{ name?: string | null }> } | null;
+  assignedMemberships?: {
+    nodes: Array<{
+      id: string;
+      user?: { id?: string | null; name?: string | null; emailAddress?: string | null } | null;
+    }>;
+  } | null;
 }
 
 function cfv(job: RawJob, fieldId: string): string | null {
@@ -233,15 +239,30 @@ export async function listPipelineJobs(pave: PaveClient): Promise<QueueJob[]> {
   return out.sort((a, b) => a.number.localeCompare(b.number));
 }
 
-export async function getJob(pave: PaveClient, jobId: string): Promise<JobDetail> {
-  const [res, punchTasks, soldScope] = await Promise.all([
+export async function getJob(
+  pave: PaveClient,
+  jobId: string,
+  viewer?: Viewer,
+): Promise<JobDetail> {
+  const [res, rawPunch, soldScope] = await Promise.all([
     pave.query<{ job: RawJob | null }>({ job: { $: { id: jobId }, ...JOB_SELECTION } }),
     listPunchTasks(pave, jobId),
     listSoldScope(pave, jobId),
   ]);
   if (!res.job) throw new Error(`Job not found: ${jobId}`);
-  const open = punchTasks.filter((t) => t.progress < 1).length;
-  return { ...toQueueJob(res.job, open), punchTasks, soldScope };
+
+  const punchTasks = rawPunch.map((t) => ({ ...t, mine: assignedTo(t, viewer) }));
+  const open = punchTasks.filter((t) => t.progress < 1);
+  const mineOpen = open.filter((t) => t.mine).length;
+  // Without a viewer there is no "yours", so the honest count is all of them.
+  const count = viewer ? mineOpen : open.length;
+
+  return {
+    ...toQueueJob(res.job, count),
+    punchTasks,
+    soldScope,
+    openPunchTotal: open.length,
+  };
 }
 
 export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<PunchTask[]> {
@@ -259,6 +280,10 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
           progress: {},
           endDate: {},
           taskType: { id: {} },
+          assignedMemberships: {
+            $: { size: 10 },
+            nodes: { id: {}, user: { id: {}, name: {}, emailAddress: {} } },
+          },
         },
       },
     },
@@ -266,16 +291,58 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
   const nodes = res.job?.tasks.nodes ?? [];
   return nodes
     .filter((t) => t.taskType?.id === TASK_TYPES.punchList)
-    .map((t) => ({
-      id: t.id,
-      name: t.name,
-      description: t.description,
-      progress: t.progress ?? 0,
-      endDate: t.endDate,
-      assigneeNames: (t.assignees?.nodes ?? [])
-        .map((a) => a.name)
-        .filter((n): n is string => typeof n === "string"),
-    }));
+    .map((t) => {
+      const assignees: Assignee[] = (t.assignedMemberships?.nodes ?? []).map((m) => ({
+        membershipId: m.id,
+        name: m.user?.name ?? "",
+        email: m.user?.emailAddress ?? null,
+      }));
+      return {
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        progress: t.progress ?? 0,
+        endDate: t.endDate,
+        assignees,
+        assigneeNames: assignees.map((a) => a.name).filter((n) => n.length > 0),
+        // Filled in by getJob, which is the layer that knows who is asking.
+        mine: false,
+      };
+    });
+}
+
+// --------------------------------------------------------------------------
+// Whose item is it?
+// --------------------------------------------------------------------------
+
+const norm = (v: string | null | undefined): string => (v ?? "").trim().toLowerCase();
+
+/**
+ * Who is asking. The session carries what Google gave us at sign-in.
+ */
+export interface Viewer {
+  email: string;
+  name: string;
+}
+
+/**
+ * Match the signed-in crew member against a punch item's assignees.
+ *
+ * Email first, because it is exact: office staff sign in on the
+ * deitemeyerbrothers.com address that is also on their JobTread user. Subs are
+ * on personal addresses in JT that may differ from whatever Google account
+ * they use, so the name is the fallback — that is the only other thing the two
+ * systems reliably share.
+ */
+export function assignedTo(task: PunchTask, viewer: Viewer | undefined): boolean {
+  if (!viewer) return false;
+  const email = norm(viewer.email);
+  const name = norm(viewer.name);
+  return task.assignees.some(
+    (a) =>
+      (email.length > 0 && norm(a.email) === email) ||
+      (name.length > 0 && norm(a.name) === name),
+  );
 }
 
 // --------------------------------------------------------------------------

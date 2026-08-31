@@ -8,7 +8,7 @@ import { getJob } from "../api";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
 import { useSpanish } from "../translate";
-import { colors } from "../theme";
+import { colors, radius, HIT } from "../theme";
 import { directionsUrl } from "./QueueScreen";
 
 type Props = NativeStackScreenProps<RootStackParamList, "PunchList">;
@@ -26,7 +26,14 @@ export default function PunchListScreen({ navigation, route }: Props) {
   }, [navigation, jobId]);
 
   const tasks = job?.punchTasks ?? [];
-  const done = tasks.filter((task) => task.progress >= 1).length;
+  const mineCount = tasks.filter((task) => task.mine).length;
+  // Null until the crew member picks. Landing on "mine" when something is
+  // theirs is the whole point; landing there when nothing is would just show
+  // an empty screen, so the default follows the job.
+  const [scope, setScope] = useState<"mine" | "all" | null>(null);
+  const showing = scope ?? (mineCount > 0 ? "mine" : "all");
+  const shown = showing === "mine" ? tasks.filter((task) => task.mine) : tasks;
+  const done = shown.filter((task) => task.progress >= 1).length;
   const es = useSpanish(tasks.flatMap((task) => [task.name, task.description]), lang === "es");
 
   return (
@@ -44,7 +51,7 @@ export default function PunchListScreen({ navigation, route }: Props) {
         <LangPill />
         <View style={styles.count}>
           <Text style={styles.countText}>
-            {done}/{tasks.length}
+            {done}/{shown.length}
           </Text>
         </View>
       </View>
@@ -59,6 +66,36 @@ export default function PunchListScreen({ navigation, route }: Props) {
                 onPress={() => Linking.openURL(directionsUrl(job.address as string))}
               />
             </View>
+          </Card>
+        ) : null}
+
+        {tasks.length > 0 ? (
+          <View style={styles.scopeRow}>
+            <Pressable
+              style={[styles.scopeBtn, showing === "mine" ? styles.scopeBtnOn : null]}
+              onPress={() => setScope("mine")}
+              hitSlop={6}
+            >
+              <Text style={[styles.scopeText, showing === "mine" ? styles.scopeTextOn : null]}>
+                {t("mine")} · {mineCount}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.scopeBtn, showing === "all" ? styles.scopeBtnOn : null]}
+              onPress={() => setScope("all")}
+              hitSlop={6}
+            >
+              <Text style={[styles.scopeText, showing === "all" ? styles.scopeTextOn : null]}>
+                {t("everyone")} · {tasks.length}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {job && tasks.length > 0 && shown.length === 0 ? (
+          <Card>
+            <Text style={styles.emptyTitle}>{t("nothingForYou")}</Text>
+            <Text style={styles.emptyText}>{t2("nothingForYou")}</Text>
           </Card>
         ) : null}
 
@@ -77,7 +114,7 @@ export default function PunchListScreen({ navigation, route }: Props) {
           </Card>
         ) : null}
 
-        {tasks.map((task) => {
+        {shown.map((task) => {
           const finished = task.progress >= 1;
           return (
             <Pressable
@@ -97,6 +134,15 @@ export default function PunchListScreen({ navigation, route }: Props) {
                     {task.description ? (
                       <Text style={styles.taskDesc} numberOfLines={finished ? 1 : 3}>
                         {es(task.description)}
+                      </Text>
+                    ) : null}
+                    {task.mine ? (
+                      <View style={styles.forYou}>
+                        <Text style={styles.forYouText}>{t("forYou")}</Text>
+                      </View>
+                    ) : task.assigneeNames.length > 0 ? (
+                      <Text style={styles.taskWho}>
+                        {t("assignedTo")} {task.assigneeNames.join(", ")}
                       </Text>
                     ) : null}
                   </View>
@@ -138,6 +184,32 @@ const styles = StyleSheet.create({
   },
   countText: { color: colors.orange, fontSize: 16, fontWeight: "700" },
   addressCard: { flexDirection: "row", alignItems: "center", gap: 12 },
+  scopeRow: { flexDirection: "row", gap: 8 },
+  scopeBtn: {
+    flex: 1,
+    minHeight: HIT,
+    borderRadius: radius.control,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  scopeBtnOn: { backgroundColor: colors.blueTint, borderColor: colors.blue },
+  scopeText: { fontSize: 16, fontWeight: "600", color: colors.muted },
+  scopeTextOn: { color: colors.navy },
+  taskWho: { marginTop: 6, fontSize: 13, color: colors.faint },
+  forYou: {
+    marginTop: 6,
+    alignSelf: "flex-start",
+    backgroundColor: colors.orangeTint,
+    borderWidth: 1,
+    borderColor: colors.orangeBorder,
+    borderRadius: radius.chip,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  forYouText: { fontSize: 13, fontWeight: "700", color: colors.orange },
   emptyTitle: { fontSize: 15, fontWeight: "700", color: colors.ink, marginBottom: 4 },
   emptyText: { fontSize: 12.5, color: colors.muted, marginBottom: 12 },
   address: { flex: 1, fontSize: 14.5, fontWeight: "700", color: colors.ink },

@@ -2,9 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PaveClient, PaveQuery } from "../src/pave";
 import {
+  assignedTo,
   completeTask,
   createReportTask,
   listPipelineJobs,
+  listPunchTasks,
   listSoldScope,
   selectScopeDocs,
   submitForm,
@@ -328,4 +330,90 @@ test("toQueueJob tolerates missing custom fields", () => {
   assert.equal(job.address, null);
   assert.deepEqual(job.projectTypes, []);
   assert.equal(job.isService, false);
+});
+
+// --------------------------------------------------------------------------
+// Whose punch item is it?
+// --------------------------------------------------------------------------
+
+function punch(assignees: Array<{ name: string; email: string | null }>) {
+  return {
+    id: "t1",
+    name: "Reseal the pipe boot",
+    description: null,
+    progress: 0,
+    endDate: null,
+    assignees: assignees.map((a, i) => ({ membershipId: `m${i}`, ...a })),
+    assigneeNames: assignees.map((a) => a.name),
+    mine: false,
+  };
+}
+
+test("assignedTo matches on email, ignoring case and spacing", () => {
+  const task = punch([{ name: "Alberto Gonzalez", email: "albertogonzalez@deitemeyerbrothers.com" }]);
+  assert.equal(
+    assignedTo(task, { email: "  AlbertoGonzalez@Deitemeyerbrothers.com ", name: "Whoever" }),
+    true,
+  );
+});
+
+test("assignedTo falls back to the name when the emails differ", () => {
+  // Subs sign in on a personal Google account that isn't their JT address.
+  const task = punch([{ name: "Marcos Gonzales", email: "enfoqueconstructionfw@gmail.com" }]);
+  assert.equal(assignedTo(task, { email: "marcos.personal@gmail.com", name: "marcos gonzales" }), true);
+});
+
+test("assignedTo says no for somebody else's item, and with no session", () => {
+  const task = punch([{ name: "Alberto Gonzalez", email: "albertogonzalez@deitemeyerbrothers.com" }]);
+  assert.equal(assignedTo(task, { email: "kyle@deitemeyerbrothers.com", name: "Kyle Akerman" }), false);
+  assert.equal(assignedTo(task, undefined), false);
+});
+
+test("assignedTo ignores blank assignee fields rather than matching everyone", () => {
+  const task = punch([{ name: "", email: null }]);
+  assert.equal(assignedTo(task, { email: "", name: "" }), false);
+  assert.equal(assignedTo(task, { email: "someone@deitemeyerbrothers.com", name: "Someone" }), false);
+});
+
+test("listPunchTasks reads the real assignedMemberships shape", async () => {
+  const { client, queries } = fakePave(() => ({
+    job: {
+      tasks: {
+        nodes: [
+          {
+            id: "p1",
+            name: "Alberto — reseal the pipe boot",
+            description: "Warranty · asked by Dave Elick",
+            progress: 0,
+            endDate: null,
+            taskType: { id: TASK_TYPES.punchList },
+            assignedMemberships: {
+              nodes: [
+                {
+                  id: "22PdPUpWzpHy",
+                  user: {
+                    id: "22PdPUpX2vyr",
+                    name: "Alberto Gonzalez",
+                    emailAddress: "albertogonzalez@deitemeyerbrothers.com",
+                  },
+                },
+              ],
+            },
+          },
+          { id: "p2", name: "Not punch", description: null, progress: 0, endDate: null, taskType: { id: "other" } },
+        ],
+      },
+    },
+  }));
+
+  const tasks = await listPunchTasks(client, "job1");
+  assert.equal(tasks.length, 1, "only punch-typed tasks come back");
+  assert.deepEqual(tasks[0].assigneeNames, ["Alberto Gonzalez"]);
+  assert.equal(tasks[0].assignees[0].membershipId, "22PdPUpWzpHy");
+  assert.equal(tasks[0].assignees[0].email, "albertogonzalez@deitemeyerbrothers.com");
+
+  // The old query never asked for assignees at all, which is why the app
+  // could never show them. Guard the selection so that can't come back.
+  const selection = JSON.stringify(queries[0]);
+  assert.ok(selection.includes("assignedMemberships"), "the query asks for assignees");
 });
