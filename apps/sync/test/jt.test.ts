@@ -42,42 +42,45 @@ function rawJob(id: string, number: string, status: string) {
   };
 }
 
-test("listPipelineJobs keeps only pipeline statuses and maps custom fields", async () => {
-  const { client } = fakePave(() => ({
-    organization: {
-      jobs: {
+test("listPipelineJobs asks the Status field for pipeline values and maps the jobs", async () => {
+  const { client, queries } = fakePave(() => ({
+    customField: {
+      customFieldValues: {
         nextPage: null,
         nodes: [
-          rawJob("j1", "26-0418", "Final Inspection"),
-          rawJob("j2", "26-0415", "Punch List"),
-          rawJob("j3", "26-0300", "Closed"),
-          rawJob("j4", "26-0407", "Punch Review"),
-          rawJob("j5", "26-0299", "Production"),
+          { job: rawJob("j4", "26-0407", "Punch Review") },
+          { job: rawJob("j1", "26-0418", "Final Inspection") },
+          { job: null }, // status value whose job is gone
         ],
       },
     },
   }));
 
   const jobs = await listPipelineJobs(client);
-  assert.deepEqual(
-    jobs.map((j) => j.number),
-    ["26-0418", "26-0415", "26-0407"],
-  );
-  assert.equal(jobs[0].status, "Final Inspection");
-  assert.equal(jobs[0].jobType, "Roofing");
+  assert.deepEqual(jobs.map((j) => j.number), ["26-0407", "26-0418"]);
+  assert.equal(jobs[1].status, "Final Inspection");
+  assert.equal(jobs[1].jobType, "Roofing");
+  const dollar = ((queries[0]["customField"] as Record<string, unknown>)["customFieldValues"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.deepEqual(dollar["where"], {
+    or: [
+      [["value"], "=", "Final Inspection"],
+      [["value"], "=", "Punch List"],
+      [["value"], "=", "Punch Review"],
+    ],
+  });
 });
 
-test("listPipelineJobs follows pagination", async () => {
+test("listPipelineJobs follows pagination and sorts by job number", async () => {
   let call = 0;
   const { client } = fakePave(() => {
     call += 1;
     return call === 1
-      ? { organization: { jobs: { nextPage: "p2", nodes: [rawJob("a", "26-0001", "Final Inspection")] } } }
-      : { organization: { jobs: { nextPage: null, nodes: [rawJob("b", "26-0002", "Punch List")] } } };
+      ? { customField: { customFieldValues: { nextPage: "p2", nodes: [{ job: rawJob("b", "26-1357", "Final Inspection") }] } } }
+      : { customField: { customFieldValues: { nextPage: null, nodes: [{ job: rawJob("a", "26-0002", "Punch List") }] } } };
   });
   const jobs = await listPipelineJobs(client);
   assert.equal(call, 2);
-  assert.deepEqual(jobs.map((j) => j.id), ["a", "b"]);
+  assert.deepEqual(jobs.map((j) => j.number), ["26-0002", "26-1357"]);
 });
 
 test("submitForm sends a filled, submitted form with values keyed by field id", async () => {

@@ -192,38 +192,45 @@ export async function listSoldScope(pave: PaveClient, jobId: string): Promise<Sc
  * Jobs currently at Status = Final Inspection (the crew queue), plus any at
  * Punch List / Punch Review (so punch work stays visible until completed).
  *
- * Their org is small (hundreds of jobs, a handful in-pipeline), so we page
- * jobs and filter on the status custom field in code rather than depending
- * on Pave's where-grammar for custom fields.
+ * Queried through the Status field's own values (each links back to its
+ * job), so the queue is complete no matter how many jobs the org has —
+ * paging the whole org missed anything past its scan cap. Page size 15
+ * keeps the declared size product (15 x 25 nested custom field values)
+ * inside Pave's query budget.
  */
-interface JobsPage {
-  organization: { jobs: { nextPage: string | null; nodes: RawJob[] } };
+interface StatusValuesPage {
+  customField: {
+    customFieldValues: { nextPage: string | null; nodes: Array<{ job: RawJob | null }> };
+  };
 }
 
 export async function listPipelineJobs(pave: PaveClient): Promise<QueueJob[]> {
-  const wanted = new Set<string>([STATUS.finalInspection, STATUS.punchList, STATUS.punchReview]);
+  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.punchReview];
   const out: QueueJob[] = [];
   let page: string | null = null;
-  for (let i = 0; i < 20; i++) {
-    const res: JobsPage = await pave.query<JobsPage>({
-      organization: {
-        $: { id: ORGANIZATION_ID },
-        jobs: {
-          $: { size: 100, ...(page ? { page } : {}) },
+  for (let i = 0; i < 10; i++) {
+    const res: StatusValuesPage = await pave.query<StatusValuesPage>({
+      customField: {
+        $: { id: CUSTOM_FIELDS.status },
+        customFieldValues: {
+          $: {
+            size: 15,
+            ...(page ? { page } : {}),
+            where: { or: statuses.map((status) => [["value"], "=", status]) },
+          },
           nextPage: {},
-          nodes: JOB_SELECTION,
+          nodes: { job: JOB_SELECTION },
         },
       },
     });
-    const jobs = res.organization.jobs;
-    for (const job of jobs.nodes) {
-      const status = cfv(job, CUSTOM_FIELDS.status);
-      if (status != null && wanted.has(status)) out.push(toQueueJob(job));
+    const values = res.customField.customFieldValues;
+    for (const node of values.nodes) {
+      if (node.job) out.push(toQueueJob(node.job));
     }
-    if (!jobs.nextPage) break;
-    page = jobs.nextPage;
+    if (!values.nextPage) break;
+    page = values.nextPage;
   }
-  return out;
+  return out.sort((a, b) => a.number.localeCompare(b.number));
 }
 
 export async function getJob(pave: PaveClient, jobId: string): Promise<JobDetail> {

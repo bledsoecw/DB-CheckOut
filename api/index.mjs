@@ -312,29 +312,32 @@ async function listSoldScope(pave, jobId) {
   }
 }
 async function listPipelineJobs(pave) {
-  const wanted = /* @__PURE__ */ new Set([STATUS.finalInspection, STATUS.punchList, STATUS.punchReview]);
+  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.punchReview];
   const out = [];
   let page = null;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 10; i++) {
     const res = await pave.query({
-      organization: {
-        $: { id: ORGANIZATION_ID },
-        jobs: {
-          $: { size: 100, ...page ? { page } : {} },
+      customField: {
+        $: { id: CUSTOM_FIELDS.status },
+        customFieldValues: {
+          $: {
+            size: 15,
+            ...page ? { page } : {},
+            where: { or: statuses.map((status) => [["value"], "=", status]) }
+          },
           nextPage: {},
-          nodes: JOB_SELECTION
+          nodes: { job: JOB_SELECTION }
         }
       }
     });
-    const jobs = res.organization.jobs;
-    for (const job of jobs.nodes) {
-      const status = cfv(job, CUSTOM_FIELDS.status);
-      if (status != null && wanted.has(status)) out.push(toQueueJob(job));
+    const values = res.customField.customFieldValues;
+    for (const node of values.nodes) {
+      if (node.job) out.push(toQueueJob(node.job));
     }
-    if (!jobs.nextPage) break;
-    page = jobs.nextPage;
+    if (!values.nextPage) break;
+    page = values.nextPage;
   }
-  return out;
+  return out.sort((a, b) => a.number.localeCompare(b.number));
 }
 async function getJob(pave, jobId) {
   const [res, punchTasks, soldScope] = await Promise.all([
