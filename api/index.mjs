@@ -339,15 +339,23 @@ async function listPipelineJobs(pave) {
   }
   return out.sort((a, b) => a.number.localeCompare(b.number));
 }
-async function getJob(pave, jobId) {
-  const [res, punchTasks, soldScope] = await Promise.all([
+async function getJob(pave, jobId, viewer) {
+  const [res, rawPunch, soldScope] = await Promise.all([
     pave.query({ job: { $: { id: jobId }, ...JOB_SELECTION } }),
     listPunchTasks(pave, jobId),
     listSoldScope(pave, jobId)
   ]);
   if (!res.job) throw new Error(`Job not found: ${jobId}`);
-  const open = punchTasks.filter((t) => t.progress < 1).length;
-  return { ...toQueueJob(res.job, open), punchTasks, soldScope };
+  const punchTasks = rawPunch.map((t) => ({ ...t, mine: assignedTo(t, viewer) }));
+  const open = punchTasks.filter((t) => t.progress < 1);
+  const mineOpen = open.filter((t) => t.mine).length;
+  const count = viewer ? mineOpen : open.length;
+  return {
+    ...toQueueJob(res.job, count),
+    punchTasks,
+    soldScope,
+    openPunchTotal: open.length
+  };
 }
 async function listPunchTasks(pave, jobId) {
   const res = await pave.query({
@@ -361,20 +369,43 @@ async function listPunchTasks(pave, jobId) {
           description: {},
           progress: {},
           endDate: {},
-          taskType: { id: {} }
+          taskType: { id: {} },
+          assignedMemberships: {
+            $: { size: 10 },
+            nodes: { id: {}, user: { id: {}, name: {}, emailAddress: {} } }
+          }
         }
       }
     }
   });
   const nodes = res.job?.tasks.nodes ?? [];
-  return nodes.filter((t) => t.taskType?.id === TASK_TYPES.punchList).map((t) => ({
-    id: t.id,
-    name: t.name,
-    description: t.description,
-    progress: t.progress ?? 0,
-    endDate: t.endDate,
-    assigneeNames: (t.assignees?.nodes ?? []).map((a) => a.name).filter((n) => typeof n === "string")
-  }));
+  return nodes.filter((t) => t.taskType?.id === TASK_TYPES.punchList).map((t) => {
+    const assignees = (t.assignedMemberships?.nodes ?? []).map((m) => ({
+      membershipId: m.id,
+      name: m.user?.name ?? "",
+      email: m.user?.emailAddress ?? null
+    }));
+    return {
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      progress: t.progress ?? 0,
+      endDate: t.endDate,
+      assignees,
+      assigneeNames: assignees.map((a) => a.name).filter((n) => n.length > 0),
+      // Filled in by getJob, which is the layer that knows who is asking.
+      mine: false
+    };
+  });
+}
+var norm = (v) => (v ?? "").trim().toLowerCase();
+function assignedTo(task, viewer) {
+  if (!viewer) return false;
+  const email = norm(viewer.email);
+  const name = norm(viewer.name);
+  return task.assignees.some(
+    (a) => email.length > 0 && norm(a.email) === email || name.length > 0 && norm(a.name) === name
+  );
 }
 async function submitForm(pave, formId, jobId, values) {
   const res = await pave.query({
@@ -693,7 +724,7 @@ function createHandler(deps) {
         return json(res, 200, await listPipelineJobs(deps.pave));
       }
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
-        return json(res, 200, await getJob(deps.pave, parts[1]));
+        return json(res, 200, await getJob(deps.pave, parts[1], session ?? void 0));
       }
       if (req.method === "GET" && parts[0] === "jobs" && parts[2] === "scope-summary") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Summaries are not configured" });
