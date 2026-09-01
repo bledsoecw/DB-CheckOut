@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getJob, submitCleanup, submitInspection } from "../api";
+import { getJob, submitCleanup, submitInspection, uploadJobPhoto } from "../api";
 import { BigButton, Card } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
@@ -39,7 +39,12 @@ export default function SendScreen({ navigation, route }: Props) {
     setSending(true);
     try {
       const suffix = jobLabel ? ` — ${jobLabel}` : "";
-      const outcomes = [
+      const outcomes: Array<"sent" | "queued"> = [];
+      // Visit photos stayed on the phone until now — this is the upload.
+      for (const uri of state.visitPhotos) {
+        outcomes.push(await uploadJobPhoto(jobId, "INSPECTION", uri, undefined, `Foto · Photo${suffix}`));
+      }
+      outcomes.push(
         await submitInspection(
           jobId,
           {
@@ -53,7 +58,7 @@ export default function SendScreen({ navigation, route }: Props) {
           { answers: state.cleanup, texts: textsFor([CLEANUP_FORM.notesField]) },
           `Limpieza · Cleanup${suffix}`,
         ),
-      ];
+      );
       // Problem reports were already sent (or queued) the moment they were
       // saved on the report screen — only the two checklists go out here.
       clear();
@@ -138,6 +143,15 @@ export default function SendScreen({ navigation, route }: Props) {
           label={`${t("cleanup")} — ${cleanupDone}/${CLEANUP_FORM.optionFields.length}`}
           sub={t2("cleanup")}
         />
+        {state.visitPhotos.length > 0 ? (
+          <SummaryRow
+            label={`${state.visitPhotos.length} ${p({
+              es: state.visitPhotos.length === 1 ? "foto de la visita" : "fotos de la visita",
+              en: state.visitPhotos.length === 1 ? "visit photo" : "visit photos",
+            })}`}
+            sub={p({ es: "se suben a JobTread", en: "uploaded to JobTread" })}
+          />
+        ) : null}
         {state.reports.length > 0 ? (
           <Card style={styles.reports}>
             <Text style={styles.reportsTitle}>

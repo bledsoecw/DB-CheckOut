@@ -377,9 +377,10 @@ export const uploadJobPhoto = (
   label: "BEFORE" | "AFTER" | "REPORT" | "INSPECTION",
   imageBase64: string,
   taskId?: string,
+  outboxLabel?: string,
 ) =>
   post(
     `/jobs/${jobId}/photos`,
     { label, imageBase64, ...(taskId ? { taskId } : {}) },
-    `Foto ${label} · Photo`,
+    outboxLabel ?? `Foto ${label} · Photo`,
   );

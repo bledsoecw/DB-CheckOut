@@ -138,72 +138,101 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
     onClose();
   };
 
+  ensureCamCss();
+
   return (
     <Modal visible animationType="fade" onRequestClose={close}>
-      <View style={styles.root}>
-        {React.createElement("video", {
-        ref: videoRef,
-        autoPlay: true,
-        playsInline: true,
-        muted: true,
-        style: {
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          backgroundColor: "#000",
-        },
-      })}
-      {React.createElement("div", {
-        ref: flashRef,
-        style: {
-          position: "absolute",
-          inset: 0,
-          background: "#fff",
-          opacity: 0,
-          pointerEvents: "none",
-          zIndex: 2,
-        },
-      })}
-
-      <View style={styles.topBar}>
-        <Pressable onPress={close} style={styles.closeBtn} hitSlop={10}>
-          <Text style={styles.closeText}>✕</Text>
-        </Pressable>
-        {mode === "burst" && count > 0 ? (
-          <View style={styles.countPill}>
-            <Text style={styles.countText}>
-              {count} {p({ es: count === 1 ? "foto" : "fotos", en: count === 1 ? "photo" : "photos" })}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
-      <View style={landscape ? styles.rightBar : styles.bottomBar}>
-        <View style={styles.thumbSlot}>
-          {mode === "burst" ? (
-            <Pressable onPress={close} hitSlop={10}>
+      {React.createElement(
+        "div",
+        { id: "dbco-cam" },
+        React.createElement("video", {
+          ref: videoRef,
+          autoPlay: true,
+          playsInline: true,
+          muted: true,
+        }),
+        React.createElement("div", {
+          ref: flashRef,
+          style: {
+            position: "absolute",
+            inset: 0,
+            background: "#fff",
+            opacity: 0,
+            pointerEvents: "none",
+            zIndex: 2,
+          },
+        }),
+        <View key="top" style={styles.topBar}>
+          <Pressable onPress={close} style={styles.closeBtn} hitSlop={10}>
+            <Text style={styles.closeText}>✕</Text>
+          </Pressable>
+          {mode === "burst" && count > 0 ? (
+            <View style={styles.countPill}>
+              <Text style={styles.countText}>
+                {count} {p({ es: count === 1 ? "foto" : "fotos", en: count === 1 ? "photo" : "photos" })}
+              </Text>
+            </View>
+          ) : (
+            <View />
+          )}
+          {landscape && mode === "burst" ? (
+            <Pressable onPress={close} hitSlop={10} style={styles.doneBtn}>
               <Text style={styles.doneText}>{p({ es: "Listo", en: "Done" })}</Text>
             </Pressable>
-          ) : null}
-        </View>
-        <Pressable onPress={shutter} style={styles.shutterOuter} hitSlop={12}>
-          <View style={styles.shutterInner} />
-        </Pressable>
-        <View style={styles.thumbSlot}>
-          {lastShot ? <Image source={{ uri: lastShot }} style={styles.thumb} /> : null}
-        </View>
-      </View>
-
-        {!ready ? (
-          <View style={styles.loading}>
+          ) : (
+            <View style={{ width: 44 }} />
+          )}
+        </View>,
+        landscape ? (
+          <React.Fragment key="land">
+            <Pressable onPress={shutter} style={[styles.shutterOuter, styles.shutterLand]} hitSlop={14}>
+              <View style={styles.shutterInner} />
+            </Pressable>
+            {lastShot ? <Image source={{ uri: lastShot }} style={[styles.thumb, styles.thumbLand]} /> : null}
+          </React.Fragment>
+        ) : (
+          <View key="bottom" style={styles.bottomBar}>
+            <View style={styles.thumbSlot}>
+              {mode === "burst" ? (
+                <Pressable onPress={close} hitSlop={10}>
+                  <Text style={styles.doneText}>{p({ es: "Listo", en: "Done" })}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <Pressable onPress={shutter} style={styles.shutterOuter} hitSlop={12}>
+              <View style={styles.shutterInner} />
+            </Pressable>
+            <View style={styles.thumbSlot}>
+              {lastShot ? <Image source={{ uri: lastShot }} style={styles.thumb} /> : null}
+            </View>
+          </View>
+        ),
+        !ready ? (
+          <View key="load" style={styles.loading}>
             <Text style={styles.loadingText}>{p({ es: "Abriendo cámara…", en: "Opening camera…" })}</Text>
           </View>
-        ) : null}
-      </View>
+        ) : null,
+      )}
     </Modal>
   );
+}
+
+/**
+ * Real stylesheet rules for the viewfinder. 100dvh is the phone's VISIBLE
+ * viewport — iOS Safari's 100%/100vh includes the space behind the
+ * collapsing toolbars, which letterboxed the preview and shifted every
+ * control's tap target off its pixels (the landscape dead-shutter bug).
+ */
+function ensureCamCss(): void {
+  const g = globalThis as Record<string, any>;
+  const doc = g.document;
+  if (!doc || doc.getElementById("dbco-cam-css")) return;
+  const style = doc.createElement("style");
+  style.id = "dbco-cam-css";
+  style.textContent =
+    "#dbco-cam{position:fixed;top:0;left:0;width:100vw;height:100vh;height:100dvh;background:#000;overflow:hidden}" +
+    "#dbco-cam video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;background:#000}";
+  doc.head.appendChild(style);
 }
 
 const styles = StyleSheet.create({
@@ -249,18 +278,21 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     zIndex: 3,
   },
-  rightBar: {
+  // Landscape: shutter under the right thumb, halfway between the screen's
+  // vertical center and its bottom edge (75% down).
+  shutterLand: {
     position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 28,
-    paddingRight: 22,
-    paddingLeft: 12,
+    right: 22,
+    top: "75%",
+    marginTop: -38,
     zIndex: 3,
+  },
+  thumbLand: { position: "absolute", right: 26, bottom: 20, zIndex: 3 },
+  doneBtn: {
+    backgroundColor: "rgba(0,0,0,0.45)",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
   },
   thumbSlot: { width: 56, height: 56, alignItems: "center", justifyContent: "center" },
   thumb: { width: 52, height: 52, borderRadius: 10, borderWidth: 2, borderColor: "#fff" },

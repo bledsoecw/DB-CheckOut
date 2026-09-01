@@ -7,6 +7,7 @@ import { getJob, sendReport } from "../api";
 import CameraView from "../Camera";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
+import PhotoViewer from "../PhotoViewer";
 import { useVisit } from "../store";
 import { colors } from "../theme";
 import { VoiceNoteButton } from "../VoiceNote";
@@ -16,14 +17,16 @@ type Props = NativeStackScreenProps<RootStackParamList, "Report">;
 export default function ReportScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
   const { t, t2, p, s, lang } = useLang();
-  const { state, addReport } = useVisit(jobId);
+  const { state, addReport, addReportPhoto, removeReportPhoto, clearReportPhotos } = useVisit(jobId);
   const [detail, setDetail] = useState("");
   const [note, setNote] = useState("");
   const [heard, setHeard] = useState("");
   const [fixedOnSite, setFixedOnSite] = useState(false);
   const [materials, setMaterials] = useState("");
   const [originalCrew, setOriginalCrew] = useState("");
-  const [photos, setPhotos] = useState<string[]>([]);
+  // Photos live in the visit store so they survive moving around the app.
+  const photos = state.reportPhotos;
+  const [viewing, setViewing] = useState<number | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [saved, setSaved] = useState<"sent" | "queued" | null>(null);
@@ -42,7 +45,7 @@ export default function ReportScreen({ navigation, route }: Props) {
     setFixedOnSite(false);
     setMaterials("");
     setOriginalCrew("");
-    setPhotos([]);
+    clearReportPhotos();
   };
 
   const missing = [
@@ -137,10 +140,13 @@ export default function ReportScreen({ navigation, route }: Props) {
       </View>
 
       {cameraOpen ? (
-        <CameraView
-          mode="burst"
-          onCapture={(uri) => setPhotos((prev) => [...prev, uri])}
-          onClose={() => setCameraOpen(false)}
+        <CameraView mode="burst" onCapture={addReportPhoto} onClose={() => setCameraOpen(false)} />
+      ) : null}
+      {viewing !== null && photos[viewing] ? (
+        <PhotoViewer
+          uri={photos[viewing]}
+          onClose={() => setViewing(null)}
+          onDelete={() => removeReportPhoto(viewing)}
         />
       ) : null}
 
@@ -158,12 +164,10 @@ export default function ReportScreen({ navigation, route }: Props) {
             <View style={styles.photoGrid}>
               {photos.map((uri, i) => (
                 <View key={i} style={styles.photoThumbWrap}>
-                  <Image source={{ uri }} style={styles.photoThumb} />
-                  <Pressable
-                    onPress={() => setPhotos((prev) => prev.filter((_, k) => k !== i))}
-                    style={styles.photoRemove}
-                    hitSlop={8}
-                  >
+                  <Pressable onPress={() => setViewing(i)}>
+                    <Image source={{ uri }} style={styles.photoThumb} />
+                  </Pressable>
+                  <Pressable onPress={() => removeReportPhoto(i)} style={styles.photoRemove} hitSlop={8}>
                     <Text style={styles.photoRemoveText}>✕</Text>
                   </Pressable>
                 </View>

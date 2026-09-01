@@ -5,10 +5,11 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { JobDetail, ScopeDocument, ScopeSummary } from "@shared/types";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getJob, getScopeSummary, uploadJobPhoto } from "../api";
+import { getJob, getScopeSummary } from "../api";
 import CameraView from "../Camera";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
+import PhotoViewer from "../PhotoViewer";
 import { useVisit } from "../store";
 import { useSpanish } from "../translate";
 import { colors } from "../theme";
@@ -132,51 +133,49 @@ export default function JobScreen({ navigation, route }: Props) {
   );
 }
 
-interface VisitPhoto {
-  uri: string;
-  status: "sending" | "sent" | "queued";
-}
-
-/** Snap job-condition photos any time; each one is saved to the JT job. */
+/**
+ * Job-condition photos, kept on the phone (they survive moving around the
+ * app) and uploaded to JobTread when the visit is finished & sent.
+ */
 function PhotosCard({ jobId }: { jobId: string }) {
   const { p, s } = useLang();
-  const [photos, setPhotos] = useState<VisitPhoto[]>([]);
+  const { state, addVisitPhoto, removeVisitPhoto } = useVisit(jobId);
   const [cameraOpen, setCameraOpen] = useState(false);
-
-  // Every shutter press uploads immediately; the viewfinder stays open.
-  const shot = (uri: string) => {
-    setPhotos((prev) => [...prev, { uri, status: "sending" }]);
-    void uploadJobPhoto(jobId, "INSPECTION", uri).then((status) => {
-      setPhotos((prev) => prev.map((ph) => (ph.uri === uri ? { ...ph, status } : ph)));
-    });
-  };
+  const [viewing, setViewing] = useState<number | null>(null);
+  const photos = state.visitPhotos;
 
   return (
     <Card>
       {cameraOpen ? (
-        <CameraView mode="burst" onCapture={shot} onClose={() => setCameraOpen(false)} />
+        <CameraView mode="burst" onCapture={addVisitPhoto} onClose={() => setCameraOpen(false)} />
+      ) : null}
+      {viewing !== null && photos[viewing] ? (
+        <PhotoViewer
+          uri={photos[viewing]}
+          onClose={() => setViewing(null)}
+          onDelete={() => removeVisitPhoto(viewing)}
+        />
       ) : null}
       <View style={styles.photosHeader}>
         <View style={{ flex: 1 }}>
           <Text style={styles.tileTitle}>{p({ es: "Fotos de la visita", en: "Visit photos" })}</Text>
           <Text style={styles.tileSub}>
             {s({ es: "Fotos de la visita", en: "Visit photos" })} ·{" "}
-            {p({ es: "se guardan en JobTread", en: "saved to JobTread" })}
+            {photos.length > 0
+              ? `${photos.length} ${p({ es: "para enviar al terminar", en: "to send when you finish" })}`
+              : p({ es: "se envían al terminar", en: "sent when you finish" })}
           </Text>
         </View>
         <Pressable onPress={() => setCameraOpen(true)} style={styles.photoAdd} hitSlop={8}>
-          <Text style={styles.photoAddText}>{p({ es: "📷 Tomar foto", en: "📷 Take photo" })}</Text>
+          <Text style={styles.photoAddText}>{p({ es: "📷 Tomar fotos", en: "📷 Take photos" })}</Text>
         </Pressable>
       </View>
       {photos.length > 0 ? (
         <View style={styles.photoGrid}>
-          {photos.map((ph, i) => (
-            <View key={i} style={styles.photoThumbWrap}>
-              <Image source={{ uri: ph.uri }} style={styles.photoThumb} />
-              <Text style={styles.photoStatus}>
-                {ph.status === "sending" ? "…" : ph.status === "sent" ? "✓" : "⏳"}
-              </Text>
-            </View>
+          {photos.map((uri, i) => (
+            <Pressable key={i} onPress={() => setViewing(i)}>
+              <Image source={{ uri }} style={styles.photoThumb} />
+            </Pressable>
           ))}
         </View>
       ) : null}
@@ -397,20 +396,7 @@ const styles = StyleSheet.create({
   },
   photoAddText: { color: colors.blue, fontSize: 14, fontWeight: "700" },
   photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
-  photoThumbWrap: { position: "relative" },
   photoThumb: { width: 72, height: 72, borderRadius: 10 },
-  photoStatus: {
-    position: "absolute",
-    right: 4,
-    bottom: 4,
-    backgroundColor: "rgba(255,255,255,0.9)",
-    borderRadius: 8,
-    paddingHorizontal: 5,
-    fontSize: 11,
-    fontWeight: "700",
-    color: colors.greenDark,
-    overflow: "hidden",
-  },
   scopeLineName: { flex: 1, fontSize: 14, color: colors.ink },
   scopeQty: { fontSize: 13, fontWeight: "600", color: colors.muted },
   scopeDesc: { fontSize: 12.5, color: colors.muted, paddingBottom: 6, paddingLeft: 2 },

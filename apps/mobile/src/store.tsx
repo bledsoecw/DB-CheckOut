@@ -18,9 +18,21 @@ export interface VisitState {
   reports: ProblemReport[];
   /** taskId -> true once the crew took the AFTER photo (photo upload lands in M2). */
   afterPhotos: Record<string, boolean>;
+  /** Job-condition photos (data URIs), kept on the phone until Finish & send. */
+  visitPhotos: string[];
+  /** Photos staged for the problem report being written, until it's sent. */
+  reportPhotos: string[];
 }
 
-const EMPTY: VisitState = { inspection: {}, cleanup: {}, notes: {}, reports: [], afterPhotos: {} };
+const EMPTY: VisitState = {
+  inspection: {},
+  cleanup: {},
+  notes: {},
+  reports: [],
+  afterPhotos: {},
+  visitPhotos: [],
+  reportPhotos: [],
+};
 const key = (jobId: string) => `db-checkout.visit.${jobId}`;
 
 const memory = new Map<string, VisitState>();
@@ -67,6 +79,15 @@ export function useVisit(jobId: string) {
       update((prev) => ({ ...prev, notes: { ...prev.notes, [fieldId]: text } })),
     addReport: (report: ProblemReport) =>
       update((prev) => ({ ...prev, reports: [...prev.reports, report] })),
+    addVisitPhoto: (uri: string) =>
+      update((prev) => ({ ...prev, visitPhotos: [...prev.visitPhotos, uri] })),
+    removeVisitPhoto: (index: number) =>
+      update((prev) => ({ ...prev, visitPhotos: prev.visitPhotos.filter((_, i) => i !== index) })),
+    addReportPhoto: (uri: string) =>
+      update((prev) => ({ ...prev, reportPhotos: [...prev.reportPhotos, uri] })),
+    removeReportPhoto: (index: number) =>
+      update((prev) => ({ ...prev, reportPhotos: prev.reportPhotos.filter((_, i) => i !== index) })),
+    clearReportPhotos: () => update((prev) => ({ ...prev, reportPhotos: [] })),
     setAfterPhoto: (taskId: string) =>
       update((prev) => ({ ...prev, afterPhotos: { ...prev.afterPhotos, [taskId]: true } })),
     clear: () => {
