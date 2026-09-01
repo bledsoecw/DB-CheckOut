@@ -663,11 +663,17 @@ function checklistValues(sub) {
 }
 var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
 function decodeAudio(audioBase64) {
-  if (typeof audioBase64 !== "string" || !audioBase64) return null;
-  const dataUri = /^data:([\w/+.;=-]+);base64,(.*)$/s.exec(audioBase64);
-  if (!dataUri || !dataUri[1].startsWith("audio/")) return null;
-  if (dataUri[2].length === 0 || dataUri[2].length > 56e5) return null;
-  return { mimeType: dataUri[1].split(";")[0], base64: dataUri[2] };
+  if (typeof audioBase64 !== "string" || !audioBase64) {
+    return { error: "audioBase64 must be a data URI string" };
+  }
+  const dataUri = /^data:([\w/+.;=-]*);base64,(.*)$/s.exec(audioBase64);
+  if (!dataUri) return { error: `expected a base64 data URI (got "${audioBase64.slice(0, 40)}\u2026")` };
+  const bare = dataUri[1].split(";")[0].toLowerCase();
+  const mimeType = bare.startsWith("audio/") ? bare : bare === "video/webm" ? "audio/webm" : bare === "video/mp4" || bare === "" || bare === "application/octet-stream" ? "audio/mp4" : null;
+  if (!mimeType) return { error: `expected an audio recording (got "${bare}")` };
+  if (dataUri[2].length === 0) return { error: "the recording is empty" };
+  if (dataUri[2].length > 56e5) return { error: "the recording is too long to send (~4MB max)" };
+  return { mimeType, base64: dataUri[2] };
 }
 var MAX_PHOTO_BYTES = 4e6;
 function decodePhoto(imageBase64) {
@@ -736,9 +742,9 @@ function createHandler(deps) {
       if (!session) return json(res, 401, { error: "Unauthorized" });
       if (req.method === "POST" && url.pathname === "/transcribe") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Transcription is not configured" });
-        const body = await readBody(req);
+        const body = await readBody(req, 6e6);
         const audio = decodeAudio(body.audioBase64);
-        if (!audio) return json(res, 400, { error: "audioBase64 must be an audio data URI under 4MB" });
+        if ("error" in audio) return json(res, 400, { error: audio.error });
         return json(res, 200, await transcribeNote(audio, deps));
       }
       if (req.method === "POST" && url.pathname === "/translate") {

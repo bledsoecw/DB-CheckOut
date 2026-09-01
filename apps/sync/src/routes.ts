@@ -79,14 +79,33 @@ function checklistValues(sub: ChecklistSubmission): Record<string, string> {
 
 const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
 
-/** Accepts an audio data URI; returns base64 + mime type or null. */
-export function decodeAudio(audioBase64: unknown): { mimeType: string; base64: string } | null {
-  if (typeof audioBase64 !== "string" || !audioBase64) return null;
-  const dataUri = /^data:([\w/+.;=-]+);base64,(.*)$/s.exec(audioBase64);
-  if (!dataUri || !dataUri[1].startsWith("audio/")) return null;
+/**
+ * Accepts a recording data URI; returns base64 + audio mime type, or a reason.
+ * Browsers label recordings loosely — iOS Safari calls audio-only MP4
+ * "video/mp4", some leave the type blank — so anything plausibly audio is
+ * normalized to audio/* rather than rejected.
+ */
+export function decodeAudio(
+  audioBase64: unknown,
+): { mimeType: string; base64: string } | { error: string } {
+  if (typeof audioBase64 !== "string" || !audioBase64) {
+    return { error: "audioBase64 must be a data URI string" };
+  }
+  const dataUri = /^data:([\w/+.;=-]*);base64,(.*)$/s.exec(audioBase64);
+  if (!dataUri) return { error: `expected a base64 data URI (got "${audioBase64.slice(0, 40)}…")` };
+  const bare = dataUri[1].split(";")[0].toLowerCase();
+  const mimeType = bare.startsWith("audio/")
+    ? bare
+    : bare === "video/webm"
+      ? "audio/webm"
+      : bare === "video/mp4" || bare === "" || bare === "application/octet-stream"
+        ? "audio/mp4"
+        : null;
+  if (!mimeType) return { error: `expected an audio recording (got "${bare}")` };
+  if (dataUri[2].length === 0) return { error: "the recording is empty" };
   // base64 inflates by ~4/3; cap the encoded size to keep the decoded audio under ~4MB.
-  if (dataUri[2].length === 0 || dataUri[2].length > 5_600_000) return null;
-  return { mimeType: dataUri[1].split(";")[0], base64: dataUri[2] };
+  if (dataUri[2].length > 5_600_000) return { error: "the recording is too long to send (~4MB max)" };
+  return { mimeType, base64: dataUri[2] };
 }
 const MAX_PHOTO_BYTES = 4_000_000;
 
@@ -172,9 +191,9 @@ export function createHandler(deps: RouterDeps) {
       // Dictated field note -> verbatim transcription + clean English note.
       if (req.method === "POST" && url.pathname === "/transcribe") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Transcription is not configured" });
-        const body = (await readBody(req)) as { audioBase64?: unknown };
+        const body = (await readBody(req, 6_000_000)) as { audioBase64?: unknown };
         const audio = decodeAudio(body.audioBase64);
-        if (!audio) return json(res, 400, { error: "audioBase64 must be an audio data URI under 4MB" });
+        if ("error" in audio) return json(res, 400, { error: audio.error });
         return json(res, 200, await transcribeNote(audio, deps));
       }
 

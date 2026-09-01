@@ -36,18 +36,31 @@ export async function startRecording(): Promise<ActiveRecording> {
       await stopped;
       for (const track of stream.getTracks()) track.stop();
       if (chunks.length === 0) return null;
-      const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+      const blob = new Blob(chunks);
       if (blob.size === 0) return null;
-      return blobToDataUri(blob);
+      // Build the data URI by hand: iOS Safari labels audio-only recordings
+      // "video/mp4" (or nothing at all), and FileReader would bake that label
+      // into the URI. The server requires audio/*.
+      const type = audioMime(recorder.mimeType || blob.type || mimeType || "");
+      return `data:${type};base64,${toBase64(new Uint8Array(await blob.arrayBuffer()))}`;
     },
   };
 }
 
-function blobToDataUri(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("could not read recording"));
-    reader.readAsDataURL(blob);
-  });
+/** Best audio/* label for whatever the browser called its recording. */
+function audioMime(reported: string): string {
+  const bare = reported.split(";")[0].trim().toLowerCase();
+  if (bare.startsWith("audio/")) return bare;
+  if (bare === "video/mp4") return "audio/mp4";
+  if (bare === "video/webm") return "audio/webm";
+  return "audio/mp4";
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }

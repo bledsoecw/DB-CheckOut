@@ -115,14 +115,29 @@ test("transcribeNote sends the audio bytes and returns the cleaned note", async 
   );
 });
 
-test("decodeAudio accepts only audio data URIs within the size cap", () => {
+test("decodeAudio normalizes loose browser labels and rejects with reasons", () => {
   assert.deepEqual(decodeAudio("data:audio/mp4;base64,QUJD"), { mimeType: "audio/mp4", base64: "QUJD" });
   assert.deepEqual(decodeAudio("data:audio/webm;codecs=opus;base64,QUJD"), {
     mimeType: "audio/webm",
     base64: "QUJD",
   });
-  assert.equal(decodeAudio("data:image/jpeg;base64,QUJD"), null);
-  assert.equal(decodeAudio("QUJD"), null);
-  assert.equal(decodeAudio(""), null);
-  assert.equal(decodeAudio(`data:audio/mp4;base64,${"A".repeat(5_600_001)}`), null);
+  // iOS Safari calls audio-only recordings video/mp4; some browsers leave the type blank.
+  assert.deepEqual(decodeAudio("data:video/mp4;base64,QUJD"), { mimeType: "audio/mp4", base64: "QUJD" });
+  assert.deepEqual(decodeAudio("data:video/webm;base64,QUJD"), { mimeType: "audio/webm", base64: "QUJD" });
+  assert.deepEqual(decodeAudio("data:;base64,QUJD"), { mimeType: "audio/mp4", base64: "QUJD" });
+  assert.deepEqual(decodeAudio("data:application/octet-stream;base64,QUJD"), {
+    mimeType: "audio/mp4",
+    base64: "QUJD",
+  });
+
+  const reject = (input: unknown) => {
+    const out = decodeAudio(input);
+    assert.ok("error" in out, `expected rejection for ${String(input).slice(0, 30)}`);
+    return (out as { error: string }).error;
+  };
+  assert.match(reject("data:image/jpeg;base64,QUJD"), /got "image\/jpeg"/);
+  assert.match(reject("QUJD"), /base64 data URI/);
+  assert.match(reject(""), /data URI string/);
+  assert.match(reject(`data:audio/mp4;base64,${"A".repeat(5_600_001)}`), /too long/);
+  assert.match(reject("data:audio/mp4;base64,"), /empty/);
 });

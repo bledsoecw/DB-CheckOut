@@ -15,8 +15,9 @@ import { colors } from "./theme";
 import { startRecording, voiceSupported, type ActiveRecording } from "./voice";
 
 const MAX_SECONDS = 120;
-// The server rejects encoded audio over ~5.6M chars (~4MB decoded).
-const MAX_DATA_URI_LENGTH = 5_600_000;
+// Strictest link in the chain: Vercel drops request bodies over ~4.5MB, so
+// the whole JSON payload has to stay under that.
+const MAX_DATA_URI_LENGTH = 4_300_000;
 
 type MicState = "idle" | "recording" | "transcribing";
 interface Bi {
