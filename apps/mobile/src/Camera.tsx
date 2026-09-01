@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Image, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useLang } from "./i18n";
 import { downscalePhoto } from "./photo";
@@ -32,9 +32,12 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
   const busyRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [count, setCount] = useState(0);
-  const [lastShot, setLastShot] = useState<string | null>(null);
-  // One-handed landscape: the controls move to a right-edge column so the
-  // shutter sits under the right thumb (DB Cam behavior).
+  // The layer is sized in EXPLICIT PIXELS from the browser's reported
+  // window size. iOS Safari's 100%/100vh/100dvh all disagreed with the
+  // visible viewport at some point — the letterboxed preview and tap
+  // targets sitting below their pixels came from exactly that. The
+  // window's innerWidth/innerHeight (what useWindowDimensions reports,
+  // updated on rotation) is the one measurement iOS gets right.
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
 
@@ -127,7 +130,6 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
         return;
       }
       setCount((n) => n + 1);
-      setLastShot(dataUri);
     } finally {
       busyRef.current = false;
     }
@@ -141,10 +143,21 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
   ensureCamCss();
 
   return (
-    <Modal visible animationType="fade" onRequestClose={close}>
+    <Modal visible animationType="none" onRequestClose={close}>
       {React.createElement(
         "div",
-        { id: "dbco-cam" },
+        {
+          id: "dbco-cam",
+          style: {
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: `${width}px`,
+            height: `${height}px`,
+            background: "#000",
+            overflow: "hidden",
+          },
+        },
         React.createElement("video", {
           ref: videoRef,
           autoPlay: true,
@@ -184,15 +197,22 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
           )}
         </View>,
         landscape ? (
-          <React.Fragment key="land">
-            <Pressable onPress={shutter} style={[styles.shutterOuter, styles.shutterLand]} hitSlop={14}>
-              <View style={styles.shutterInner} />
-            </Pressable>
-            {lastShot ? <Image source={{ uri: lastShot }} style={[styles.thumb, styles.thumbLand]} /> : null}
-          </React.Fragment>
+          <Pressable
+            key="land-shutter"
+            onPress={shutter}
+            // Right edge, centered at 75% of the real window height —
+            // halfway between center and the bottom edge, in pixels.
+            style={[
+              styles.shutterOuter,
+              { position: "absolute", right: 22, top: Math.round(height * 0.75) - 38, zIndex: 3 },
+            ]}
+            hitSlop={16}
+          >
+            <View style={styles.shutterInner} />
+          </Pressable>
         ) : (
           <View key="bottom" style={styles.bottomBar}>
-            <View style={styles.thumbSlot}>
+            <View style={styles.sideSlot}>
               {mode === "burst" ? (
                 <Pressable onPress={close} hitSlop={10}>
                   <Text style={styles.doneText}>{p({ es: "Listo", en: "Done" })}</Text>
@@ -202,9 +222,7 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
             <Pressable onPress={shutter} style={styles.shutterOuter} hitSlop={12}>
               <View style={styles.shutterInner} />
             </Pressable>
-            <View style={styles.thumbSlot}>
-              {lastShot ? <Image source={{ uri: lastShot }} style={styles.thumb} /> : null}
-            </View>
+            <View style={styles.sideSlot} />
           </View>
         ),
         !ready ? (
@@ -218,10 +236,9 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
 }
 
 /**
- * Real stylesheet rules for the viewfinder. 100dvh is the phone's VISIBLE
- * viewport — iOS Safari's 100%/100vh includes the space behind the
- * collapsing toolbars, which letterboxed the preview and shifted every
- * control's tap target off its pixels (the landscape dead-shutter bug).
+ * The video fills its pixel-sized parent and crops to cover. The parent's
+ * size is inline pixels (see the render) — never viewport units, which iOS
+ * Safari resolves against the wrong viewport.
  */
 function ensureCamCss(): void {
   const g = globalThis as Record<string, any>;
@@ -230,13 +247,11 @@ function ensureCamCss(): void {
   const style = doc.createElement("style");
   style.id = "dbco-cam-css";
   style.textContent =
-    "#dbco-cam{position:fixed;top:0;left:0;width:100vw;height:100vh;height:100dvh;background:#000;overflow:hidden}" +
     "#dbco-cam video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;background:#000}";
   doc.head.appendChild(style);
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#000" },
   topBar: {
     position: "absolute",
     top: 0,
@@ -278,24 +293,13 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     zIndex: 3,
   },
-  // Landscape: shutter under the right thumb, halfway between the screen's
-  // vertical center and its bottom edge (75% down).
-  shutterLand: {
-    position: "absolute",
-    right: 22,
-    top: "75%",
-    marginTop: -38,
-    zIndex: 3,
-  },
-  thumbLand: { position: "absolute", right: 26, bottom: 20, zIndex: 3 },
   doneBtn: {
     backgroundColor: "rgba(0,0,0,0.45)",
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 9,
   },
-  thumbSlot: { width: 56, height: 56, alignItems: "center", justifyContent: "center" },
-  thumb: { width: 52, height: 52, borderRadius: 10, borderWidth: 2, borderColor: "#fff" },
+  sideSlot: { width: 56, height: 56, alignItems: "center", justifyContent: "center" },
   shutterOuter: {
     width: 76,
     height: 76,
