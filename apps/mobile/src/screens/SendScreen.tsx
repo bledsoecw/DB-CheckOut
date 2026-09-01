@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getJob, sendReport, submitCleanup, submitInspection } from "../api";
+import { getJob, submitCleanup, submitInspection } from "../api";
 import { BigButton, Card } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
@@ -54,9 +54,8 @@ export default function SendScreen({ navigation, route }: Props) {
           `Limpieza · Cleanup${suffix}`,
         ),
       ];
-      for (const report of state.reports) {
-        outcomes.push(await sendReport(jobId, report, `Reporte · Report${suffix}`));
-      }
+      // Problem reports were already sent (or queued) the moment they were
+      // saved on the report screen — only the two checklists go out here.
       clear();
       setResult(outcomes.every((o) => o === "sent") ? "sent" : "queued");
     } finally {
@@ -142,7 +141,8 @@ export default function SendScreen({ navigation, route }: Props) {
         {state.reports.length > 0 ? (
           <Card style={styles.reports}>
             <Text style={styles.reportsTitle}>
-              {state.reports.length} {t("problemsReported")}
+              {state.reports.length} {t("problemsReported")} —{" "}
+              {p({ es: "ya enviados", en: "already sent" })}
             </Text>
             {state.reports.map((r, i) => (
               <Text key={i} style={r.fixedOnSite ? styles.reportLineFixed : styles.reportLine}>

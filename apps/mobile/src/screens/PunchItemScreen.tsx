@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as ImagePicker from "expo-image-picker";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { PunchTask } from "@shared/types";
 import type { RootStackParamList } from "../../App";
 import { completePunchTask, getJob, uploadJobPhoto } from "../api";
+import CameraView from "../Camera";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
-import { downscalePhoto } from "../photo";
 import { useSpanish } from "../translate";
 import { useVisit } from "../store";
 import { colors } from "../theme";
@@ -32,13 +31,12 @@ export default function PunchItemScreen({ navigation, route }: Props) {
       .catch(() => {});
   }, [jobId, taskId]);
 
-  const takePhoto = async (kind: "before" | "after") => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return;
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.6 });
-    if (result.canceled || !result.assets[0]) return;
-    const uri = await downscalePhoto(result.assets[0].uri);
-    if (kind === "before") {
+  const [cameraFor, setCameraFor] = useState<"before" | "after" | null>(null);
+
+  const takePhoto = (kind: "before" | "after") => setCameraFor(kind);
+
+  const captured = (uri: string) => {
+    if (cameraFor === "before") {
       setBeforeUri(uri);
     } else {
       setAfterUri(uri);
@@ -61,6 +59,9 @@ export default function PunchItemScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
+      {cameraFor ? (
+        <CameraView mode="single" onCapture={captured} onClose={() => setCameraFor(null)} />
+      ) : null}
       <View style={styles.header}>
         <Pressable onPress={() => navigation.goBack()} style={styles.back} hitSlop={8}>
           <Text style={styles.backText}>‹</Text>

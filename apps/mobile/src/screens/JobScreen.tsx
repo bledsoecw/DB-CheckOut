@@ -1,15 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as ImagePicker from "expo-image-picker";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { JobDetail, ScopeDocument, ScopeSummary } from "@shared/types";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
 import { getJob, getScopeSummary, uploadJobPhoto } from "../api";
+import CameraView from "../Camera";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
-import { downscalePhoto } from "../photo";
 import { useVisit } from "../store";
 import { useSpanish } from "../translate";
 import { colors } from "../theme";
@@ -142,21 +141,21 @@ interface VisitPhoto {
 function PhotosCard({ jobId }: { jobId: string }) {
   const { p, s } = useLang();
   const [photos, setPhotos] = useState<VisitPhoto[]>([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
-  const take = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return;
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.6 });
-    if (result.canceled || !result.assets[0]) return;
-    const uri = await downscalePhoto(result.assets[0].uri);
-    const index = photos.length;
+  // Every shutter press uploads immediately; the viewfinder stays open.
+  const shot = (uri: string) => {
     setPhotos((prev) => [...prev, { uri, status: "sending" }]);
-    const status = await uploadJobPhoto(jobId, "INSPECTION", uri);
-    setPhotos((prev) => prev.map((ph, i) => (i === index ? { ...ph, status } : ph)));
+    void uploadJobPhoto(jobId, "INSPECTION", uri).then((status) => {
+      setPhotos((prev) => prev.map((ph) => (ph.uri === uri ? { ...ph, status } : ph)));
+    });
   };
 
   return (
     <Card>
+      {cameraOpen ? (
+        <CameraView mode="burst" onCapture={shot} onClose={() => setCameraOpen(false)} />
+      ) : null}
       <View style={styles.photosHeader}>
         <View style={{ flex: 1 }}>
           <Text style={styles.tileTitle}>{p({ es: "Fotos de la visita", en: "Visit photos" })}</Text>
@@ -165,7 +164,7 @@ function PhotosCard({ jobId }: { jobId: string }) {
             {p({ es: "se guardan en JobTread", en: "saved to JobTread" })}
           </Text>
         </View>
-        <Pressable onPress={take} style={styles.photoAdd} hitSlop={8}>
+        <Pressable onPress={() => setCameraOpen(true)} style={styles.photoAdd} hitSlop={8}>
           <Text style={styles.photoAddText}>{p({ es: "📷 Tomar foto", en: "📷 Take photo" })}</Text>
         </Pressable>
       </View>

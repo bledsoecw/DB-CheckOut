@@ -1,30 +1,22 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as ImagePicker from "expo-image-picker";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../App";
+import { getJob, sendReport } from "../api";
+import CameraView from "../Camera";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
-import { downscalePhoto } from "../photo";
 import { useVisit } from "../store";
 import { colors } from "../theme";
 import { VoiceNoteButton } from "../VoiceNote";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Report">;
 
-const SIDES = [
-  { key: "front", es: "Frente", en: "Front" },
-  { key: "back", es: "Atrás", en: "Back" },
-  { key: "left", es: "Izquierda", en: "Left" },
-  { key: "right", es: "Derecha", en: "Right" },
-] as const;
-
 export default function ReportScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
-  const { t, t2, p, lang } = useLang();
+  const { t, t2, p, s, lang } = useLang();
   const { state, addReport } = useVisit(jobId);
-  const [side, setSide] = useState<string>("back");
   const [detail, setDetail] = useState("");
   const [note, setNote] = useState("");
   const [heard, setHeard] = useState("");
@@ -32,17 +24,18 @@ export default function ReportScreen({ navigation, route }: Props) {
   const [materials, setMaterials] = useState("");
   const [originalCrew, setOriginalCrew] = useState("");
   const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [justSaved, setJustSaved] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [saved, setSaved] = useState<"sent" | "queued" | null>(null);
+  const [jobLabel, setJobLabel] = useState("");
 
-  const takePhoto = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return;
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.6 });
-    if (!result.canceled && result.assets[0]) setPhotoUri(result.assets[0].uri);
-  };
+  useEffect(() => {
+    getJob(jobId)
+      .then((job) => setJobLabel(job.name || job.number))
+      .catch(() => {});
+  }, [jobId]);
 
   const resetForm = () => {
-    setSide("back");
     setDetail("");
     setNote("");
     setHeard("");
@@ -52,11 +45,15 @@ export default function ReportScreen({ navigation, route }: Props) {
     setPhotoUri(null);
   };
 
+  const missing = [
+    !photoUri ? p({ es: "foto", en: "photo" }) : null,
+    !note.trim() ? p({ es: "nota", en: "note" }) : null,
+  ].filter((m): m is string => m !== null);
+
   const send = async () => {
-    const sideLabel = SIDES.find((s) => s.key === side);
-    const location = `${sideLabel?.en ?? side}${detail ? ` — ${detail}` : ""}`;
-    const photoBase64 = photoUri ? await downscalePhoto(photoUri) : undefined;
-    addReport({
+    // The task name the PM sees in JobTread: the detail, or the note's start.
+    const location = detail.trim() || note.trim().slice(0, 60);
+    const report = {
       location,
       englishNote: note.trim(),
       heardText: heard.trim() || undefined,
@@ -64,32 +61,54 @@ export default function ReportScreen({ navigation, route }: Props) {
       fixedOnSite: fixedOnSite || undefined,
       materialsNote: fixedOnSite && materials.trim() ? materials.trim() : undefined,
       originalCrew: originalCrew.trim() || undefined,
-      photoBase64,
-    });
-    resetForm();
-    setJustSaved(true);
+      photoBase64: photoUri ?? undefined,
+    };
+    setSending(true);
+    try {
+      // Goes to JobTread right away (or into the outbox with no signal) —
+      // it does not wait for "Finish & send".
+      const outcome = await sendReport(
+        jobId,
+        report,
+        `Reporte · Report${jobLabel ? ` — ${jobLabel}` : ""}`,
+      );
+      addReport(report);
+      resetForm();
+      setSaved(outcome);
+    } finally {
+      setSending(false);
+    }
   };
 
-  if (justSaved) {
+  if (saved) {
+    const sent = saved === "sent";
     return (
       <SafeAreaView style={styles.root} edges={["top"]}>
         <View style={styles.savedWrap}>
-          <View style={styles.savedBadge}>
-            <Text style={{ fontSize: 34, color: colors.greenDark }}>✓</Text>
+          <View style={[styles.savedBadge, sent ? null : styles.savedBadgeQueued]}>
+            <Text style={{ fontSize: 34, color: sent ? colors.greenDark : "#8A6100" }}>
+              {sent ? "✓" : "⏳"}
+            </Text>
           </View>
-          <Text style={styles.savedTitle}>{p({ es: "Reporte guardado", en: "Report saved" })}</Text>
+          <Text style={styles.savedTitle}>
+            {sent
+              ? p({ es: "Reporte enviado a JobTread", en: "Report sent to JobTread" })
+              : p({ es: "Reporte guardado — sin señal", en: "Report saved — no signal" })}
+          </Text>
           <Text style={styles.savedSub}>
             {state.reports.length} {t("problemsReported")} ·{" "}
-            {p({
-              es: "se envían con la inspección al terminar",
-              en: "they go to JobTread when you finish & send",
-            })}
+            {sent
+              ? p({ es: "el PM ya lo puede ver", en: "the PM can see it now" })
+              : p({
+                  es: "se envía solo cuando haya señal (míralo en «Por enviar»)",
+                  en: "sends itself when there's signal (see “Waiting to send”)",
+                })}
           </Text>
           <View style={{ alignSelf: "stretch" }}>
             <BigButton
               bi={{ es: "Reportar otro problema", en: "Report another problem" }}
               color={colors.orange}
-              onPress={() => setJustSaved(false)}
+              onPress={() => setSaved(null)}
             />
           </View>
           <View style={{ alignSelf: "stretch" }}>
@@ -117,44 +136,60 @@ export default function ReportScreen({ navigation, route }: Props) {
         <LangPill />
       </View>
 
+      {cameraOpen ? (
+        <CameraView
+          mode="single"
+          onCapture={setPhotoUri}
+          onClose={() => setCameraOpen(false)}
+        />
+      ) : null}
+
       <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
-        <Pressable onPress={takePhoto}>
-          {photoUri ? (
-            <Image source={{ uri: photoUri }} style={styles.photo} />
-          ) : (
-            <View style={styles.photoEmpty}>
-              <Text style={styles.photoEmptyTitle}>{t("takePhoto")}</Text>
-              <Text style={styles.photoEmptySub}>{t2("takePhoto")}</Text>
-            </View>
-          )}
-        </Pressable>
+        <View>
+          <Text style={styles.label}>
+            {t("takePhoto").toUpperCase()}{" "}
+            <Text style={photoUri ? styles.reqDone : styles.reqTag}>
+              {photoUri ? "✓" : `— ${p({ es: "OBLIGATORIA", en: "REQUIRED" })}`}
+            </Text>
+          </Text>
+          <Pressable onPress={() => setCameraOpen(true)}>
+            {photoUri ? (
+              <View>
+                <Image source={{ uri: photoUri }} style={styles.photo} />
+                <View style={styles.retake}>
+                  <Text style={styles.retakeText}>
+                    {p({ es: "Tomar otra", en: "Retake" })}
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.photoEmpty}>
+                <Text style={styles.photoEmptyTitle}>📷 {t("takePhoto")}</Text>
+                <Text style={styles.photoEmptySub}>{t2("takePhoto")}</Text>
+              </View>
+            )}
+          </Pressable>
+        </View>
 
         <View>
           <Text style={styles.label}>
-            {t("whereIsIt")} <Text style={styles.labelSub}>{t2("whereIsIt")}</Text>
+            {t("whereIsIt")} <Text style={styles.labelSub}>{t2("whereIsIt")} · {p({ es: "opcional", en: "optional" })}</Text>
           </Text>
-          <View style={styles.sides}>
-            {SIDES.map((s) => (
-              <Pressable
-                key={s.key}
-                onPress={() => setSide(s.key)}
-                style={[styles.side, side === s.key ? styles.sideOn : null]}
-              >
-                <Text style={[styles.sideText, side === s.key ? styles.sideTextOn : null]}>
-                  {lang === "es" ? s.es : s.en}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
           <TextInput
             value={detail}
             onChangeText={setDetail}
-            placeholder={lang === "es" ? "Detalle: bota del tubo, canal…" : "Detail: pipe boot, gutter…"}
+            placeholder={lang === "es" ? "Lado trasero — bota del tubo, canal…" : "Back side — pipe boot, gutter…"}
             placeholderTextColor="#9AA8B8"
             style={styles.input}
           />
         </View>
 
+        <Text style={styles.label}>
+          {p({ es: "NOTA", en: "NOTE" })}{" "}
+          <Text style={note.trim() ? styles.reqDone : styles.reqTag}>
+            {note.trim() ? "✓" : `— ${p({ es: "OBLIGATORIA", en: "REQUIRED" })}`}
+          </Text>
+        </Text>
         <VoiceNoteButton
           onText={(en, original) => {
             setNote((prev) => (prev ? `${prev}\n${en}` : en));
@@ -231,20 +266,35 @@ export default function ReportScreen({ navigation, route }: Props) {
 
         <BigButton
           bi={
-            fixedOnSite
-              ? { es: "Guardar lo que arreglé", en: "Save what I fixed" }
-              : { es: "Enviar reporte", en: "Send report" }
+            sending
+              ? { es: "Enviando…", en: "Sending…" }
+              : fixedOnSite
+                ? { es: "Guardar lo que arreglé", en: "Save what I fixed" }
+                : { es: "Enviar reporte", en: "Send report" }
           }
           color={fixedOnSite ? colors.greenDark : colors.orange}
-          disabled={note.trim().length === 0}
+          disabled={sending || missing.length > 0}
           onPress={send}
         />
+        {missing.length > 0 ? (
+          <Text style={styles.missing}>
+            {p({ es: "Falta", en: "Missing" })}: {missing.join(" + ")} ·{" "}
+            {s({ es: "Falta", en: "Missing" })}
+          </Text>
+        ) : (
+          <Text style={styles.footnote}>
+            {fixedOnSite
+              ? lang === "es"
+                ? "Queda documentado en JobTread — nadie tiene que regresar."
+                : "Documented in JobTread — nobody has to come back."
+              : `${t("pmAssigns")} · ${t2("pmAssigns")}`}
+          </Text>
+        )}
         <Text style={styles.footnote}>
-          {fixedOnSite
-            ? lang === "es"
-              ? "Queda documentado en JobTread — nadie tiene que regresar."
-              : "Documented in JobTread — nobody has to come back."
-            : `${t("pmAssigns")} · ${t2("pmAssigns")}`}
+          {p({
+            es: "¿Más de un problema? Envía este y luego toca «Reportar otro problema».",
+            en: "More than one problem? Send this one, then tap “Report another problem”.",
+          })}
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -308,6 +358,19 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   noteTag: { fontSize: 10, fontWeight: "700", color: colors.blue, letterSpacing: 0.4 },
+  reqTag: { fontSize: 11, fontWeight: "700", color: colors.red },
+  reqDone: { fontSize: 13, fontWeight: "700", color: colors.greenDark },
+  retake: {
+    position: "absolute",
+    right: 10,
+    bottom: 10,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  retakeText: { color: "#fff", fontSize: 12.5, fontWeight: "700" },
+  missing: { textAlign: "center", fontSize: 12.5, fontWeight: "700", color: colors.red },
   footnote: { textAlign: "center", fontSize: 11.5, color: "#66788C" },
   savedWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12 },
   savedBadge: {
@@ -318,6 +381,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  savedTitle: { fontSize: 24, fontWeight: "700", color: colors.ink },
+  savedBadgeQueued: { backgroundColor: "#FBF0D9" },
+  savedTitle: { fontSize: 24, fontWeight: "700", color: colors.ink, textAlign: "center" },
   savedSub: { fontSize: 13.5, color: colors.muted, textAlign: "center", marginBottom: 8 },
 });
