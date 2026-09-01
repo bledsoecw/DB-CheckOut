@@ -37,16 +37,21 @@ export function createPaveClient(
 ): PaveClient {
   return {
     async query<T>(query: PaveQuery): Promise<T> {
-      const res = await fetchImpl(PAVE_URL, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query: withGrantKey(query, grantKey) }),
-      });
-      const text = await res.text();
-      if (!res.ok) {
+      for (let attempt = 0; ; attempt++) {
+        const res = await fetchImpl(PAVE_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query: withGrantKey(query, grantKey) }),
+        });
+        const text = await res.text();
+        if (res.ok) return JSON.parse(text) as T;
+        // One breather for rate limiting / transient upstream trouble.
+        if (attempt === 0 && [429, 502, 503, 504].includes(res.status)) {
+          await new Promise((resolve) => setTimeout(resolve, 750));
+          continue;
+        }
         throw new PaveError(res.status, text);
       }
-      return JSON.parse(text) as T;
     },
   };
 }

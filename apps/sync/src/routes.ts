@@ -16,7 +16,7 @@ import {
   verifySession,
   type SessionUser,
 } from "./auth";
-import type { PaveClient } from "./pave";
+import { PaveError, type PaveClient } from "./pave";
 import {
   CLEANUP_FORM,
   INSPECTION_FORM,
@@ -178,7 +178,17 @@ export function createHandler(deps: RouterDeps) {
         const body = (await readBody(req)) as Record<string, unknown>;
         const jobId = extractJobId(body);
         let flipped: string | null = null;
-        if (jobId) flipped = await applyPunchReviewFlip(deps.pave, jobId);
+        if (jobId) {
+          // Best-effort: a failed check must answer 200, or JobTread retries
+          // the delivery and a JT hiccup turns into a 5xx retry storm.
+          try {
+            flipped = await applyPunchReviewFlip(deps.pave, jobId);
+          } catch (err) {
+            console.warn(
+              `punch-review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
         return json(res, 200, { ok: true, flipped });
       }
 
@@ -326,7 +336,9 @@ export function createHandler(deps: RouterDeps) {
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return json(res, 500, { error: message });
+      // Upstream JobTread trouble is a 502, not our 500 — monitoring should
+      // tell "JT is struggling" apart from "our code crashed".
+      return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
   };
 }

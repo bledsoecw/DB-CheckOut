@@ -39,16 +39,20 @@ function withGrantKey(query, grantKey) {
 function createPaveClient(grantKey, fetchImpl = fetch) {
   return {
     async query(query) {
-      const res = await fetchImpl(PAVE_URL, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query: withGrantKey(query, grantKey) })
-      });
-      const text = await res.text();
-      if (!res.ok) {
+      for (let attempt = 0; ; attempt++) {
+        const res = await fetchImpl(PAVE_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query: withGrantKey(query, grantKey) })
+        });
+        const text = await res.text();
+        if (res.ok) return JSON.parse(text);
+        if (attempt === 0 && [429, 502, 503, 504].includes(res.status)) {
+          await new Promise((resolve) => setTimeout(resolve, 750));
+          continue;
+        }
         throw new PaveError(res.status, text);
       }
-      return JSON.parse(text);
     }
   };
 }
@@ -339,6 +343,13 @@ async function listPipelineJobs(pave) {
   }
   return out.sort((a, b) => a.number.localeCompare(b.number));
 }
+async function getJobStatusValue(pave, jobId) {
+  const res = await pave.query({
+    job: { $: { id: jobId }, ...JOB_SELECTION }
+  });
+  if (!res.job) return "";
+  return cfv(res.job, CUSTOM_FIELDS.status) ?? "";
+}
 async function getJob(pave, jobId, viewer) {
   const [res, rawPunch, soldScope] = await Promise.all([
     pave.query({ job: { $: { id: jobId }, ...JOB_SELECTION } }),
@@ -501,8 +512,11 @@ function shouldFlipToPunchReview(currentStatus, tasks) {
   return tasks.every((t) => t.progress >= 1);
 }
 async function applyPunchReviewFlip(pave, jobId) {
-  const job = await getJob(pave, jobId);
-  if (!shouldFlipToPunchReview(job.status, job.punchTasks)) return null;
+  const [status, tasks] = await Promise.all([
+    getJobStatusValue(pave, jobId),
+    listPunchTasks(pave, jobId)
+  ]);
+  if (!shouldFlipToPunchReview(status, tasks)) return null;
   await setJobStatus(pave, jobId, STATUS.punchReview);
   return STATUS.punchReview;
 }
@@ -735,7 +749,15 @@ function createHandler(deps) {
         const body = await readBody(req);
         const jobId = extractJobId(body);
         let flipped = null;
-        if (jobId) flipped = await applyPunchReviewFlip(deps.pave, jobId);
+        if (jobId) {
+          try {
+            flipped = await applyPunchReviewFlip(deps.pave, jobId);
+          } catch (err) {
+            console.warn(
+              `punch-review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
         return json(res, 200, { ok: true, flipped });
       }
       const session = deps.sessionSecret ? verifySession(deps.sessionSecret, bearerToken(req)) : null;
@@ -847,7 +869,7 @@ function createHandler(deps) {
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return json(res, 500, { error: message });
+      return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
   };
 }

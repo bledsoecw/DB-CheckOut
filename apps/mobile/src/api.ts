@@ -243,12 +243,28 @@ async function freshQueueSucceeded(): Promise<boolean> {
 }
 
 /**
- * Warm the on-device cache for every queued job while there is signal, so
- * the job screen still opens on a roof with none.
+ * Warm the on-device cache for queued jobs while there is signal, so the
+ * job screen still opens on a roof with none. Gentle on purpose: a queue
+ * can hold 60+ jobs and each detail costs several JobTread queries, so an
+ * unthrottled sweep rate-limits JT and shows up as a server error storm.
+ * A handful of jobs, spaced out, once per stretch — and stop at the first
+ * failure, because a struggling server won't be helped by more requests.
  */
+const PREFETCH_LIMIT = 8;
+const PREFETCH_GAP_MS = 1_500;
+const PREFETCH_COOLDOWN_MS = 10 * 60_000;
+let lastPrefetchAt = 0;
+
 async function prefetchJobs(jobs: QueueJob[]): Promise<void> {
-  for (const job of jobs) {
-    await getJob(job.id).catch(() => {});
+  if (Date.now() - lastPrefetchAt < PREFETCH_COOLDOWN_MS) return;
+  lastPrefetchAt = Date.now();
+  for (const job of jobs.slice(0, PREFETCH_LIMIT)) {
+    try {
+      await getJob(job.id);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, PREFETCH_GAP_MS));
   }
 }
 

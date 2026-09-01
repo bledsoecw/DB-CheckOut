@@ -39,3 +39,37 @@ test("client throws PaveError with status and body on failure", async () => {
     (err: unknown) => err instanceof PaveError && err.status === 403 && err.body === "no access",
   );
 });
+
+test("client retries once after a rate-limit answer, then succeeds", async () => {
+  let calls = 0;
+  const fakeFetch = (async () => {
+    calls += 1;
+    return calls === 1
+      ? new Response("slow down", { status: 429 })
+      : new Response(JSON.stringify({ ok: {} }), { status: 200 });
+  }) as typeof fetch;
+  const client = createPaveClient("SECRET", fakeFetch);
+  await client.query({ ok: {} });
+  assert.equal(calls, 2);
+});
+
+test("client gives up after the second rate-limit answer; 4xx never retries", async () => {
+  let calls = 0;
+  const limited = (async () => {
+    calls += 1;
+    return new Response("slow down", { status: 429 });
+  }) as typeof fetch;
+  await assert.rejects(
+    () => createPaveClient("SECRET", limited).query({ ok: {} }),
+    (err: unknown) => err instanceof PaveError && err.status === 429,
+  );
+  assert.equal(calls, 2);
+
+  let badCalls = 0;
+  const badRequest = (async () => {
+    badCalls += 1;
+    return new Response("nope", { status: 400 });
+  }) as typeof fetch;
+  await assert.rejects(() => createPaveClient("SECRET", badRequest).query({ ok: {} }));
+  assert.equal(badCalls, 1);
+});

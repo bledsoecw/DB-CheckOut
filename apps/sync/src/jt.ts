@@ -239,6 +239,15 @@ export async function listPipelineJobs(pave: PaveClient): Promise<QueueJob[]> {
   return out.sort((a, b) => a.number.localeCompare(b.number));
 }
 
+/** Just the job's pipeline Status value — the cheap read for webhook checks. */
+export async function getJobStatusValue(pave: PaveClient, jobId: string): Promise<string> {
+  const res = await pave.query<{ job: RawJob | null }>({
+    job: { $: { id: jobId }, ...JOB_SELECTION },
+  });
+  if (!res.job) return "";
+  return cfv(res.job, CUSTOM_FIELDS.status) ?? "";
+}
+
 export async function getJob(
   pave: PaveClient,
   jobId: string,

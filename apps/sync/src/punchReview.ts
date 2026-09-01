@@ -9,7 +9,7 @@
 import type { PaveClient } from "./pave";
 import { STATUS } from "../../../packages/shared/src/jobtread";
 import type { PunchTask } from "../../../packages/shared/src/types";
-import { getJob, setJobStatus } from "./jt";
+import { getJobStatusValue, listPunchTasks, setJobStatus } from "./jt";
 
 /** Pure decision: flip only when there ARE punch tasks and every one is finished. */
 export function shouldFlipToPunchReview(currentStatus: string, tasks: PunchTask[]): boolean {
@@ -20,11 +20,16 @@ export function shouldFlipToPunchReview(currentStatus: string, tasks: PunchTask[
 
 /**
  * Re-evaluate a job after a task change. Returns the status it moved to,
- * or null if nothing changed.
+ * or null if nothing changed. This runs on every org-wide webhook event,
+ * so it reads only what the decision needs (status + punch tasks) — never
+ * the sold scope and its per-document queries.
  */
 export async function applyPunchReviewFlip(pave: PaveClient, jobId: string): Promise<string | null> {
-  const job = await getJob(pave, jobId);
-  if (!shouldFlipToPunchReview(job.status, job.punchTasks)) return null;
+  const [status, tasks] = await Promise.all([
+    getJobStatusValue(pave, jobId),
+    listPunchTasks(pave, jobId),
+  ]);
+  if (!shouldFlipToPunchReview(status, tasks)) return null;
   await setJobStatus(pave, jobId, STATUS.punchReview);
   return STATUS.punchReview;
 }
