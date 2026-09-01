@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { translateToSpanish } from "../src/translate";
+import { transcribeNote, translateToSpanish } from "../src/translate";
+import { decodeAudio } from "../src/routes";
 
 const env = { geminiApiKey: "k", geminiModel: "gemini-test" };
 
@@ -81,4 +82,47 @@ test("a retired model name triggers discovery of the key's newest flash model", 
   const out2 = await translateToSpanish(["second-fresh-string"], { geminiApiKey: "k", geminiModel: "gemini-9-gone" }, fakeFetch);
   assert.deepEqual(out2, ["ES:second-fresh-string"]);
   assert.equal(seen[seen.length - 1], "gemini-4.1-flash-lite");
+});
+
+test("transcribeNote sends the audio bytes and returns the cleaned note", async () => {
+  let sentAudio: { mimeType?: string; data?: string } | undefined;
+  const fakeFetch = (async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as {
+      contents: Array<{ parts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> }>;
+    };
+    sentAudio = body.contents[0].parts[0].inlineData;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: JSON.stringify({ original: "dos botas rotas", en: "Two pipe boots cracked." }) }],
+            },
+          },
+        ],
+      }),
+    } as Response;
+  }) as typeof fetch;
+
+  const out = await transcribeNote({ mimeType: "audio/webm", base64: "QUJD" }, env, fakeFetch);
+  assert.deepEqual(out, { original: "dos botas rotas", en: "Two pipe boots cracked." });
+  assert.deepEqual(sentAudio, { mimeType: "audio/webm", data: "QUJD" });
+
+  await assert.rejects(() =>
+    transcribeNote({ mimeType: "audio/webm", base64: "QUJD" }, { geminiApiKey: "", geminiModel: "m" }),
+  );
+});
+
+test("decodeAudio accepts only audio data URIs within the size cap", () => {
+  assert.deepEqual(decodeAudio("data:audio/mp4;base64,QUJD"), { mimeType: "audio/mp4", base64: "QUJD" });
+  assert.deepEqual(decodeAudio("data:audio/webm;codecs=opus;base64,QUJD"), {
+    mimeType: "audio/webm",
+    base64: "QUJD",
+  });
+  assert.equal(decodeAudio("data:image/jpeg;base64,QUJD"), null);
+  assert.equal(decodeAudio("QUJD"), null);
+  assert.equal(decodeAudio(""), null);
+  assert.equal(decodeAudio(`data:audio/mp4;base64,${"A".repeat(5_600_001)}`), null);
 });

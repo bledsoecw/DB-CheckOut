@@ -19,16 +19,21 @@ type Props = NativeStackScreenProps<RootStackParamList, "Job">;
 
 export default function JobScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
-  const { t, t2 } = useLang();
+  const { t, t2, p } = useLang();
   const [job, setJob] = useState<JobDetail | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const { state } = useVisit(jobId);
 
-  useEffect(() => {
-    const unsub = navigation.addListener("focus", () => {
-      getJob(jobId).then(setJob).catch(() => {});
-    });
-    return unsub;
-  }, [navigation, jobId]);
+  const load = React.useCallback(() => {
+    getJob(jobId)
+      .then((detail) => {
+        setJob(detail);
+        setLoadFailed(false);
+      })
+      .catch(() => setLoadFailed(true));
+  }, [jobId]);
+
+  useEffect(() => navigation.addListener("focus", load), [navigation, load]);
 
   const inspectionDone = INSPECTION_FORM.optionFields.filter((f) => state.inspection[f]).length;
   const cleanupDone = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
@@ -52,6 +57,21 @@ export default function JobScreen({ navigation, route }: Props) {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+        {!job && loadFailed ? (
+          <Card style={styles.offlineCard}>
+            <Text style={styles.offlineTitle}>
+              {p({ es: "Sin conexión y sin copia guardada", en: "No signal and no saved copy" })}
+            </Text>
+            <Text style={styles.offlineSub}>
+              {p({
+                es: "Abre este trabajo una vez con señal y quedará guardado en el teléfono.",
+                en: "Open this job once with signal and it will stay saved on the phone.",
+              })}
+            </Text>
+            <BigButton bi={{ es: "Reintentar", en: "Retry" }} onPress={load} />
+          </Card>
+        ) : null}
+
         {job?.address ? (
           <Card style={styles.addressCard}>
             <View style={{ flex: 1 }}>
@@ -343,6 +363,9 @@ const styles = StyleSheet.create({
   title: { fontSize: 19, fontWeight: "700", color: colors.ink },
   subtitle: { fontSize: 12, color: colors.muted },
   addressCard: { flexDirection: "row", alignItems: "center", gap: 12 },
+  offlineCard: { gap: 10 },
+  offlineTitle: { fontSize: 15.5, fontWeight: "700", color: colors.ink },
+  offlineSub: { fontSize: 12.5, color: colors.muted, lineHeight: 18 },
   address: { fontSize: 14.5, fontWeight: "700", color: colors.ink },
   tile: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 18 },
   scopeHeader: { flexDirection: "row", alignItems: "center", gap: 12 },

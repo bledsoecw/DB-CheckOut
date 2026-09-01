@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { QueueJob } from "@shared/types";
 import { STATUS } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getQueue, outboxCount } from "../api";
+import { getQueue, outboxCount, subscribeOutbox } from "../api";
 import { useAuth } from "../auth";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
@@ -21,14 +21,17 @@ export default function QueueScreen({ navigation }: Props) {
   const { t, t2, p } = useLang();
   const { mode, userName, signOut } = useAuth();
   const [jobs, setJobs] = useState<QueueJob[]>([]);
+  const [offline, setOffline] = useState(false);
   const [queued, setQueued] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      setJobs(await getQueue());
-      setQueued(await outboxCount());
+      const result = await getQueue();
+      setJobs(result.jobs);
+      setOffline(result.offline);
+      setQueued(outboxCount());
     } finally {
       setRefreshing(false);
     }
@@ -36,7 +39,11 @@ export default function QueueScreen({ navigation }: Props) {
 
   useEffect(() => {
     const unsub = navigation.addListener("focus", load);
-    return unsub;
+    const unsubOutbox = subscribeOutbox(() => setQueued(outboxCount()));
+    return () => {
+      unsub();
+      unsubOutbox();
+    };
   }, [navigation, load]);
 
   return (
@@ -52,10 +59,17 @@ export default function QueueScreen({ navigation }: Props) {
       </View>
 
       {queued > 0 ? (
-        <View style={styles.offline}>
-          <Text style={styles.offlineTitle}>{t("offlineSaved")}</Text>
-          <Text style={styles.offlineDetail}>
-            {queued} · {t("offlineDetail")}
+        <Pressable style={styles.offline} onPress={() => navigation.navigate("Outbox")}>
+          <Text style={styles.offlineTitle}>
+            {queued} {p({ es: "por enviar — toca para ver", en: "waiting to send — tap to view" })}
+          </Text>
+          <Text style={styles.offlineDetail}>{t("offlineDetail")}</Text>
+        </Pressable>
+      ) : null}
+      {offline ? (
+        <View style={styles.noSignal}>
+          <Text style={styles.noSignalText}>
+            {p({ es: "Sin conexión — mostrando la última copia", en: "No connection — showing the last saved copy" })}
           </Text>
         </View>
       ) : null}
@@ -156,6 +170,14 @@ const styles = StyleSheet.create({
   },
   offlineTitle: { fontSize: 13.5, fontWeight: "700", color: colors.amberInk },
   offlineDetail: { fontSize: 11.5, color: "#8A6A2B" },
+  noSignal: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    backgroundColor: colors.blueTint,
+    borderRadius: 10,
+    padding: 10,
+  },
+  noSignalText: { fontSize: 12, color: colors.blue, textAlign: "center", fontWeight: "600" },
   cardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   badges: { flexDirection: "row", gap: 6 },
   badge: {

@@ -73,12 +73,22 @@ const THINKING_VARIANTS: Array<Record<string, unknown> | null> = [
 let workingVariant = 0;
 const GEMINI_CALL_TIMEOUT_MS = 45_000;
 
+interface AudioPart {
+  mimeType: string;
+  base64: string;
+}
+
 /** One generateContent call; on a model-name miss, discover a working model. */
 async function geminiGenerate(
   prompt: string,
   env: Pick<Env, "geminiApiKey" | "geminiModel">,
   fetchImpl: typeof fetch,
+  audio?: AudioPart,
 ): Promise<string> {
+  const parts: Array<Record<string, unknown>> = [
+    ...(audio ? [{ inlineData: { mimeType: audio.mimeType, data: audio.base64 } }] : []),
+    { text: prompt },
+  ];
   const attempt = async (model: string, variant: Record<string, unknown> | null) => {
     try {
       return await fetchImpl(`${GEMINI_URL}/${model}:generateContent`, {
@@ -86,7 +96,7 @@ async function geminiGenerate(
         headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
         signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
+          contents: [{ parts }],
           generationConfig: {
             responseMimeType: "application/json",
             temperature: 0.2,
@@ -163,6 +173,31 @@ export async function summarizeScope(
   const summary = { en: parsed.en, es: parsed.es };
   summaryCache.set(scopeText, summary);
   return summary;
+}
+
+const TRANSCRIBE_PROMPT =
+  "The audio is a roofing/construction field crew member dictating an inspection " +
+  "note, in Spanish or English (possibly mixed). Transcribe it, then produce a " +
+  "clean, professional English version of the note for the office record. Fix " +
+  "obvious dictation stumbles; keep every factual detail. " +
+  'Return ONLY JSON: {"original": "<verbatim transcription>", "en": "<clean English note>"}';
+
+/** Transcribe a dictated field note and clean it up for the JT record. */
+export async function transcribeNote(
+  audio: { mimeType: string; base64: string },
+  env: Pick<Env, "geminiApiKey" | "geminiModel">,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ original: string; en: string }> {
+  if (!env.geminiApiKey) throw new Error("Transcription is not configured");
+  const raw = await geminiGenerate(TRANSCRIBE_PROMPT, env, fetchImpl, audio);
+  const parsed = JSON.parse(raw) as { original?: unknown; en?: unknown };
+  if (typeof parsed.en !== "string" || !parsed.en) {
+    throw new Error("Gemini returned a malformed transcription");
+  }
+  return {
+    original: typeof parsed.original === "string" ? parsed.original : parsed.en,
+    en: parsed.en,
+  };
 }
 
 /** Translate to Spanish with caching; missing config throws (route turns it into 501). */

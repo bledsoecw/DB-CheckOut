@@ -539,7 +539,11 @@ var THINKING_VARIANTS = [
 ];
 var workingVariant = 0;
 var GEMINI_CALL_TIMEOUT_MS = 45e3;
-async function geminiGenerate(prompt, env, fetchImpl) {
+async function geminiGenerate(prompt, env, fetchImpl, audio) {
+  const parts = [
+    ...audio ? [{ inlineData: { mimeType: audio.mimeType, data: audio.base64 } }] : [],
+    { text: prompt }
+  ];
   const attempt = async (model2, variant) => {
     try {
       return await fetchImpl(`${GEMINI_URL}/${model2}:generateContent`, {
@@ -547,7 +551,7 @@ async function geminiGenerate(prompt, env, fetchImpl) {
         headers: { "content-type": "application/json", "x-goog-api-key": env.geminiApiKey },
         signal: AbortSignal.timeout(GEMINI_CALL_TIMEOUT_MS),
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
+          contents: [{ parts }],
           generationConfig: {
             responseMimeType: "application/json",
             temperature: 0.2,
@@ -609,6 +613,19 @@ ${scopeText}`, env, fetchImpl);
   summaryCache.set(scopeText, summary);
   return summary;
 }
+var TRANSCRIBE_PROMPT = 'The audio is a roofing/construction field crew member dictating an inspection note, in Spanish or English (possibly mixed). Transcribe it, then produce a clean, professional English version of the note for the office record. Fix obvious dictation stumbles; keep every factual detail. Return ONLY JSON: {"original": "<verbatim transcription>", "en": "<clean English note>"}';
+async function transcribeNote(audio, env, fetchImpl = fetch) {
+  if (!env.geminiApiKey) throw new Error("Transcription is not configured");
+  const raw = await geminiGenerate(TRANSCRIBE_PROMPT, env, fetchImpl, audio);
+  const parsed = JSON.parse(raw);
+  if (typeof parsed.en !== "string" || !parsed.en) {
+    throw new Error("Gemini returned a malformed transcription");
+  }
+  return {
+    original: typeof parsed.original === "string" ? parsed.original : parsed.en,
+    en: parsed.en
+  };
+}
 async function translateToSpanish(texts, env, fetchImpl = fetch) {
   if (!env.geminiApiKey) throw new Error("Translation is not configured");
   const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
@@ -645,6 +662,13 @@ function checklistValues(sub) {
   return { ...sub.answers, ...sub.texts ?? {} };
 }
 var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
+function decodeAudio(audioBase64) {
+  if (typeof audioBase64 !== "string" || !audioBase64) return null;
+  const dataUri = /^data:([\w/+.;=-]+);base64,(.*)$/s.exec(audioBase64);
+  if (!dataUri || !dataUri[1].startsWith("audio/")) return null;
+  if (dataUri[2].length === 0 || dataUri[2].length > 56e5) return null;
+  return { mimeType: dataUri[1].split(";")[0], base64: dataUri[2] };
+}
 var MAX_PHOTO_BYTES = 4e6;
 function decodePhoto(imageBase64) {
   if (typeof imageBase64 !== "string" || !imageBase64) return null;
@@ -710,6 +734,13 @@ function createHandler(deps) {
       }
       const session = deps.sessionSecret ? verifySession(deps.sessionSecret, bearerToken(req)) : null;
       if (!session) return json(res, 401, { error: "Unauthorized" });
+      if (req.method === "POST" && url.pathname === "/transcribe") {
+        if (!deps.geminiApiKey) return json(res, 501, { error: "Transcription is not configured" });
+        const body = await readBody(req);
+        const audio = decodeAudio(body.audioBase64);
+        if (!audio) return json(res, 400, { error: "audioBase64 must be an audio data URI under 4MB" });
+        return json(res, 200, await transcribeNote(audio, deps));
+      }
       if (req.method === "POST" && url.pathname === "/translate") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Translation is not configured" });
         const body = await readBody(req);

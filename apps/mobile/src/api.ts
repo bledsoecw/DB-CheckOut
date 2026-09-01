@@ -46,6 +46,25 @@ export async function loadAuth(): Promise<AuthMode> {
   const raw = await AsyncStorage.getItem(SESSION_KEY);
   session = raw ? (JSON.parse(raw) as Session) : null;
   demoMode = (await AsyncStorage.getItem(DEMO_KEY)) === "1";
+  const storedOutbox = await AsyncStorage.getItem(OUTBOX_KEY).catch(() => null);
+  if (storedOutbox) {
+    try {
+      const parsed = JSON.parse(storedOutbox) as Array<Partial<OutboxItem>>;
+      outbox = parsed
+        .filter((item) => typeof item.path === "string")
+        .map((item, i) => ({
+          id: item.id ?? `stored-${i}`,
+          path: item.path as string,
+          body: item.body,
+          label: item.label ?? "Pendiente · Pending",
+          queuedAt: item.queuedAt ?? new Date().toISOString(),
+          status: item.status === "failed" ? "failed" : "pending",
+          error: item.error,
+        }));
+    } catch {
+      outbox = [];
+    }
+  }
   if (session) return "google";
   return demoMode ? "demo" : null;
 }
@@ -104,10 +123,52 @@ export async function clearAuth(): Promise<void> {
 
 const connected = () => session != null;
 
-interface OutboxItem {
+export interface OutboxItem {
+  id: string;
   path: string;
   body: unknown;
+  /** Human description, e.g. "Inspección — 261357 Lininger". */
+  label: string;
   queuedAt: string;
+  status: "pending" | "failed";
+  /** Server-reported reason when a send failed for good. */
+  error?: string;
+}
+
+/**
+ * The outbox lives in memory (authoritative) and mirrors to storage
+ * best-effort — a full/blocked storage must never silently lose a send.
+ */
+let outbox: OutboxItem[] = [];
+const outboxListeners = new Set<() => void>();
+
+function notifyOutbox(): void {
+  void AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox)).catch(() => {});
+  for (const listener of outboxListeners) listener();
+}
+
+export function subscribeOutbox(listener: () => void): () => void {
+  outboxListeners.add(listener);
+  return () => outboxListeners.delete(listener);
+}
+
+export function outboxItems(): OutboxItem[] {
+  return outbox;
+}
+
+export function discardOutboxItem(id: string): void {
+  outbox = outbox.filter((item) => item.id !== id);
+  notifyOutbox();
+}
+
+/** Re-try the whole outbox when connectivity returns or the app resurfaces. */
+export function initAutoFlush(): void {
+  const g = globalThis as Record<string, any>;
+  if (typeof g.addEventListener !== "function") return;
+  g.addEventListener("online", () => void flushOutbox());
+  g.document?.addEventListener?.("visibilitychange", () => {
+    if (g.document.visibilityState === "visible") void flushOutbox();
+  });
 }
 
 async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
@@ -133,34 +194,70 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown):
     }
     throw new Error(reason || `${method} ${path} -> ${res.status}`);
   }
+  if (method === "GET" && path === "/queue") lastFreshQueueAt = Date.now();
   return (await res.json()) as T;
 }
 
+/**
+ * Fresh from the server -> cached copy -> (demo data only in demo mode).
+ * A signed-in user must never see sample data: with no connection and no
+ * cached copy this throws, and the screen shows an offline state.
+ */
 async function cached<T>(key: string, fresh: () => Promise<T>, demo: T): Promise<T> {
-  if (!connected()) return demo;
+  if (demoMode) return demo;
+  if (!connected()) throw new Error("offline");
   try {
     const value = await fresh();
     // Cache best-effort: a full/blocked storage must not discard fresh data.
     await AsyncStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value)).catch(() => {});
     void flushOutbox();
     return value;
-  } catch {
-    const stale = await AsyncStorage.getItem(CACHE_PREFIX + key);
+  } catch (err) {
+    const stale = await AsyncStorage.getItem(CACHE_PREFIX + key).catch(() => null);
     if (stale) return JSON.parse(stale) as T;
-    return demo;
+    throw err;
   }
 }
 
-export async function getQueue(): Promise<QueueJob[]> {
-  return cached("queue", () => request<QueueJob[]>("GET", "/queue"), MOCK_JOBS);
+export interface QueueResult {
+  jobs: QueueJob[];
+  /** True when the server was unreachable (jobs may be a stale copy or empty). */
+  offline: boolean;
+}
+
+export async function getQueue(): Promise<QueueResult> {
+  try {
+    const jobs = await cached("queue", () => request<QueueJob[]>("GET", "/queue"), MOCK_JOBS);
+    const offline = !demoMode && !(await freshQueueSucceeded());
+    if (!offline) void prefetchJobs(jobs);
+    return { jobs, offline };
+  } catch {
+    return { jobs: [], offline: true };
+  }
+}
+
+// cached() can return stale data without telling us; track the last fresh hit.
+let lastFreshQueueAt = 0;
+async function freshQueueSucceeded(): Promise<boolean> {
+  return Date.now() - lastFreshQueueAt < 5_000;
+}
+
+/**
+ * Warm the on-device cache for every queued job while there is signal, so
+ * the job screen still opens on a roof with none.
+ */
+async function prefetchJobs(jobs: QueueJob[]): Promise<void> {
+  for (const job of jobs) {
+    await getJob(job.id).catch(() => {});
+  }
 }
 
 export async function getJob(jobId: string): Promise<JobDetail> {
   return cached(`job.${jobId}`, () => request<JobDetail>("GET", `/jobs/${jobId}`), mockJobDetail(jobId));
 }
 
-/** Queue a write; try to deliver now, keep it if the network says no. */
-export async function post(path: string, body: unknown): Promise<"sent" | "queued"> {
+/** Queue a write; try to deliver now, keep it (visibly) if the network says no. */
+export async function post(path: string, body: unknown, label = "Pendiente"): Promise<"sent" | "queued"> {
   if (demoMode) return "sent";
   if (connected()) {
     try {
@@ -171,46 +268,70 @@ export async function post(path: string, body: unknown): Promise<"sent" | "queue
       // fall through to outbox
     }
   }
-  const raw = await AsyncStorage.getItem(OUTBOX_KEY);
-  const outbox: OutboxItem[] = raw ? JSON.parse(raw) : [];
-  outbox.push({ path, body, queuedAt: new Date().toISOString() });
-  await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox));
+  outbox.push({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    path,
+    body,
+    label,
+    queuedAt: new Date().toISOString(),
+    status: "pending",
+  });
+  notifyOutbox();
   return "queued";
 }
 
-export async function outboxCount(): Promise<number> {
-  const raw = await AsyncStorage.getItem(OUTBOX_KEY);
-  return raw ? (JSON.parse(raw) as OutboxItem[]).length : 0;
+export function outboxCount(): number {
+  return outbox.length;
 }
 
+/** A 4xx (other than auth/rate-limit) will never succeed on retry. */
+const PERMANENT = (status: number) => status >= 400 && status < 500 && ![401, 408, 425, 429].includes(status);
+
 export async function flushOutbox(): Promise<number> {
-  if (!connected()) return 0;
-  const raw = await AsyncStorage.getItem(OUTBOX_KEY);
-  if (!raw) return 0;
-  const outbox: OutboxItem[] = JSON.parse(raw);
-  const remaining: OutboxItem[] = [];
+  if (!connected() || outbox.length === 0) return 0;
   let sent = 0;
-  for (const item of outbox) {
+  let changed = false;
+  for (const item of [...outbox]) {
+    if (item.status === "failed") continue;
     try {
       await request("POST", item.path, item.body);
+      outbox = outbox.filter((o) => o.id !== item.id);
       sent += 1;
-    } catch {
-      remaining.push(item);
+      changed = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = Number(/-> (\d{3})$/.exec(message)?.[1] ?? 0);
+      if (status && PERMANENT(status)) {
+        item.status = "failed";
+        item.error = message;
+        changed = true;
+      }
+      // network errors / 5xx stay pending for the next flush
     }
   }
-  await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(remaining));
+  if (changed) notifyOutbox();
   return sent;
 }
 
-// Typed helpers used by screens
-export const submitInspection = (jobId: string, sub: ChecklistSubmission) =>
-  post(`/jobs/${jobId}/inspection`, sub);
-export const submitCleanup = (jobId: string, sub: ChecklistSubmission) =>
-  post(`/jobs/${jobId}/cleanup`, sub);
-export const sendReport = (jobId: string, report: ProblemReport) =>
-  post(`/jobs/${jobId}/reports`, report);
-export const completePunchTask = (taskId: string, jobId: string, note?: string) =>
-  post(`/tasks/${taskId}/complete`, { jobId, ...(note?.trim() ? { note: note.trim() } : {}) });
+// Typed helpers used by screens. `label` names the item in the outbox.
+export const submitInspection = (jobId: string, sub: ChecklistSubmission, label?: string) =>
+  post(`/jobs/${jobId}/inspection`, sub, label ?? "Inspección · Inspection");
+export const submitCleanup = (jobId: string, sub: ChecklistSubmission, label?: string) =>
+  post(`/jobs/${jobId}/cleanup`, sub, label ?? "Limpieza · Cleanup");
+export const sendReport = (jobId: string, report: ProblemReport, label?: string) =>
+  post(`/jobs/${jobId}/reports`, report, label ?? "Reporte · Report");
+export const completePunchTask = (taskId: string, jobId: string, note?: string, label?: string) =>
+  post(
+    `/tasks/${taskId}/complete`,
+    { jobId, ...(note?.trim() ? { note: note.trim() } : {}) },
+    label ?? "Reparación terminada · Repair done",
+  );
+
+/** Dictated note -> { original, en } from the server; throws when unavailable. */
+export async function transcribeNote(audioBase64: string): Promise<{ original: string; en: string }> {
+  if (demoMode) return { original: "(demo)", en: "Demo transcription — sign in for the real thing." };
+  return request<{ original: string; en: string }>("POST", "/transcribe", { audioBase64 });
+}
 const DEMO_SUMMARY: ScopeSummary = {
   en: "Full tear-off and re-shingle with OC Duration architectural shingles (32 SQ), new synthetic underlayment and three pipe boots, haul-off included. A change order added 148 LF of 5\" seamless gutters with downspouts.",
   es: "Retiro completo y reinstalación de tejas arquitectónicas OC Duration (32 SQ), con membrana sintética nueva y tres botas de tubo; incluye acarreo de escombro. Una orden de cambio agregó 148 pies lineales de canales sin costura de 5\" con bajantes.",
@@ -256,4 +377,9 @@ export const uploadJobPhoto = (
   label: "BEFORE" | "AFTER" | "REPORT" | "INSPECTION",
   imageBase64: string,
   taskId?: string,
-) => post(`/jobs/${jobId}/photos`, { label, imageBase64, ...(taskId ? { taskId } : {}) });
+) =>
+  post(
+    `/jobs/${jobId}/photos`,
+    { label, imageBase64, ...(taskId ? { taskId } : {}) },
+    `Foto ${label} · Photo`,
+  );

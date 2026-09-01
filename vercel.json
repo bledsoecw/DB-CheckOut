@@ -5,6 +5,8 @@
   "rewrites": [
     { "source": "/health", "destination": "/api" },
     { "source": "/auth/:rest*", "destination": "/api" },
+    { "source": "/translate", "destination": "/api" },
+    { "source": "/transcribe", "destination": "/api" },
     { "source": "/queue", "destination": "/api" },
     { "source": "/jobs/:rest*", "destination": "/api" },
     { "source": "/tasks/:rest*", "destination": "/api" },

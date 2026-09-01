@@ -34,7 +34,7 @@ import {
   type PhotoUpload,
 } from "./jt";
 import { applyPunchReviewFlip } from "./punchReview";
-import { summarizeScope, translateToSpanish, TRANSLATE_LIMITS } from "./translate";
+import { summarizeScope, transcribeNote, translateToSpanish, TRANSLATE_LIMITS } from "./translate";
 
 export interface RouterDeps {
   pave: PaveClient;
@@ -78,6 +78,16 @@ function checklistValues(sub: ChecklistSubmission): Record<string, string> {
 }
 
 const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
+
+/** Accepts an audio data URI; returns base64 + mime type or null. */
+export function decodeAudio(audioBase64: unknown): { mimeType: string; base64: string } | null {
+  if (typeof audioBase64 !== "string" || !audioBase64) return null;
+  const dataUri = /^data:([\w/+.;=-]+);base64,(.*)$/s.exec(audioBase64);
+  if (!dataUri || !dataUri[1].startsWith("audio/")) return null;
+  // base64 inflates by ~4/3; cap the encoded size to keep the decoded audio under ~4MB.
+  if (dataUri[2].length === 0 || dataUri[2].length > 5_600_000) return null;
+  return { mimeType: dataUri[1].split(";")[0], base64: dataUri[2] };
+}
 const MAX_PHOTO_BYTES = 4_000_000;
 
 /** Accepts a data URI or bare base64; returns bytes + content type or null. */
@@ -158,6 +168,15 @@ export function createHandler(deps: RouterDeps) {
         ? verifySession(deps.sessionSecret, bearerToken(req))
         : null;
       if (!session) return json(res, 401, { error: "Unauthorized" });
+
+      // Dictated field note -> verbatim transcription + clean English note.
+      if (req.method === "POST" && url.pathname === "/transcribe") {
+        if (!deps.geminiApiKey) return json(res, 501, { error: "Transcription is not configured" });
+        const body = (await readBody(req)) as { audioBase64?: unknown };
+        const audio = decodeAudio(body.audioBase64);
+        if (!audio) return json(res, 400, { error: "audioBase64 must be an audio data URI under 4MB" });
+        return json(res, 200, await transcribeNote(audio, deps));
+      }
 
       // ES translation of JobTread text (scope lines, punch work orders).
       if (req.method === "POST" && url.pathname === "/translate") {

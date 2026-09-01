@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { sendReport, submitCleanup, submitInspection } from "../api";
+import { getJob, sendReport, submitCleanup, submitInspection } from "../api";
 import { BigButton, Card } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
@@ -14,9 +14,19 @@ type Props = NativeStackScreenProps<RootStackParamList, "Send">;
 
 export default function SendScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
-  const { t, t2 } = useLang();
+  const { t, t2, p } = useLang();
   const { state, clear } = useVisit(jobId);
   const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<"sent" | "queued" | null>(null);
+  const [jobLabel, setJobLabel] = useState("");
+
+  useEffect(() => {
+    // Cached from the job screen; names outbox entries ("Inspección — 26-1357 Lininger").
+    // JT job names already start with the number, so the name alone is enough.
+    getJob(jobId)
+      .then((job) => setJobLabel(job.name || job.number))
+      .catch(() => {});
+  }, [jobId]);
 
   const inspectionDone = INSPECTION_FORM.optionFields.filter((f) => state.inspection[f]).length;
   const cleanupDone = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
@@ -24,17 +34,68 @@ export default function SendScreen({ navigation, route }: Props) {
   const send = async () => {
     setSending(true);
     try {
-      await submitInspection(jobId, { answers: state.inspection, texts: state.notes });
-      await submitCleanup(jobId, { answers: state.cleanup });
+      const suffix = jobLabel ? ` — ${jobLabel}` : "";
+      const outcomes = [
+        await submitInspection(
+          jobId,
+          { answers: state.inspection, texts: state.notes },
+          `Inspección · Inspection${suffix}`,
+        ),
+        await submitCleanup(jobId, { answers: state.cleanup }, `Limpieza · Cleanup${suffix}`),
+      ];
       for (const report of state.reports) {
-        await sendReport(jobId, report);
+        outcomes.push(await sendReport(jobId, report, `Reporte · Report${suffix}`));
       }
       clear();
-      navigation.popToTop();
+      setResult(outcomes.every((o) => o === "sent") ? "sent" : "queued");
     } finally {
       setSending(false);
     }
   };
+
+  if (result) {
+    const sent = result === "sent";
+    return (
+      <SafeAreaView style={styles.root} edges={["top"]}>
+        <View style={styles.resultWrap}>
+          <View style={[styles.heroBadge, sent ? null : styles.heroBadgeQueued]}>
+            <Text style={{ fontSize: 34, color: sent ? colors.greenDark : "#8A6100" }}>
+              {sent ? "✓" : "⏳"}
+            </Text>
+          </View>
+          <Text style={styles.heroTitle}>
+            {sent
+              ? p({ es: "Enviado a JobTread", en: "Sent to JobTread" })
+              : p({ es: "Guardado — sin señal", en: "Saved — no signal" })}
+          </Text>
+          <Text style={styles.resultSub}>
+            {sent
+              ? p({ es: "La oficina ya lo puede ver.", en: "The office can see it now." })
+              : p({
+                  es: "Se enviará solo cuando el teléfono recupere señal. Míralo en «Por enviar».",
+                  en: "It will send itself when the phone gets signal back. See it under “Waiting to send”.",
+                })}
+          </Text>
+          {!sent ? (
+            <View style={{ alignSelf: "stretch" }}>
+              <BigButton
+                bi={{ es: "Ver «Por enviar»", en: "View “Waiting to send”" }}
+                color={colors.blue}
+                onPress={() => navigation.navigate("Outbox")}
+              />
+            </View>
+          ) : null}
+          <View style={{ alignSelf: "stretch" }}>
+            <BigButton
+              bi={{ es: "Listo", en: "Done" }}
+              color={colors.greenDark}
+              onPress={() => navigation.popToTop()}
+            />
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -134,7 +195,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  heroBadgeQueued: { backgroundColor: "#FBF0D9" },
   heroTitle: { fontSize: 24, fontWeight: "700", color: colors.ink },
+  resultWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+    gap: 12,
+  },
+  resultSub: {
+    fontSize: 14,
+    color: colors.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 8,
+  },
   heroSub: { fontSize: 13, color: colors.muted },
   summary: { flexDirection: "row", alignItems: "center", gap: 12 },
   summaryLabel: { fontSize: 15, fontWeight: "700", color: colors.ink },

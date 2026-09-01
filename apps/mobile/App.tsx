@@ -3,6 +3,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { initAutoFlush } from "./src/api";
 import { AuthProvider, useAuth } from "./src/auth";
 import { LangProvider } from "./src/i18n";
 import { colors } from "./src/theme";
@@ -15,6 +16,9 @@ import ReportScreen from "./src/screens/ReportScreen";
 import SendScreen from "./src/screens/SendScreen";
 import PunchListScreen from "./src/screens/PunchListScreen";
 import PunchItemScreen from "./src/screens/PunchItemScreen";
+import OutboxScreen from "./src/screens/OutboxScreen";
+
+initAutoFlush();
 
 export type RootStackParamList = {
   Queue: undefined;
@@ -25,6 +29,7 @@ export type RootStackParamList = {
   Send: { jobId: string };
   PunchList: { jobId: string };
   PunchItem: { jobId: string; taskId: string };
+  Outbox: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -49,6 +54,7 @@ function Root() {
         <Stack.Screen name="Send" component={SendScreen} />
         <Stack.Screen name="PunchList" component={PunchListScreen} />
         <Stack.Screen name="PunchItem" component={PunchItemScreen} />
+        <Stack.Screen name="Outbox" component={OutboxScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
