@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { FlatList, Linking, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { FlatList, Linking, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { QueueJob } from "@shared/types";
@@ -17,6 +17,24 @@ export function directionsUrl(address: string): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
 }
 
+const norm = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+/** Digits/letters only, so "261357" finds "26-1357". */
+const flat = (s: string) => norm(s).replace(/[^a-z0-9]/g, "");
+
+/** Any part of the number, name, address, PM or sales rep matches. */
+export function matchesJob(job: QueueJob, query: string): boolean {
+  const q = norm(query.trim());
+  if (!q) return true;
+  const qf = flat(q);
+  return [job.number, job.name, job.address, job.projectManager, job.salesRep, job.status].some(
+    (v) => v != null && (norm(v).includes(q) || (qf.length > 0 && flat(v).includes(qf))),
+  );
+}
+
 export default function QueueScreen({ navigation }: Props) {
   const { t, t2, p } = useLang();
   const { mode, userName, signOut } = useAuth();
@@ -24,6 +42,9 @@ export default function QueueScreen({ navigation }: Props) {
   const [offline, setOffline] = useState(false);
   const [queued, setQueued] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const shown = query.trim() ? jobs.filter((j) => matchesJob(j, query)) : jobs;
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -58,6 +79,26 @@ export default function QueueScreen({ navigation }: Props) {
         <LangPill />
       </View>
 
+      <View style={styles.searchWrap}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder={p({
+            es: "Buscar: número, cliente, dirección…",
+            en: "Search: number, customer, address…",
+          })}
+          placeholderTextColor="#9AA8B8"
+          autoCorrect={false}
+          style={styles.searchInput}
+        />
+        {query ? (
+          <Pressable onPress={() => setQuery("")} hitSlop={10}>
+            <Text style={styles.searchClear}>✕</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
       {queued > 0 ? (
         <Pressable style={styles.offline} onPress={() => navigation.navigate("Outbox")}>
           <Text style={styles.offlineTitle}>
@@ -75,10 +116,20 @@ export default function QueueScreen({ navigation }: Props) {
       ) : null}
 
       <FlatList
-        data={jobs}
+        data={shown}
         keyExtractor={(j) => j.id}
         contentContainerStyle={{ padding: 16, gap: 12 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}
+        ListEmptyComponent={
+          query.trim() ? (
+            <Text style={styles.noMatch}>
+              {p({
+                es: `Ningún trabajo coincide con “${query.trim()}”`,
+                en: `No job matches “${query.trim()}”`,
+              })}
+            </Text>
+          ) : null
+        }
         ListFooterComponent={
           <View>
             <Text style={styles.footer}>{t("queueNote")}</Text>
@@ -159,6 +210,22 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 24, fontWeight: "700", color: colors.ink },
   subtitle: { fontSize: 13, color: colors.muted },
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 10,
+    backgroundColor: colors.card,
+    borderWidth: 1.5,
+    borderColor: "#D9E1EB",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+  },
+  searchIcon: { fontSize: 14 },
+  searchInput: { flex: 1, paddingVertical: 11, fontSize: 14.5, color: colors.ink },
+  searchClear: { fontSize: 15, color: colors.muted, fontWeight: "700", paddingHorizontal: 4 },
+  noMatch: { textAlign: "center", fontSize: 13, color: colors.muted, paddingVertical: 20 },
   offline: {
     margin: 16,
     marginBottom: 0,

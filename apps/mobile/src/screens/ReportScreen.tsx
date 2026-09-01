@@ -9,6 +9,7 @@ import { useLang } from "../i18n";
 import { downscalePhoto } from "../photo";
 import { useVisit } from "../store";
 import { colors } from "../theme";
+import { VoiceNoteButton } from "../VoiceNote";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Report">;
 
@@ -21,15 +22,17 @@ const SIDES = [
 
 export default function ReportScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
-  const { t, t2, lang } = useLang();
-  const { addReport } = useVisit(jobId);
+  const { t, t2, p, lang } = useLang();
+  const { state, addReport } = useVisit(jobId);
   const [side, setSide] = useState<string>("back");
   const [detail, setDetail] = useState("");
   const [note, setNote] = useState("");
+  const [heard, setHeard] = useState("");
   const [fixedOnSite, setFixedOnSite] = useState(false);
   const [materials, setMaterials] = useState("");
   const [originalCrew, setOriginalCrew] = useState("");
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
 
   const takePhoto = async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -38,22 +41,68 @@ export default function ReportScreen({ navigation, route }: Props) {
     if (!result.canceled && result.assets[0]) setPhotoUri(result.assets[0].uri);
   };
 
+  const resetForm = () => {
+    setSide("back");
+    setDetail("");
+    setNote("");
+    setHeard("");
+    setFixedOnSite(false);
+    setMaterials("");
+    setOriginalCrew("");
+    setPhotoUri(null);
+  };
+
   const send = async () => {
     const sideLabel = SIDES.find((s) => s.key === side);
     const location = `${sideLabel?.en ?? side}${detail ? ` — ${detail}` : ""}`;
-    // Voice pipeline lands in M2: until then the typed note IS the English note.
     const photoBase64 = photoUri ? await downscalePhoto(photoUri) : undefined;
     addReport({
       location,
       englishNote: note.trim(),
+      heardText: heard.trim() || undefined,
       reportedBy: undefined,
       fixedOnSite: fixedOnSite || undefined,
       materialsNote: fixedOnSite && materials.trim() ? materials.trim() : undefined,
       originalCrew: originalCrew.trim() || undefined,
       photoBase64,
     });
-    navigation.goBack();
+    resetForm();
+    setJustSaved(true);
   };
+
+  if (justSaved) {
+    return (
+      <SafeAreaView style={styles.root} edges={["top"]}>
+        <View style={styles.savedWrap}>
+          <View style={styles.savedBadge}>
+            <Text style={{ fontSize: 34, color: colors.greenDark }}>✓</Text>
+          </View>
+          <Text style={styles.savedTitle}>{p({ es: "Reporte guardado", en: "Report saved" })}</Text>
+          <Text style={styles.savedSub}>
+            {state.reports.length} {t("problemsReported")} ·{" "}
+            {p({
+              es: "se envían con la inspección al terminar",
+              en: "they go to JobTread when you finish & send",
+            })}
+          </Text>
+          <View style={{ alignSelf: "stretch" }}>
+            <BigButton
+              bi={{ es: "Reportar otro problema", en: "Report another problem" }}
+              color={colors.orange}
+              onPress={() => setJustSaved(false)}
+            />
+          </View>
+          <View style={{ alignSelf: "stretch" }}>
+            <BigButton
+              bi={{ es: "Listo", en: "Done" }}
+              color={colors.greenDark}
+              onPress={() => navigation.goBack()}
+            />
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -106,18 +155,21 @@ export default function ReportScreen({ navigation, route }: Props) {
           />
         </View>
 
+        <VoiceNoteButton
+          onText={(en, original) => {
+            setNote((prev) => (prev ? `${prev}\n${en}` : en));
+            setHeard((prev) => (prev ? `${prev}\n${original}` : original));
+          }}
+        />
         <Card style={{ gap: 8 }}>
-          <Text style={styles.micHint}>
-            {t("holdAndSpeak")} — {t("speakAnyLanguage")}
-          </Text>
           <TextInput
             value={note}
             onChangeText={setNote}
             multiline
             placeholder={
               lang === "es"
-                ? "Nota en inglés para la oficina (la voz llega en M2 — por ahora escribe)"
-                : "English note for the office (voice lands in M2 — type for now)"
+                ? "Habla con el micrófono o escribe aquí"
+                : "Use the mic above or type here"
             }
             placeholderTextColor="#9AA8B8"
             style={[styles.input, { minHeight: 88, textAlignVertical: "top" }]}
@@ -255,7 +307,17 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginTop: 8,
   },
-  micHint: { fontSize: 12.5, fontWeight: "600", color: colors.muted },
   noteTag: { fontSize: 10, fontWeight: "700", color: colors.blue, letterSpacing: 0.4 },
   footnote: { textAlign: "center", fontSize: 11.5, color: "#66788C" },
+  savedWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12 },
+  savedBadge: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: colors.greenTint,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  savedTitle: { fontSize: 24, fontWeight: "700", color: colors.ink },
+  savedSub: { fontSize: 13.5, color: colors.muted, textAlign: "center", marginBottom: 8 },
 });

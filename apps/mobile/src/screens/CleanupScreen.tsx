@@ -9,14 +9,16 @@ import { Card, LangPill, TriToggle } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
 import { colors } from "../theme";
+import { VoiceNotesSection } from "../VoiceNote";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Cleanup">;
 
 export default function CleanupScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
   const { t, t2, p, s } = useLang();
-  const { state, setAnswer } = useVisit(jobId);
+  const { state, setAnswer, setNote } = useVisit(jobId);
   const done = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
+  const note = state.notes[CLEANUP_FORM.notesField] ?? "";
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -52,6 +54,7 @@ export default function CleanupScreen({ navigation, route }: Props) {
             />
           </Card>
         ))}
+        <VoiceNotesSection note={note} onChange={(text) => setNote(CLEANUP_FORM.notesField, text)} />
         <Text style={styles.hint}>
           {t("seeDamageReport")} · {t2("seeDamageReport")}
         </Text>

@@ -31,6 +31,10 @@ export default function SendScreen({ navigation, route }: Props) {
   const inspectionDone = INSPECTION_FORM.optionFields.filter((f) => state.inspection[f]).length;
   const cleanupDone = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
 
+  // Each form only accepts its own field ids, so split the shared notes map.
+  const textsFor = (ids: readonly string[]) =>
+    Object.fromEntries(Object.entries(state.notes).filter(([id, v]) => ids.includes(id) && v.trim()));
+
   const send = async () => {
     setSending(true);
     try {
@@ -38,10 +42,17 @@ export default function SendScreen({ navigation, route }: Props) {
       const outcomes = [
         await submitInspection(
           jobId,
-          { answers: state.inspection, texts: state.notes },
+          {
+            answers: state.inspection,
+            texts: textsFor([INSPECTION_FORM.atticNotesField, INSPECTION_FORM.notesField]),
+          },
           `Inspección · Inspection${suffix}`,
         ),
-        await submitCleanup(jobId, { answers: state.cleanup }, `Limpieza · Cleanup${suffix}`),
+        await submitCleanup(
+          jobId,
+          { answers: state.cleanup, texts: textsFor([CLEANUP_FORM.notesField]) },
+          `Limpieza · Cleanup${suffix}`,
+        ),
       ];
       for (const report of state.reports) {
         outcomes.push(await sendReport(jobId, report, `Reporte · Report${suffix}`));
