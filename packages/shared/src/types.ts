@@ -122,6 +122,8 @@ export interface ProblemReport {
   originalCrew?: string;
   /** Photo of the problem (data URI, downscaled client-side); attached to the JT task. */
   photoBase64?: string;
+  /** Several problem photos (data URIs); each is attached to the JT task. */
+  photosBase64?: string[];
 }
 
 export interface ApiError {

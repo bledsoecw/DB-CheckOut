@@ -798,9 +798,14 @@ function createHandler(deps) {
             ...report,
             reportedBy: session.name
           });
-          let photoUploaded = false;
-          const photo = decodePhoto(report.photoBase64);
-          if (photo) {
+          const sources = [
+            ...Array.isArray(report.photosBase64) ? report.photosBase64 : [],
+            report.photoBase64
+          ];
+          let photosUploaded = 0;
+          for (const source of sources) {
+            const photo = decodePhoto(source);
+            if (!photo) continue;
             try {
               await uploadPhoto(deps.pave, jobId, {
                 label: "REPORT",
@@ -808,12 +813,11 @@ function createHandler(deps) {
                 taskId: id || void 0,
                 byName: session.name
               });
-              photoUploaded = true;
+              photosUploaded += 1;
             } catch {
-              photoUploaded = false;
             }
           }
-          return json(res, 200, { taskId: id, photoUploaded });
+          return json(res, 200, { taskId: id, photosUploaded, photoUploaded: photosUploaded > 0 });
         }
         if (parts[2] === "photos") {
           const body = await readBody(req);

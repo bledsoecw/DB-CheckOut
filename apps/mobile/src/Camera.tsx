@@ -8,10 +8,11 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useLang } from "./i18n";
 import { downscalePhoto } from "./photo";
+import { playShutterSound, primeShutterSound } from "./shutterSound";
 
 const MAX_DIM = 1600;
 const JPEG_QUALITY = 0.8;
@@ -26,12 +27,16 @@ interface Props {
 export default function CameraView({ mode, onCapture, onClose }: Props) {
   const { p } = useLang();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const flashRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const busyRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [count, setCount] = useState(0);
   const [lastShot, setLastShot] = useState<string | null>(null);
-  const [flash, setFlash] = useState(false);
+  // One-handed landscape: the controls move to a right-edge column so the
+  // shutter sits under the right thumb (DB Cam behavior).
+  const { width, height } = useWindowDimensions();
+  const landscape = width > height;
 
   const stopStream = () => {
     for (const track of streamRef.current?.getTracks() ?? []) track.stop();
@@ -80,6 +85,9 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
       }
     };
 
+    // The tap that opened the camera is a completed gesture — unlock the
+    // shutter sound on it.
+    primeShutterSound();
     if (g.navigator?.mediaDevices?.getUserMedia) void start();
     else void fallbackPicker();
 
@@ -89,6 +97,14 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Element.animate restarts reliably even while the main thread is busy
+  // encoding the previous shot — a CSS-class toggle got swallowed in
+  // bursts (DB Cam lesson: only the first picture of a series flashed).
+  const flashScreen = () => {
+    const f = flashRef.current;
+    if (f?.animate) f.animate([{ opacity: 0.85 }, { opacity: 0 }], { duration: 260, easing: "ease-out" });
+  };
 
   const shutter = () => {
     const video = videoRef.current;
@@ -102,6 +118,8 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
       canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
       canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUri = canvas.toDataURL("image/jpeg", JPEG_QUALITY) as string;
+      playShutterSound();
+      flashScreen();
       onCapture(dataUri);
       if (mode === "single") {
         stopStream();
@@ -110,8 +128,6 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
       }
       setCount((n) => n + 1);
       setLastShot(dataUri);
-      setFlash(true);
-      setTimeout(() => setFlash(false), 120);
     } finally {
       busyRef.current = false;
     }
@@ -139,7 +155,17 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
           backgroundColor: "#000",
         },
       })}
-      {flash ? <View style={styles.flash} /> : null}
+      {React.createElement("div", {
+        ref: flashRef,
+        style: {
+          position: "absolute",
+          inset: 0,
+          background: "#fff",
+          opacity: 0,
+          pointerEvents: "none",
+          zIndex: 2,
+        },
+      })}
 
       <View style={styles.topBar}>
         <Pressable onPress={close} style={styles.closeBtn} hitSlop={10}>
@@ -154,19 +180,19 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
         ) : null}
       </View>
 
-      <View style={styles.bottomBar}>
-        <View style={styles.thumbSlot}>
-          {lastShot ? <Image source={{ uri: lastShot }} style={styles.thumb} /> : null}
-        </View>
-        <Pressable onPress={shutter} style={styles.shutterOuter} hitSlop={12}>
-          <View style={styles.shutterInner} />
-        </Pressable>
+      <View style={landscape ? styles.rightBar : styles.bottomBar}>
         <View style={styles.thumbSlot}>
           {mode === "burst" ? (
             <Pressable onPress={close} hitSlop={10}>
               <Text style={styles.doneText}>{p({ es: "Listo", en: "Done" })}</Text>
             </Pressable>
           ) : null}
+        </View>
+        <Pressable onPress={shutter} style={styles.shutterOuter} hitSlop={12}>
+          <View style={styles.shutterInner} />
+        </Pressable>
+        <View style={styles.thumbSlot}>
+          {lastShot ? <Image source={{ uri: lastShot }} style={styles.thumb} /> : null}
         </View>
       </View>
 
@@ -182,15 +208,6 @@ export default function CameraView({ mode, onCapture, onClose }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
-  flash: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(255,255,255,0.7)",
-    zIndex: 2,
-  },
   topBar: {
     position: "absolute",
     top: 0,
@@ -230,6 +247,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     paddingBottom: 30,
     paddingTop: 16,
+    zIndex: 3,
+  },
+  rightBar: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 28,
+    paddingRight: 22,
+    paddingLeft: 12,
     zIndex: 3,
   },
   thumbSlot: { width: 56, height: 56, alignItems: "center", justifyContent: "center" },

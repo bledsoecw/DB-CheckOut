@@ -23,7 +23,7 @@ export default function ReportScreen({ navigation, route }: Props) {
   const [fixedOnSite, setFixedOnSite] = useState(false);
   const [materials, setMaterials] = useState("");
   const [originalCrew, setOriginalCrew] = useState("");
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<string[]>([]);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [saved, setSaved] = useState<"sent" | "queued" | null>(null);
@@ -42,11 +42,11 @@ export default function ReportScreen({ navigation, route }: Props) {
     setFixedOnSite(false);
     setMaterials("");
     setOriginalCrew("");
-    setPhotoUri(null);
+    setPhotos([]);
   };
 
   const missing = [
-    !photoUri ? p({ es: "foto", en: "photo" }) : null,
+    photos.length === 0 ? p({ es: "foto", en: "photo" }) : null,
     !note.trim() ? p({ es: "nota", en: "note" }) : null,
   ].filter((m): m is string => m !== null);
 
@@ -61,7 +61,7 @@ export default function ReportScreen({ navigation, route }: Props) {
       fixedOnSite: fixedOnSite || undefined,
       materialsNote: fixedOnSite && materials.trim() ? materials.trim() : undefined,
       originalCrew: originalCrew.trim() || undefined,
-      photoBase64: photoUri ?? undefined,
+      photosBase64: photos.length > 0 ? photos : undefined,
     };
     setSending(true);
     try {
@@ -138,8 +138,8 @@ export default function ReportScreen({ navigation, route }: Props) {
 
       {cameraOpen ? (
         <CameraView
-          mode="single"
-          onCapture={setPhotoUri}
+          mode="burst"
+          onCapture={(uri) => setPhotos((prev) => [...prev, uri])}
           onClose={() => setCameraOpen(false)}
         />
       ) : null}
@@ -147,28 +147,43 @@ export default function ReportScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
         <View>
           <Text style={styles.label}>
-            {t("takePhoto").toUpperCase()}{" "}
-            <Text style={photoUri ? styles.reqDone : styles.reqTag}>
-              {photoUri ? "✓" : `— ${p({ es: "OBLIGATORIA", en: "REQUIRED" })}`}
+            {p({ es: "TOMAR FOTOS", en: "TAKE PHOTOS" })}{" "}
+            <Text style={photos.length > 0 ? styles.reqDone : styles.reqTag}>
+              {photos.length > 0
+                ? `✓ ${photos.length}`
+                : `— ${p({ es: "OBLIGATORIA", en: "REQUIRED" })}`}
             </Text>
           </Text>
-          <Pressable onPress={() => setCameraOpen(true)}>
-            {photoUri ? (
-              <View>
-                <Image source={{ uri: photoUri }} style={styles.photo} />
-                <View style={styles.retake}>
-                  <Text style={styles.retakeText}>
-                    {p({ es: "Tomar otra", en: "Retake" })}
-                  </Text>
+          {photos.length > 0 ? (
+            <View style={styles.photoGrid}>
+              {photos.map((uri, i) => (
+                <View key={i} style={styles.photoThumbWrap}>
+                  <Image source={{ uri }} style={styles.photoThumb} />
+                  <Pressable
+                    onPress={() => setPhotos((prev) => prev.filter((_, k) => k !== i))}
+                    style={styles.photoRemove}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.photoRemoveText}>✕</Text>
+                  </Pressable>
                 </View>
-              </View>
-            ) : (
+              ))}
+              <Pressable onPress={() => setCameraOpen(true)} style={styles.photoMore}>
+                <Text style={styles.photoMoreText}>📷{"\n"}+</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable onPress={() => setCameraOpen(true)}>
               <View style={styles.photoEmpty}>
-                <Text style={styles.photoEmptyTitle}>📷 {t("takePhoto")}</Text>
-                <Text style={styles.photoEmptySub}>{t2("takePhoto")}</Text>
+                <Text style={styles.photoEmptyTitle}>
+                  📷 {p({ es: "Tomar fotos", en: "Take photos" })}
+                </Text>
+                <Text style={styles.photoEmptySub}>
+                  {p({ es: "Todas las que necesites", en: "As many as you need" })}
+                </Text>
               </View>
-            )}
-          </Pressable>
+            </Pressable>
+          )}
         </View>
 
         <View>
@@ -360,16 +375,33 @@ const styles = StyleSheet.create({
   noteTag: { fontSize: 10, fontWeight: "700", color: colors.blue, letterSpacing: 0.4 },
   reqTag: { fontSize: 11, fontWeight: "700", color: colors.red },
   reqDone: { fontSize: 13, fontWeight: "700", color: colors.greenDark },
-  retake: {
+  photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  photoThumbWrap: { position: "relative" },
+  photoThumb: { width: 84, height: 84, borderRadius: 12 },
+  photoRemove: {
     position: "absolute",
-    right: 10,
-    bottom: 10,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    right: -6,
+    top: -6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.red,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  retakeText: { color: "#fff", fontSize: 12.5, fontWeight: "700" },
+  photoRemoveText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  photoMore: {
+    width: 84,
+    height: 84,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderStyle: "dashed",
+    borderColor: "#B7C4D4",
+    backgroundColor: "#FBFCFE",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  photoMoreText: { fontSize: 17, textAlign: "center", color: colors.muted, fontWeight: "700" },
   missing: { textAlign: "center", fontSize: 12.5, fontWeight: "700", color: colors.red },
   footnote: { textAlign: "center", fontSize: 11.5, color: "#66788C" },
   savedWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12 },
