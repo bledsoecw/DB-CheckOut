@@ -37,8 +37,15 @@ export default function JobScreen({ navigation, route }: Props) {
 
   const inspectionDone = INSPECTION_FORM.optionFields.filter((f) => state.inspection[f]).length;
   const cleanupDone = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
-  const remaining =
-    INSPECTION_FORM.optionFields.length - inspectionDone + CLEANUP_FORM.optionFields.length - cleanupDone;
+  const inspectionLeft = INSPECTION_FORM.optionFields.length - inspectionDone;
+  const cleanupLeft = CLEANUP_FORM.optionFields.length - cleanupDone;
+
+  // One gate for the one send: photos + both checklists complete.
+  const missing = [
+    state.visitPhotos.length === 0 ? p({ es: "fotos", en: "photos" }) : null,
+    inspectionLeft > 0 ? `${p({ es: "inspección", en: "inspection" })} (${inspectionLeft})` : null,
+    cleanupLeft > 0 ? `${p({ es: "limpieza", en: "cleanup" })} (${cleanupLeft})` : null,
+  ].filter((m): m is string => m !== null);
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -86,6 +93,22 @@ export default function JobScreen({ navigation, route }: Props) {
           </Card>
         ) : null}
 
+        {state.lastSentAt && missing.length === 3 && state.reports.length === 0 ? (
+          <Card style={styles.sentCard}>
+            <Text style={styles.sentText}>
+              ✓{" "}
+              {p({ es: "Visita enviada a JobTread", en: "Visit sent to JobTread" })} ·{" "}
+              {new Date(state.lastSentAt).toLocaleString()}
+            </Text>
+            <Text style={styles.sentSub}>
+              {p({
+                es: "Lo de abajo empieza una visita nueva.",
+                en: "Anything below starts a new visit.",
+              })}
+            </Text>
+          </Card>
+        ) : null}
+
         <PhotosCard jobId={jobId} />
 
         {job && job.soldScope.length > 0 ? <ScopeCard jobId={jobId} docs={job.soldScope} /> : null}
@@ -103,7 +126,7 @@ export default function JobScreen({ navigation, route }: Props) {
           onPress={() => navigation.navigate("Cleanup", { jobId })}
         />
         <Tile
-          title={{ es: "Reportar problema", en: "Report a problem" }}
+          title={{ es: "Problemas (opcional)", en: "Problems (optional)" }}
           progress={state.reports.length > 0 ? `${state.reports.length}` : ""}
           color={colors.orange}
           onPress={() => navigation.navigate("Report", { jobId })}
@@ -118,16 +141,23 @@ export default function JobScreen({ navigation, route }: Props) {
         ) : null}
 
         <BigButton
-          bi={{ es: "Terminar y enviar", en: "Finish & send" }}
+          bi={{ es: "Enviar todo a JobTread", en: "Send everything to JobTread" }}
           color={colors.greenDark}
-          disabled={remaining > 0}
+          disabled={missing.length > 0}
           onPress={() => navigation.navigate("Send", { jobId })}
         />
-        <Text style={styles.footnote}>
-          {remaining > 0
-            ? `${remaining} ${t("itemsLeft")} / ${t2("itemsLeft")}`
-            : `${t("sendToJobTread")} · ${t2("sendToJobTread")}`}
-        </Text>
+        {missing.length > 0 ? (
+          <Text style={styles.missingLine}>
+            {p({ es: "Falta", en: "Missing" })}: {missing.join(" · ")}
+          </Text>
+        ) : (
+          <Text style={styles.footnote}>
+            {p({
+              es: `Fotos, formularios${state.reports.length > 0 ? ` y ${state.reports.length} problema(s)` : ""} — todo en un solo envío.`,
+              en: `Photos, forms${state.reports.length > 0 ? ` and ${state.reports.length} problem(s)` : ""} — everything in one send.`,
+            })}
+          </Text>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -361,6 +391,10 @@ const styles = StyleSheet.create({
   title: { fontSize: 19, fontWeight: "700", color: colors.ink },
   subtitle: { fontSize: 12, color: colors.muted },
   addressCard: { flexDirection: "row", alignItems: "center", gap: 12 },
+  sentCard: { backgroundColor: colors.greenTint, borderColor: "#BFE3C4", gap: 2 },
+  sentText: { fontSize: 13.5, fontWeight: "700", color: colors.greenDark },
+  sentSub: { fontSize: 11.5, color: colors.greenDark },
+  missingLine: { textAlign: "center", fontSize: 12.5, fontWeight: "700", color: colors.red },
   offlineCard: { gap: 10 },
   offlineTitle: { fontSize: 15.5, fontWeight: "700", color: colors.ink },
   offlineSub: { fontSize: 12.5, color: colors.muted, lineHeight: 18 },

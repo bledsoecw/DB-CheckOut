@@ -22,6 +22,8 @@ export interface VisitState {
   visitPhotos: string[];
   /** Photos staged for the problem report being written, until it's sent. */
   reportPhotos: string[];
+  /** When this job's visit was last sent — survives the post-send clear. */
+  lastSentAt: string | null;
 }
 
 const EMPTY: VisitState = {
@@ -32,6 +34,7 @@ const EMPTY: VisitState = {
   afterPhotos: {},
   visitPhotos: [],
   reportPhotos: [],
+  lastSentAt: null,
 };
 const key = (jobId: string) => `db-checkout.visit.${jobId}`;
 
@@ -90,9 +93,11 @@ export function useVisit(jobId: string) {
     clearReportPhotos: () => update((prev) => ({ ...prev, reportPhotos: [] })),
     setAfterPhoto: (taskId: string) =>
       update((prev) => ({ ...prev, afterPhotos: { ...prev.afterPhotos, [taskId]: true } })),
-    clear: () => {
-      memory.set(jobId, EMPTY);
-      AsyncStorage.removeItem(key(jobId)).catch(() => {});
+    clear: (sentAt?: string) => {
+      const prev = memory.get(jobId) ?? EMPTY;
+      const next = { ...EMPTY, lastSentAt: sentAt ?? prev.lastSentAt };
+      memory.set(jobId, next);
+      AsyncStorage.setItem(key(jobId), JSON.stringify(next)).catch(() => {});
       notify();
     },
   };

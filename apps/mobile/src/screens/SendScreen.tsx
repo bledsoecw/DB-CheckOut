@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getJob, submitCleanup, submitInspection, uploadJobPhoto } from "../api";
+import { getJob, sendReport, submitCleanup, submitInspection, uploadJobPhoto } from "../api";
 import { BigButton, Card } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
@@ -12,12 +12,18 @@ import { colors } from "../theme";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Send">;
 
+/** One line of the post-send receipt. */
+interface ReceiptItem {
+  label: string;
+  outcome: "sent" | "queued";
+}
+
 export default function SendScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
   const { t, t2, p } = useLang();
   const { state, clear } = useVisit(jobId);
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<"sent" | "queued" | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptItem[] | null>(null);
   const [jobLabel, setJobLabel] = useState("");
 
   useEffect(() => {
@@ -35,17 +41,27 @@ export default function SendScreen({ navigation, route }: Props) {
   const textsFor = (ids: readonly string[]) =>
     Object.fromEntries(Object.entries(state.notes).filter(([id, v]) => ids.includes(id) && v.trim()));
 
+  // THE send: the whole visit — photos, both forms, saved problems — goes
+  // up as one packet, and every piece gets a line on the receipt.
   const send = async () => {
     setSending(true);
     try {
       const suffix = jobLabel ? ` — ${jobLabel}` : "";
-      const outcomes: Array<"sent" | "queued"> = [];
-      // Visit photos stayed on the phone until now — this is the upload.
-      for (const uri of state.visitPhotos) {
-        outcomes.push(await uploadJobPhoto(jobId, "INSPECTION", uri, undefined, `Foto · Photo${suffix}`));
+      const items: ReceiptItem[] = [];
+
+      if (state.visitPhotos.length > 0) {
+        const results = [];
+        for (const uri of state.visitPhotos) {
+          results.push(await uploadJobPhoto(jobId, "INSPECTION", uri, undefined, `Foto · Photo${suffix}`));
+        }
+        items.push({
+          label: `${state.visitPhotos.length} ${p({ es: "fotos", en: "photos" })}`,
+          outcome: results.every((r) => r === "sent") ? "sent" : "queued",
+        });
       }
-      outcomes.push(
-        await submitInspection(
+      items.push({
+        label: `${t("inspection")} · ${t2("inspection")}`,
+        outcome: await submitInspection(
           jobId,
           {
             answers: state.inspection,
@@ -53,26 +69,33 @@ export default function SendScreen({ navigation, route }: Props) {
           },
           `Inspección · Inspection${suffix}`,
         ),
-        await submitCleanup(
+      });
+      items.push({
+        label: `${t("cleanup")} · ${t2("cleanup")}`,
+        outcome: await submitCleanup(
           jobId,
           { answers: state.cleanup, texts: textsFor([CLEANUP_FORM.notesField]) },
           `Limpieza · Cleanup${suffix}`,
         ),
-      );
-      // Problem reports were already sent (or queued) the moment they were
-      // saved on the report screen — only the two checklists go out here.
-      clear();
-      setResult(outcomes.every((o) => o === "sent") ? "sent" : "queued");
+      });
+      for (const report of state.reports) {
+        items.push({
+          label: `${p({ es: "Problema", en: "Problem" })}: ${report.location}`,
+          outcome: await sendReport(jobId, report, `Problema · Problem${suffix}`),
+        });
+      }
+      clear(new Date().toISOString());
+      setReceipt(items);
     } finally {
       setSending(false);
     }
   };
 
-  if (result) {
-    const sent = result === "sent";
+  if (receipt) {
+    const sent = receipt.every((i) => i.outcome === "sent");
     return (
       <SafeAreaView style={styles.root} edges={["top"]}>
-        <View style={styles.resultWrap}>
+        <ScrollView contentContainerStyle={styles.resultWrap}>
           <View style={[styles.heroBadge, sent ? null : styles.heroBadgeQueued]}>
             <Text style={{ fontSize: 34, color: sent ? colors.greenDark : "#8A6100" }}>
               {sent ? "✓" : "⏳"}
@@ -83,13 +106,33 @@ export default function SendScreen({ navigation, route }: Props) {
               ? p({ es: "Enviado a JobTread", en: "Sent to JobTread" })
               : p({ es: "Guardado — aún no llega", en: "Saved — not delivered yet" })}
           </Text>
+
+          <Card style={styles.receipt}>
+            {receipt.map((item, i) => (
+              <View key={i} style={styles.receiptRow}>
+                <Text style={{ fontSize: 15 }}>{item.outcome === "sent" ? "✓" : "⏳"}</Text>
+                <Text style={styles.receiptLabel} numberOfLines={1}>
+                  {item.label}
+                </Text>
+                <Text
+                  style={[
+                    styles.receiptState,
+                    { color: item.outcome === "sent" ? colors.greenDark : "#8A6100" },
+                  ]}
+                >
+                  {item.outcome === "sent"
+                    ? p({ es: "enviado", en: "sent" })
+                    : p({ es: "se reintenta", en: "will retry" })}
+                </Text>
+              </View>
+            ))}
+          </Card>
+
           <Text style={styles.resultSub}>
-            {sent
-              ? p({ es: "La oficina ya lo puede ver.", en: "The office can see it now." })
-              : p({
-                  es: "Se reintenta solo. Revísalo en «Por enviar» — ahí dice el motivo.",
-                  en: "It retries by itself. Check “Waiting to send” — the reason shows there.",
-                })}
+            {p({
+              es: "En JobTread: formularios en Forms del trabajo · problemas en Tasks (To-Dos) · fotos en Files.",
+              en: "In JobTread: forms under the job's Forms · problems under Tasks (To-Dos) · photos under Files.",
+            })}
           </Text>
           {!sent ? (
             <View style={{ alignSelf: "stretch" }}>
@@ -107,7 +150,7 @@ export default function SendScreen({ navigation, route }: Props) {
               onPress={() => navigation.popToTop()}
             />
           </View>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -155,8 +198,7 @@ export default function SendScreen({ navigation, route }: Props) {
         {state.reports.length > 0 ? (
           <Card style={styles.reports}>
             <Text style={styles.reportsTitle}>
-              {state.reports.length} {t("problemsReported")} —{" "}
-              {p({ es: "ya enviados", en: "already sent" })}
+              {state.reports.length} {t("problemsReported")}
             </Text>
             {state.reports.map((r, i) => (
               <Text key={i} style={r.fixedOnSite ? styles.reportLineFixed : styles.reportLine}>
@@ -170,7 +212,11 @@ export default function SendScreen({ navigation, route }: Props) {
         ) : null}
 
         <BigButton
-          bi={{ es: "Enviar a JobTread", en: "Send to JobTread" }}
+          bi={
+            sending
+              ? { es: "Enviando…", en: "Sending…" }
+              : { es: "Enviar todo a JobTread", en: "Send everything to JobTread" }
+          }
           color={colors.greenDark}
           disabled={sending}
           onPress={send}
@@ -223,7 +269,7 @@ const styles = StyleSheet.create({
   heroBadgeQueued: { backgroundColor: "#FBF0D9" },
   heroTitle: { fontSize: 24, fontWeight: "700", color: colors.ink },
   resultWrap: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
@@ -236,6 +282,10 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 8,
   },
+  receipt: { alignSelf: "stretch", gap: 8 },
+  receiptRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  receiptLabel: { flex: 1, fontSize: 13.5, color: colors.ink },
+  receiptState: { fontSize: 12, fontWeight: "700" },
   heroSub: { fontSize: 13, color: colors.muted },
   summary: { flexDirection: "row", alignItems: "center", gap: 12 },
   summaryLabel: { fontSize: 15, fontWeight: "700", color: colors.ink },

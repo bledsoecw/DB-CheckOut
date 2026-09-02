@@ -3,7 +3,6 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../App";
-import { getJob, sendReport } from "../api";
 import CameraView from "../Camera";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
@@ -33,15 +32,7 @@ export default function ReportScreen({ navigation, route }: Props) {
   const photos = state.reportPhotos;
   const [viewing, setViewing] = useState<number | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [saved, setSaved] = useState<"sent" | "queued" | null>(null);
-  const [jobLabel, setJobLabel] = useState("");
-
-  useEffect(() => {
-    getJob(jobId)
-      .then((job) => setJobLabel(job.name || job.number))
-      .catch(() => {});
-  }, [jobId]);
+  const [saved, setSaved] = useState(false);
 
   const resetForm = () => {
     setDetail("");
@@ -58,10 +49,12 @@ export default function ReportScreen({ navigation, route }: Props) {
     !note.trim() ? p({ es: "nota", en: "note" }) : null,
   ].filter((m): m is string => m !== null);
 
-  const send = async () => {
+  // Saves ON THE PHONE only — everything goes up together with the one
+  // "Send everything to JobTread" on the job screen.
+  const save = () => {
     // The task name the PM sees in JobTread: the detail, or the note's start.
     const location = detail.trim() || note.trim().slice(0, 60);
-    const report = {
+    addReport({
       location,
       englishNote: note.trim(),
       heardText: heard.trim() || undefined,
@@ -70,53 +63,31 @@ export default function ReportScreen({ navigation, route }: Props) {
       materialsNote: fixedOnSite && materials.trim() ? materials.trim() : undefined,
       originalCrew: originalCrew.trim() || undefined,
       photosBase64: photos.length > 0 ? photos : undefined,
-    };
-    setSending(true);
-    try {
-      // Goes to JobTread right away (or into the outbox with no signal) —
-      // it does not wait for "Finish & send".
-      const outcome = await sendReport(
-        jobId,
-        report,
-        `Reporte · Report${jobLabel ? ` — ${jobLabel}` : ""}`,
-      );
-      addReport(report);
-      resetForm();
-      setSaved(outcome);
-    } finally {
-      setSending(false);
-    }
+    });
+    resetForm();
+    setSaved(true);
   };
 
   if (saved) {
-    const sent = saved === "sent";
     return (
       <SafeAreaView style={styles.root} edges={["top"]}>
         <View style={styles.savedWrap}>
-          <View style={[styles.savedBadge, sent ? null : styles.savedBadgeQueued]}>
-            <Text style={{ fontSize: 34, color: sent ? colors.greenDark : "#8A6100" }}>
-              {sent ? "✓" : "⏳"}
-            </Text>
+          <View style={styles.savedBadge}>
+            <Text style={{ fontSize: 34, color: colors.greenDark }}>✓</Text>
           </View>
-          <Text style={styles.savedTitle}>
-            {sent
-              ? p({ es: "Reporte enviado a JobTread", en: "Report sent to JobTread" })
-              : p({ es: "Reporte guardado — aún no llega", en: "Report saved — not delivered yet" })}
-          </Text>
+          <Text style={styles.savedTitle}>{p({ es: "Problema guardado", en: "Problem saved" })}</Text>
           <Text style={styles.savedSub}>
             {state.reports.length} {t("problemsReported")} ·{" "}
-            {sent
-              ? p({ es: "el PM ya lo puede ver", en: "the PM can see it now" })
-              : p({
-                  es: "se reintenta solo — míralo en «Por enviar», ahí dice el motivo",
-                  en: "it retries by itself — see “Waiting to send” for the reason",
-                })}
+            {p({
+              es: "va a JobTread cuando envíes todo al terminar la visita",
+              en: "goes to JobTread when you send everything at the end of the visit",
+            })}
           </Text>
           <View style={{ alignSelf: "stretch" }}>
             <BigButton
               bi={{ es: "Reportar otro problema", en: "Report another problem" }}
               color={colors.orange}
-              onPress={() => setSaved(null)}
+              onPress={() => setSaved(false)}
             />
           </View>
           <View style={{ alignSelf: "stretch" }}>
@@ -290,15 +261,13 @@ export default function ReportScreen({ navigation, route }: Props) {
 
         <BigButton
           bi={
-            sending
-              ? { es: "Enviando…", en: "Sending…" }
-              : fixedOnSite
-                ? { es: "Guardar lo que arreglé", en: "Save what I fixed" }
-                : { es: "Enviar reporte", en: "Send report" }
+            fixedOnSite
+              ? { es: "Guardar lo que arreglé", en: "Save what I fixed" }
+              : { es: "Guardar problema", en: "Save problem" }
           }
           color={fixedOnSite ? colors.greenDark : colors.orange}
-          disabled={sending || missing.length > 0}
-          onPress={send}
+          disabled={missing.length > 0}
+          onPress={save}
         />
         {missing.length > 0 ? (
           <Text style={styles.missing}>
@@ -316,8 +285,8 @@ export default function ReportScreen({ navigation, route }: Props) {
         )}
         <Text style={styles.footnote}>
           {p({
-            es: "¿Más de un problema? Envía este y luego toca «Reportar otro problema».",
-            en: "More than one problem? Send this one, then tap “Report another problem”.",
+            es: "Se envía junto con todo al terminar la visita. ¿Más de un problema? Guarda este y toca «Reportar otro».",
+            en: "Goes up with everything when you finish the visit. More than one problem? Save this one and tap “Report another”.",
           })}
         </Text>
       </ScrollView>
