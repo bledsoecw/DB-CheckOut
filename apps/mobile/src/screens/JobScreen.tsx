@@ -141,7 +141,7 @@ export default function JobScreen({ navigation, route }: Props) {
         ) : null}
 
         <BigButton
-          bi={{ es: "Enviar todo a JobTread", en: "Send everything to JobTread" }}
+          bi={{ es: "Revisar y enviar", en: "Review & send" }}
           color={colors.greenDark}
           disabled={missing.length > 0}
           onPress={() => navigation.navigate("Send", { jobId })}
@@ -153,8 +153,8 @@ export default function JobScreen({ navigation, route }: Props) {
         ) : (
           <Text style={styles.footnote}>
             {p({
-              es: `Fotos, formularios${state.reports.length > 0 ? ` y ${state.reports.length} problema(s)` : ""} — todo en un solo envío.`,
-              en: `Photos, forms${state.reports.length > 0 ? ` and ${state.reports.length} problem(s)` : ""} — everything in one send.`,
+              es: `Revisa fotos, formularios${state.reports.length > 0 ? ` y ${state.reports.length} problema(s)` : ""} antes del único envío.`,
+              en: `Review photos, forms${state.reports.length > 0 ? ` and ${state.reports.length} problem(s)` : ""} before the one send.`,
             })}
           </Text>
         )}
