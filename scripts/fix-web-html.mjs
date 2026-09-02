@@ -6,7 +6,7 @@
 // camera: preview letterboxed or running off the bottom of the screen, and
 // tap targets landing away from their pixels. The fixed body stops iOS
 // rubber-band panning of the page itself.
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 
 const path = "public/index.html";
 let html = readFileSync(path, "utf8");
@@ -23,5 +23,39 @@ if (!html.includes("dbco-lock")) {
   );
 }
 
+// Home-screen identity: the app installs as "DB Close Out" with the DB icon.
+// assets/app-icon/icon.png is the single source (its SVG lives next to it);
+// swap that file to change the icon everywhere.
+copyFileSync("assets/app-icon/icon.png", "public/app-icon.png");
+writeFileSync(
+  "public/manifest.json",
+  JSON.stringify(
+    {
+      name: "DB Close Out",
+      short_name: "DB Close Out",
+      start_url: "/",
+      display: "standalone",
+      background_color: "#1747A5",
+      theme_color: "#143A75",
+      icons: [{ src: "/app-icon.png", sizes: "1024x1024", type: "image/png", purpose: "any maskable" }],
+    },
+    null,
+    2,
+  ) + "\n",
+);
+html = html.replace(/<title>[^<]*<\/title>/, "<title>DB Close Out</title>");
+if (!html.includes("apple-touch-icon")) {
+  html = html.replace(
+    "</head>",
+    '<link rel="manifest" href="/manifest.json">\n' +
+      '<link rel="apple-touch-icon" href="/app-icon.png">\n' +
+      '<link rel="icon" type="image/png" href="/app-icon.png">\n' +
+      '<meta name="apple-mobile-web-app-capable" content="yes">\n' +
+      '<meta name="apple-mobile-web-app-title" content="DB Close Out">\n' +
+      '<meta name="apple-mobile-web-app-status-bar-style" content="default">\n' +
+      "</head>",
+  );
+}
+
 writeFileSync(path, html);
-console.log("public/index.html: viewport pinned, body locked");
+console.log("public/index.html: viewport pinned, body locked, DB Close Out icon + manifest");
