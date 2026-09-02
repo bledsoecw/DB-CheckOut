@@ -15,10 +15,15 @@ import { VoiceNoteButton } from "../VoiceNote";
 type Props = NativeStackScreenProps<RootStackParamList, "Report">;
 
 export default function ReportScreen({ navigation, route }: Props) {
-  const { jobId } = route.params;
+  const { jobId, from } = route.params;
   const { t, t2, p, s, lang } = useLang();
   const { state, addReport, addReportPhoto, removeReportPhoto, clearReportPhotos } = useVisit(jobId);
-  const [detail, setDetail] = useState("");
+  // Coming from a FALLA/FIX tap, the checklist line pre-fills "Where is it?".
+  const [detail, setDetail] = useState(from ?? "");
+
+  useEffect(() => {
+    if (from) setDetail(from);
+  }, [from]);
   const [note, setNote] = useState("");
   const [heard, setHeard] = useState("");
   const [fixedOnSite, setFixedOnSite] = useState(false);

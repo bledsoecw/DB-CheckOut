@@ -25,7 +25,8 @@ export type RootStackParamList = {
   Job: { jobId: string };
   Checklist: { jobId: string };
   Cleanup: { jobId: string };
-  Report: { jobId: string };
+  /** `from` pre-fills "Where is it?" with the checklist line that failed. */
+  Report: { jobId: string; from?: string };
   Send: { jobId: string };
   PunchList: { jobId: string };
   PunchItem: { jobId: string; taskId: string };

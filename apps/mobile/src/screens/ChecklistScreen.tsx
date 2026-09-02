@@ -54,7 +54,10 @@ export default function ChecklistScreen({ navigation, route }: Props) {
                 value={state.inspection[fieldId] ?? null}
                 onChange={(answer) => {
                   setAnswer("inspection", fieldId, answer);
-                  if (answer === ANSWER.action) navigation.navigate("Report", { jobId });
+                  if (answer === ANSWER.action) {
+                    // The failed line becomes the report's "Where is it?".
+                    navigation.navigate("Report", { jobId, from: FIELD_LABELS[fieldId].en });
+                  }
                 }}
               />
             </View>

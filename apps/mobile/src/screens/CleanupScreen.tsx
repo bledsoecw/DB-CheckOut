@@ -49,7 +49,9 @@ export default function CleanupScreen({ navigation, route }: Props) {
               value={state.cleanup[fieldId] ?? null}
               onChange={(answer) => {
                 setAnswer("cleanup", fieldId, answer);
-                if (answer === ANSWER.action) navigation.navigate("Report", { jobId });
+                if (answer === ANSWER.action) {
+                  navigation.navigate("Report", { jobId, from: FIELD_LABELS[fieldId].en });
+                }
               }}
             />
           </Card>
