@@ -133,6 +133,11 @@ export default function QueueScreen({ navigation }: Props) {
         ListFooterComponent={
           <View>
             <Text style={styles.footer}>{t("queueNote")}</Text>
+            <Pressable onPress={() => navigation.navigate("Outbox")} style={styles.change} hitSlop={8}>
+              <Text style={styles.changeText}>
+                {p({ es: "Por enviar", en: "Waiting to send" })} ({queued})
+              </Text>
+            </Pressable>
             <Pressable onPress={signOut} style={styles.change} hitSlop={8}>
               <Text style={styles.changeText}>
                 {mode === "demo"
