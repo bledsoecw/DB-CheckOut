@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { ANSWER, CLEANUP_FORM } from "@shared/jobtread";
 import { FIELD_LABELS } from "@shared/i18n";
 import type { RootStackParamList } from "../../App";
-import { Card, LangPill, TriToggle } from "../components";
+import { BigButton, Card, LangPill, TriToggle } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
 import { colors } from "../theme";
@@ -60,6 +60,19 @@ export default function CleanupScreen({ navigation, route }: Props) {
         <Text style={styles.hint}>
           {t("seeDamageReport")} · {t2("seeDamageReport")}
         </Text>
+
+        <BigButton
+          bi={{ es: "Limpieza completa ✓", en: "Cleanup complete ✓" }}
+          color={colors.green}
+          disabled={done < CLEANUP_FORM.optionFields.length}
+          onPress={() => navigation.goBack()}
+        />
+        {done < CLEANUP_FORM.optionFields.length ? (
+          <Text style={styles.leftHint}>
+            {CLEANUP_FORM.optionFields.length - done}{" "}
+            {p({ es: "puntos sin responder", en: "items unanswered" })}
+          </Text>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -98,4 +111,5 @@ const styles = StyleSheet.create({
   itemTitle: { fontSize: 14.5, fontWeight: "700", color: colors.ink },
   itemSub: { fontSize: 11.5, color: colors.faint },
   hint: { textAlign: "center", fontSize: 12, color: colors.orange, fontWeight: "600" },
+  leftHint: { textAlign: "center", fontSize: 12.5, fontWeight: "700", color: colors.red },
 });

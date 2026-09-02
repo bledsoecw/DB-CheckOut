@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { ANSWER, INSPECTION_FORM } from "@shared/jobtread";
 import { FIELD_LABELS } from "@shared/i18n";
 import type { RootStackParamList } from "../../App";
-import { Card, LangPill, TriToggle } from "../components";
+import { BigButton, Card, LangPill, TriToggle } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
 import { colors } from "../theme";
@@ -65,6 +65,19 @@ export default function ChecklistScreen({ navigation, route }: Props) {
         </Card>
 
         <VoiceNotesSection note={note} onChange={(text) => setNote(INSPECTION_FORM.notesField, text)} />
+
+        <BigButton
+          bi={{ es: "Inspección completa ✓", en: "Inspection complete ✓" }}
+          color={colors.blue}
+          disabled={done < INSPECTION_FORM.optionFields.length}
+          onPress={() => navigation.goBack()}
+        />
+        {done < INSPECTION_FORM.optionFields.length ? (
+          <Text style={styles.leftHint}>
+            {INSPECTION_FORM.optionFields.length - done}{" "}
+            {p({ es: "puntos sin responder", en: "items unanswered" })}
+          </Text>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -108,4 +121,5 @@ const styles = StyleSheet.create({
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.divider },
   itemTitle: { fontSize: 14, fontWeight: "700", color: colors.ink },
   itemSub: { fontSize: 11, color: colors.faint },
+  leftHint: { textAlign: "center", fontSize: 12.5, fontWeight: "700", color: colors.red },
 });
