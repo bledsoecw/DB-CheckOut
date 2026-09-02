@@ -358,18 +358,53 @@ export function assignedTo(task: PunchTask, viewer: Viewer | undefined): boolean
 // Mutations
 // --------------------------------------------------------------------------
 
-/** Submit a filled form (inspection / cleanup / walkthrough) onto a job. */
+interface FormFieldMeta {
+  id: string;
+  name: string;
+  type: string;
+}
+
+/** Form field metadata, cached per form — the fields only change when the form is edited in JT. */
+const formFieldsCache = new Map<string, FormFieldMeta[]>();
+
+async function getFormFields(pave: PaveClient, formId: string): Promise<FormFieldMeta[]> {
+  const hit = formFieldsCache.get(formId);
+  if (hit) return hit;
+  const res = await pave.query<{
+    form: { fields: { nodes: FormFieldMeta[] } } | null;
+  }>({
+    form: { $: { id: formId }, fields: { $: { size: 50 }, nodes: { id: {}, name: {}, type: {} } } },
+  });
+  const fields = res.form?.fields.nodes ?? [];
+  if (fields.length > 0) formFieldsCache.set(formId, fields);
+  return fields;
+}
+
+/**
+ * Submit a filled form (inspection / cleanup / walkthrough) onto a job.
+ * The app works in field IDS, but createFormSubmission wants values keyed
+ * by field NAME, with option answers as arrays — verified against live
+ * Pave (id-keyed values are rejected as "missing required field").
+ */
 export async function submitForm(
   pave: PaveClient,
   formId: string,
   jobId: string,
   values: Record<string, string>,
 ): Promise<string> {
+  const fields = await getFormFields(pave, formId);
+  const byId = new Map(fields.map((f) => [f.id, f]));
+  const named: Record<string, string | string[]> = {};
+  for (const [fieldId, value] of Object.entries(values)) {
+    const field = byId.get(fieldId);
+    if (!field) continue;
+    named[field.name] = field.type === "option" ? [value] : value;
+  }
   const res = await pave.query<{
     createFormSubmission: { createdFormSubmission?: { id: string } };
   }>({
     createFormSubmission: {
-      $: { formId, targetId: jobId, isSubmitted: true, values },
+      $: { formId, targetId: jobId, isSubmitted: true, values: named },
       createdFormSubmission: { id: {} },
     },
   });
@@ -398,6 +433,9 @@ export async function createReportTask(
   const res = await pave.query<{ createTask: { createdTask?: { id: string } } }>({
     createTask: {
       $: {
+        // Live Pave rejects targetId alone ("either a parent task or task
+        // target must be specified") — targetType is required with it.
+        targetType: "job",
         targetId: jobId,
         taskTypeId: TASK_TYPES.punchList,
         isToDo: true,

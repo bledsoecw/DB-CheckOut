@@ -81,14 +81,14 @@ export default function SendScreen({ navigation, route }: Props) {
           <Text style={styles.heroTitle}>
             {sent
               ? p({ es: "Enviado a JobTread", en: "Sent to JobTread" })
-              : p({ es: "Guardado — sin señal", en: "Saved — no signal" })}
+              : p({ es: "Guardado — aún no llega", en: "Saved — not delivered yet" })}
           </Text>
           <Text style={styles.resultSub}>
             {sent
               ? p({ es: "La oficina ya lo puede ver.", en: "The office can see it now." })
               : p({
-                  es: "Se enviará solo cuando el teléfono recupere señal. Míralo en «Por enviar».",
-                  en: "It will send itself when the phone gets signal back. See it under “Waiting to send”.",
+                  es: "Se reintenta solo. Revísalo en «Por enviar» — ahí dice el motivo.",
+                  en: "It retries by itself. Check “Waiting to send” — the reason shows there.",
                 })}
           </Text>
           {!sent ? (

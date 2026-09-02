@@ -275,13 +275,16 @@ export async function getJob(jobId: string): Promise<JobDetail> {
 /** Queue a write; try to deliver now, keep it (visibly) if the network says no. */
 export async function post(path: string, body: unknown, label = "Pendiente"): Promise<"sent" | "queued"> {
   if (demoMode) return "sent";
+  let reason: string | undefined;
   if (connected()) {
     try {
       await request("POST", path, body);
       void flushOutbox();
       return "sent";
-    } catch {
-      // fall through to outbox
+    } catch (err) {
+      // Kept on the item so the outbox can say WHY it hasn't gone — a
+      // server rejection is a very different story from a dead spot.
+      reason = err instanceof TypeError ? undefined : err instanceof Error ? err.message : String(err);
     }
   }
   outbox.push({
@@ -291,6 +294,7 @@ export async function post(path: string, body: unknown, label = "Pendiente"): Pr
     label,
     queuedAt: new Date().toISOString(),
     status: "pending",
+    ...(reason ? { error: reason } : {}),
   });
   notifyOutbox();
   return "queued";
@@ -319,6 +323,10 @@ export async function flushOutbox(): Promise<number> {
       const status = Number(/-> (\d{3})$/.exec(message)?.[1] ?? 0);
       if (status && PERMANENT(status)) {
         item.status = "failed";
+        item.error = message;
+        changed = true;
+      } else if (!(err instanceof TypeError) && item.error !== message) {
+        // Still retryable, but record what the server said this attempt.
         item.error = message;
         changed = true;
       }

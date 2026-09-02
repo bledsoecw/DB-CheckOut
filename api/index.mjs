@@ -418,10 +418,29 @@ function assignedTo(task, viewer) {
     (a) => email.length > 0 && norm(a.email) === email || name.length > 0 && norm(a.name) === name
   );
 }
+var formFieldsCache = /* @__PURE__ */ new Map();
+async function getFormFields(pave, formId) {
+  const hit = formFieldsCache.get(formId);
+  if (hit) return hit;
+  const res = await pave.query({
+    form: { $: { id: formId }, fields: { $: { size: 50 }, nodes: { id: {}, name: {}, type: {} } } }
+  });
+  const fields = res.form?.fields.nodes ?? [];
+  if (fields.length > 0) formFieldsCache.set(formId, fields);
+  return fields;
+}
 async function submitForm(pave, formId, jobId, values) {
+  const fields = await getFormFields(pave, formId);
+  const byId = new Map(fields.map((f) => [f.id, f]));
+  const named = {};
+  for (const [fieldId, value] of Object.entries(values)) {
+    const field = byId.get(fieldId);
+    if (!field) continue;
+    named[field.name] = field.type === "option" ? [value] : value;
+  }
   const res = await pave.query({
     createFormSubmission: {
-      $: { formId, targetId: jobId, isSubmitted: true, values },
+      $: { formId, targetId: jobId, isSubmitted: true, values: named },
       createdFormSubmission: { id: {} }
     }
   });
@@ -438,6 +457,9 @@ async function createReportTask(pave, jobId, report) {
   const res = await pave.query({
     createTask: {
       $: {
+        // Live Pave rejects targetId alone ("either a parent task or task
+        // target must be specified") — targetType is required with it.
+        targetType: "job",
         targetId: jobId,
         taskTypeId: TASK_TYPES.punchList,
         isToDo: true,

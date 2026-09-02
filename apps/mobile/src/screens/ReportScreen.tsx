@@ -96,15 +96,15 @@ export default function ReportScreen({ navigation, route }: Props) {
           <Text style={styles.savedTitle}>
             {sent
               ? p({ es: "Reporte enviado a JobTread", en: "Report sent to JobTread" })
-              : p({ es: "Reporte guardado — sin señal", en: "Report saved — no signal" })}
+              : p({ es: "Reporte guardado — aún no llega", en: "Report saved — not delivered yet" })}
           </Text>
           <Text style={styles.savedSub}>
             {state.reports.length} {t("problemsReported")} ·{" "}
             {sent
               ? p({ es: "el PM ya lo puede ver", en: "the PM can see it now" })
               : p({
-                  es: "se envía solo cuando haya señal (míralo en «Por enviar»)",
-                  en: "sends itself when there's signal (see “Waiting to send”)",
+                  es: "se reintenta solo — míralo en «Por enviar», ahí dice el motivo",
+                  en: "it retries by itself — see “Waiting to send” for the reason",
                 })}
           </Text>
           <View style={{ alignSelf: "stretch" }}>

@@ -85,18 +85,43 @@ test("listPipelineJobs follows pagination and sorts by job number", async () => 
   assert.deepEqual(jobs.map((j) => j.number), ["26-0002", "26-1357"]);
 });
 
-test("submitForm sends a filled, submitted form with values keyed by field id", async () => {
-  const { client, queries } = fakePave(() => ({
-    createFormSubmission: { createdFormSubmission: { id: "sub1" } },
-  }));
-  const values = { [INSPECTION_FORM.optionFields[0]]: "OK" };
+test("submitForm translates field ids into JT's name-keyed values with option arrays", async () => {
+  const { client, queries } = fakePave((q) => {
+    if ("form" in q) {
+      return {
+        form: {
+          fields: {
+            nodes: [
+              { id: INSPECTION_FORM.optionFields[0], name: "1. Shingle field flat", type: "option" },
+              { id: INSPECTION_FORM.notesField, name: "Inspector notes (English)", type: "longString" },
+            ],
+          },
+        },
+      };
+    }
+    return { createFormSubmission: { createdFormSubmission: { id: "sub1" } } };
+  });
+  const values = {
+    [INSPECTION_FORM.optionFields[0]]: "OK",
+    [INSPECTION_FORM.notesField]: "Two boots replaced",
+    "unknown-field-id": "dropped",
+  };
   const id = await submitForm(client, INSPECTION_FORM.id, "job1", values);
   assert.equal(id, "sub1");
-  const dollar = (queries[0]["createFormSubmission"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(queries.length, 2);
+  const dollar = (queries[1]["createFormSubmission"] as Record<string, unknown>)["$"] as Record<string, unknown>;
   assert.equal(dollar["formId"], INSPECTION_FORM.id);
   assert.equal(dollar["targetId"], "job1");
   assert.equal(dollar["isSubmitted"], true);
-  assert.deepEqual(dollar["values"], values);
+  // Verified against live Pave: names as keys, option answers as arrays.
+  assert.deepEqual(dollar["values"], {
+    "1. Shingle field flat": ["OK"],
+    "Inspector notes (English)": "Two boots replaced",
+  });
+
+  // Field metadata is cached — a second submission skips the form query.
+  await submitForm(client, INSPECTION_FORM.id, "job2", values);
+  assert.equal(queries.length, 3);
 });
 
 test("createReportTask creates an unassigned Punch List to-do with the English note", async () => {
@@ -109,6 +134,7 @@ test("createReportTask creates an unassigned Punch List to-do with the English n
   });
   assert.equal(id, "t1");
   const dollar = (queries[0]["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(dollar["targetType"], "job");
   assert.equal(dollar["targetId"], "job1");
   assert.equal(dollar["taskTypeId"], TASK_TYPES.punchList);
   assert.equal(dollar["isToDo"], true);

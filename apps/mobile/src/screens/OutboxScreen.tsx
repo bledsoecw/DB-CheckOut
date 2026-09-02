@@ -66,7 +66,9 @@ export default function OutboxScreen({ navigation }: Props) {
                       {new Date(item.queuedAt).toLocaleString()}
                       {item.status === "failed"
                         ? ` · ${p({ es: "falló", en: "failed" })}`
-                        : ` · ${p({ es: "esperando señal", en: "waiting for signal" })}`}
+                        : item.error
+                          ? ` · ${p({ es: "se reintentará", en: "will retry" })}`
+                          : ` · ${p({ es: "esperando señal", en: "waiting for signal" })}`}
                     </Text>
                     {item.error ? <Text style={styles.itemError}>{item.error}</Text> : null}
                   </View>
