@@ -27,6 +27,11 @@ export interface QueueJob {
    * open item when the caller has no identity (unauthenticated tooling).
    */
   openPunchCount: number;
+  /**
+   * True when any open punch/inspection task on this job names the
+   * requesting user. Drives the Assigned / All tabs on the queue.
+   */
+  mine: boolean;
 }
 
 /** Somebody a punch item is assigned to in JobTread. */

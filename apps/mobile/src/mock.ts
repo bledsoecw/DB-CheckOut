@@ -15,6 +15,7 @@ export const MOCK_JOBS: QueueJob[] = [
     salesRep: "Austin Leeth",
     address: "1427 Prairie View Dr, Lincoln NE",
     openPunchCount: 0,
+    mine: true,
   },
   {
     id: "demo-okafor",
@@ -28,6 +29,23 @@ export const MOCK_JOBS: QueueJob[] = [
     salesRep: "Sam Black",
     address: "88 Cedar Falls Ct, Waverly NE",
     openPunchCount: 2,
+    mine: true,
+  },
+  // Deliberately NOT assigned to the demo viewer, so the Asignados / Todos
+  // tabs have a real difference to show.
+  {
+    id: "demo-reyes",
+    number: "26-0421",
+    name: "26-0421 Reyes_Roof",
+    status: STATUS.finalInspection,
+    jobType: "Roofing",
+    projectTypes: ["R-Shingles"],
+    isService: false,
+    projectManager: "Dave Elick",
+    salesRep: "Austin Leeth",
+    address: "301 Walnut St, Seward NE",
+    openPunchCount: 0,
+    mine: false,
   },
 ];
 

@@ -27,6 +27,7 @@ import {
   completeTask,
   createReportTask,
   getJob,
+  listAssignedWorkByJob,
   listPipelineJobs,
   listSoldScope,
   submitForm,
@@ -226,7 +227,21 @@ export function createHandler(deps: RouterDeps) {
       }
 
       if (req.method === "GET" && url.pathname === "/queue") {
-        return json(res, 200, await listPipelineJobs(deps.pave));
+        // The pipeline list and the viewer's org-wide assigned work run in
+        // parallel; the second marks which jobs are "theirs" (Assigned tab)
+        // and puts the real number on the REPAIRS badge.
+        const [jobs, assigned] = await Promise.all([
+          listPipelineJobs(deps.pave),
+          listAssignedWorkByJob(deps.pave, session),
+        ]);
+        for (const job of jobs) {
+          const work = assigned.get(job.id);
+          if (work) {
+            job.mine = work.any;
+            job.openPunchCount = work.punchOpen;
+          }
+        }
+        return json(res, 200, jobs);
       }
 
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {

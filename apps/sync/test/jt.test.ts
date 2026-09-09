@@ -5,6 +5,7 @@ import {
   assignedTo,
   completeTask,
   createReportTask,
+  listAssignedWorkByJob,
   listPipelineJobs,
   listPunchTasks,
   listSoldScope,
@@ -399,6 +400,97 @@ test("assignedTo ignores blank assignee fields rather than matching everyone", (
   const task = punch([{ name: "", email: null }]);
   assert.equal(assignedTo(task, { email: "", name: "" }), false);
   assert.equal(assignedTo(task, { email: "someone@deitemeyerbrothers.com", name: "Someone" }), false);
+});
+
+function orgTask(
+  id: string,
+  jobId: string,
+  taskTypeId: string,
+  assignees: Array<{ name: string; email: string | null }>,
+) {
+  return {
+    id,
+    taskType: { id: taskTypeId },
+    job: { id: jobId },
+    assignedMemberships: {
+      nodes: assignees.map((a, i) => ({
+        id: `m${i}`,
+        user: { name: a.name, emailAddress: a.email },
+      })),
+    },
+  };
+}
+
+const ALBERTO = { name: "Alberto Gonzalez", email: "albertogonzalez@deitemeyerbrothers.com" };
+
+test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count separate", async () => {
+  const { client, queries } = fakePave(() => ({
+    organization: {
+      tasks: {
+        nextPage: null,
+        nodes: [
+          orgTask("t1", "jobA", TASK_TYPES.punchList, [ALBERTO]),
+          orgTask("t2", "jobA", TASK_TYPES.punchList, [ALBERTO]),
+          // Inspection visit: makes the job "theirs" without inflating the repairs badge.
+          orgTask("t3", "jobB", TASK_TYPES.inspection, [ALBERTO]),
+          // Somebody else's punch item — must not count for Alberto.
+          orgTask("t4", "jobC", TASK_TYPES.punchList, [{ name: "Marcos G.", email: null }]),
+          // Task with no job link (org-level) — ignored.
+          { id: "t5", taskType: { id: TASK_TYPES.punchList }, job: null, assignedMemberships: { nodes: [] } },
+        ],
+      },
+    },
+  }));
+
+  const work = await listAssignedWorkByJob(client, {
+    email: "AlbertoGonzalez@deitemeyerbrothers.com",
+    name: "whoever",
+  });
+  assert.deepEqual(work.get("jobA"), { any: true, punchOpen: 2 });
+  assert.deepEqual(work.get("jobB"), { any: true, punchOpen: 0 });
+  assert.equal(work.get("jobC"), undefined);
+
+  // The filter must only ask for open punch/inspection tasks (progress != 1
+  // keeps JT's null-progress items, which are open work too).
+  const dollar = ((queries[0]["organization"] as Record<string, unknown>)["tasks"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.deepEqual(dollar["where"], {
+    and: [
+      {
+        or: [
+          [["taskType", "id"], "=", TASK_TYPES.punchList],
+          [["taskType", "id"], "=", TASK_TYPES.inspection],
+        ],
+      },
+      [["progress"], "!=", 1],
+    ],
+  });
+});
+
+test("listAssignedWorkByJob follows pagination and matches subs by name", async () => {
+  let call = 0;
+  const { client } = fakePave(() => {
+    call += 1;
+    return call === 1
+      ? { organization: { tasks: { nextPage: "p2", nodes: [orgTask("t1", "jobA", TASK_TYPES.punchList, [{ name: "Marcos Gonzales", email: "enfoqueconstructionfw@gmail.com" }])] } } }
+      : { organization: { tasks: { nextPage: null, nodes: [orgTask("t2", "jobB", TASK_TYPES.punchList, [{ name: "Marcos Gonzales", email: "enfoqueconstructionfw@gmail.com" }])] } } };
+  });
+  const work = await listAssignedWorkByJob(client, {
+    email: "marcos.personal@gmail.com",
+    name: "Marcos Gonzales",
+  });
+  assert.equal(call, 2);
+  assert.deepEqual([...work.keys()].sort(), ["jobA", "jobB"]);
+});
+
+test("listAssignedWorkByJob never breaks the queue — no viewer or errors mean an empty map", async () => {
+  const boom = fakePave(() => {
+    throw new Error("429 rate limited");
+  });
+  assert.equal((await listAssignedWorkByJob(boom.client, { email: "x@y.com", name: "X" })).size, 0);
+
+  const idle = fakePave(() => ({}));
+  assert.equal((await listAssignedWorkByJob(idle.client, undefined)).size, 0);
+  assert.equal(idle.queries.length, 0, "no viewer, no query");
 });
 
 test("listPunchTasks reads the real assignedMemberships shape", async () => {

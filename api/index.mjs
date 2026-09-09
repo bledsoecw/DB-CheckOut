@@ -232,7 +232,7 @@ function cfv(job, fieldId) {
 function cfvAll(job, fieldId) {
   return job.customFieldValues.nodes.filter((n) => n.customField.id === fieldId && n.value != null).map((n) => String(n.value));
 }
-function toQueueJob(job, openPunchCount = 0) {
+function toQueueJob(job, openPunchCount = 0, mine = false) {
   const projectTypes = cfvAll(job, CUSTOM_FIELDS.projectType);
   return {
     id: job.id,
@@ -245,7 +245,8 @@ function toQueueJob(job, openPunchCount = 0) {
     projectManager: cfv(job, CUSTOM_FIELDS.projectManager),
     salesRep: cfv(job, CUSTOM_FIELDS.salesRep),
     address: job.location?.formattedAddress ?? null,
-    openPunchCount
+    openPunchCount,
+    mine
   };
 }
 var JOB_SELECTION = {
@@ -362,7 +363,7 @@ async function getJob(pave, jobId, viewer) {
   const mineOpen = open.filter((t) => t.mine).length;
   const count = viewer ? mineOpen : open.length;
   return {
-    ...toQueueJob(res.job, count),
+    ...toQueueJob(res.job, count, mineOpen > 0),
     punchTasks,
     soldScope,
     openPunchTotal: open.length
@@ -411,12 +412,75 @@ async function listPunchTasks(pave, jobId) {
 }
 var norm = (v) => (v ?? "").trim().toLowerCase();
 function assignedTo(task, viewer) {
+  return viewerMatches(task.assignees, viewer);
+}
+function viewerMatches(assignees, viewer) {
   if (!viewer) return false;
   const email = norm(viewer.email);
   const name = norm(viewer.name);
-  return task.assignees.some(
+  return assignees.some(
     (a) => email.length > 0 && norm(a.email) === email || name.length > 0 && norm(a.name) === name
   );
+}
+async function listAssignedWorkByJob(pave, viewer) {
+  const work = /* @__PURE__ */ new Map();
+  if (!viewer) return work;
+  try {
+    let page = null;
+    for (let i = 0; i < 8; i++) {
+      const res = await pave.query({
+        organization: {
+          $: { id: ORGANIZATION_ID },
+          tasks: {
+            $: {
+              // 50 x 10 nested memberships = 500 declared, verified live.
+              size: 50,
+              ...page ? { page } : {},
+              where: {
+                and: [
+                  {
+                    or: [
+                      [["taskType", "id"], "=", TASK_TYPES.punchList],
+                      [["taskType", "id"], "=", TASK_TYPES.inspection]
+                    ]
+                  },
+                  [["progress"], "!=", 1]
+                ]
+              }
+            },
+            nextPage: {},
+            nodes: {
+              id: {},
+              taskType: { id: {} },
+              job: { id: {} },
+              assignedMemberships: {
+                $: { size: 10 },
+                nodes: { id: {}, user: { name: {}, emailAddress: {} } }
+              }
+            }
+          }
+        }
+      });
+      const tasks = res.organization?.tasks;
+      for (const task of tasks?.nodes ?? []) {
+        const jobId = task.job?.id;
+        if (!jobId) continue;
+        const assignees = (task.assignedMemberships?.nodes ?? []).map((m) => ({
+          name: m.user?.name ?? null,
+          email: m.user?.emailAddress ?? null
+        }));
+        if (!viewerMatches(assignees, viewer)) continue;
+        const entry2 = work.get(jobId) ?? { any: false, punchOpen: 0 };
+        entry2.any = true;
+        if (task.taskType?.id === TASK_TYPES.punchList) entry2.punchOpen += 1;
+        work.set(jobId, entry2);
+      }
+      if (!tasks?.nextPage) break;
+      page = tasks.nextPage;
+    }
+  } catch {
+  }
+  return work;
 }
 var formFieldsCache = /* @__PURE__ */ new Map();
 async function getFormFields(pave, formId) {
@@ -802,7 +866,18 @@ function createHandler(deps) {
         return json(res, 200, { translations });
       }
       if (req.method === "GET" && url.pathname === "/queue") {
-        return json(res, 200, await listPipelineJobs(deps.pave));
+        const [jobs, assigned] = await Promise.all([
+          listPipelineJobs(deps.pave),
+          listAssignedWorkByJob(deps.pave, session)
+        ]);
+        for (const job of jobs) {
+          const work = assigned.get(job.id);
+          if (work) {
+            job.mine = work.any;
+            job.openPunchCount = work.punchOpen;
+          }
+        }
+        return json(res, 200, jobs);
       }
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
         return json(res, 200, await getJob(deps.pave, parts[1], session ?? void 0));

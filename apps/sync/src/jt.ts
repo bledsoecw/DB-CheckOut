@@ -63,6 +63,8 @@ interface RawTask {
   progress: number | null;
   endDate: string | null;
   taskType: { id: string } | null;
+  /** Present only on org-wide task queries, where the job is the point. */
+  job?: { id: string } | null;
   assignedMemberships?: {
     nodes: Array<{
       id: string;
@@ -83,7 +85,7 @@ function cfvAll(job: RawJob, fieldId: string): string[] {
     .map((n) => String(n.value));
 }
 
-export function toQueueJob(job: RawJob, openPunchCount = 0): QueueJob {
+export function toQueueJob(job: RawJob, openPunchCount = 0, mine = false): QueueJob {
   const projectTypes = cfvAll(job, CUSTOM_FIELDS.projectType);
   return {
     id: job.id,
@@ -97,6 +99,7 @@ export function toQueueJob(job: RawJob, openPunchCount = 0): QueueJob {
     salesRep: cfv(job, CUSTOM_FIELDS.salesRep),
     address: job.location?.formattedAddress ?? null,
     openPunchCount,
+    mine,
   };
 }
 
@@ -267,7 +270,7 @@ export async function getJob(
   const count = viewer ? mineOpen : open.length;
 
   return {
-    ...toQueueJob(res.job, count),
+    ...toQueueJob(res.job, count, mineOpen > 0),
     punchTasks,
     soldScope,
     openPunchTotal: open.length,
@@ -344,14 +347,107 @@ export interface Viewer {
  * systems reliably share.
  */
 export function assignedTo(task: PunchTask, viewer: Viewer | undefined): boolean {
+  return viewerMatches(task.assignees, viewer);
+}
+
+function viewerMatches(
+  assignees: Array<{ name: string | null; email: string | null }>,
+  viewer: Viewer | undefined,
+): boolean {
   if (!viewer) return false;
   const email = norm(viewer.email);
   const name = norm(viewer.name);
-  return task.assignees.some(
+  return assignees.some(
     (a) =>
       (email.length > 0 && norm(a.email) === email) ||
       (name.length > 0 && norm(a.name) === name),
   );
+}
+
+/** What the viewer is on the hook for on one job (see listAssignedWorkByJob). */
+export interface AssignedWork {
+  /** They are on any open punch/inspection task here — the job is "theirs". */
+  any: boolean;
+  /** Open punch-type tasks naming them — the number on the REPAIRS badge. */
+  punchOpen: number;
+}
+
+/**
+ * Every open punch/inspection task in the org that names the viewer,
+ * grouped by job id. One org-wide query (paginated) instead of one query
+ * per queue job, so the queue's Assigned tab costs a handful of requests
+ * however many jobs are in the pipeline. progress != 1 deliberately keeps
+ * null-progress tasks — JT leaves progress unset until someone touches it.
+ *
+ * Best-effort by design: any failure returns what was gathered so far
+ * (possibly nothing). The queue itself must never die over the tabs.
+ */
+export async function listAssignedWorkByJob(
+  pave: PaveClient,
+  viewer: Viewer | undefined,
+): Promise<Map<string, AssignedWork>> {
+  const work = new Map<string, AssignedWork>();
+  if (!viewer) return work;
+  try {
+    let page: string | null = null;
+    for (let i = 0; i < 8; i++) {
+      const res: {
+        organization: { tasks: { nextPage: string | null; nodes: RawTask[] } } | null;
+      } = await pave.query({
+        organization: {
+          $: { id: ORGANIZATION_ID },
+          tasks: {
+            $: {
+              // 50 x 10 nested memberships = 500 declared, verified live.
+              size: 50,
+              ...(page ? { page } : {}),
+              where: {
+                and: [
+                  {
+                    or: [
+                      [["taskType", "id"], "=", TASK_TYPES.punchList],
+                      [["taskType", "id"], "=", TASK_TYPES.inspection],
+                    ],
+                  },
+                  [["progress"], "!=", 1],
+                ],
+              },
+            },
+            nextPage: {},
+            nodes: {
+              id: {},
+              taskType: { id: {} },
+              job: { id: {} },
+              assignedMemberships: {
+                $: { size: 10 },
+                nodes: { id: {}, user: { name: {}, emailAddress: {} } },
+              },
+            },
+          },
+        },
+      });
+      const tasks = res.organization?.tasks;
+      for (const task of tasks?.nodes ?? []) {
+        const jobId = task.job?.id;
+        if (!jobId) continue;
+        const assignees = (task.assignedMemberships?.nodes ?? []).map((m) => ({
+          name: m.user?.name ?? null,
+          email: m.user?.emailAddress ?? null,
+        }));
+        if (!viewerMatches(assignees, viewer)) continue;
+        const entry = work.get(jobId) ?? { any: false, punchOpen: 0 };
+        entry.any = true;
+        if (task.taskType?.id === TASK_TYPES.punchList) entry.punchOpen += 1;
+        work.set(jobId, entry);
+      }
+      if (!tasks?.nextPage) break;
+      page = tasks.nextPage;
+    }
+  } catch {
+    // Partial (or empty) is fine — worst case the Assigned tab under-counts
+    // until the next refresh; All still shows everything.
+  }
+  return work;
 }
 
 // --------------------------------------------------------------------------

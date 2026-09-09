@@ -43,8 +43,12 @@ export default function QueueScreen({ navigation }: Props) {
   const [queued, setQueued] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
+  // The crew opens onto their own work; Todos is one tap away.
+  const [tab, setTab] = useState<"assigned" | "all">("assigned");
 
-  const shown = query.trim() ? jobs.filter((j) => matchesJob(j, query)) : jobs;
+  const assigned = jobs.filter((j) => j.mine);
+  const pool = tab === "assigned" ? assigned : jobs;
+  const shown = query.trim() ? pool.filter((j) => matchesJob(j, query)) : pool;
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -77,6 +81,25 @@ export default function QueueScreen({ navigation }: Props) {
           </Text>
         </View>
         <LangPill />
+      </View>
+
+      <View style={styles.tabs}>
+        <Pressable
+          onPress={() => setTab("assigned")}
+          style={[styles.tab, tab === "assigned" ? styles.tabActive : null]}
+        >
+          <Text style={[styles.tabText, tab === "assigned" ? styles.tabTextActive : null]}>
+            {p({ es: "Asignados", en: "Assigned" })} · {assigned.length}
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setTab("all")}
+          style={[styles.tab, tab === "all" ? styles.tabActive : null]}
+        >
+          <Text style={[styles.tabText, tab === "all" ? styles.tabTextActive : null]}>
+            {p({ es: "Todos", en: "All" })} · {jobs.length}
+          </Text>
+        </Pressable>
       </View>
 
       <View style={styles.searchWrap}>
@@ -128,6 +151,18 @@ export default function QueueScreen({ navigation }: Props) {
                 en: `No job matches “${query.trim()}”`,
               })}
             </Text>
+          ) : tab === "assigned" ? (
+            <Pressable onPress={() => setTab("all")} style={styles.emptyAssigned}>
+              <Text style={styles.emptyAssignedTitle}>
+                {p({
+                  es: "No tienes trabajos asignados ahora",
+                  en: "Nothing assigned to you right now",
+                })}
+              </Text>
+              <Text style={styles.emptyAssignedHint}>
+                {p({ es: "Toca aquí para ver Todos", en: "Tap here to see All" })}
+              </Text>
+            </Pressable>
           ) : null
         }
         ListFooterComponent={
@@ -147,25 +182,45 @@ export default function QueueScreen({ navigation }: Props) {
             </Pressable>
           </View>
         }
-        renderItem={({ item }) => <JobCard job={item} navigation={navigation} />}
+        renderItem={({ item }) => (
+          <JobCard job={item} navigation={navigation} showMine={tab === "all"} />
+        )}
       />
     </SafeAreaView>
   );
 }
 
-function JobCard({ job, navigation }: { job: QueueJob; navigation: Props["navigation"] }) {
+function JobCard({
+  job,
+  navigation,
+  showMine,
+}: {
+  job: QueueJob;
+  navigation: Props["navigation"];
+  showMine: boolean;
+}) {
   const { t, p } = useLang();
   const isPunch = job.status === STATUS.punchList || job.status === STATUS.punchReview;
-  // Only route to the repairs list when there are actual repairs; a job
-  // parked at a punch status with no tasks opens like any other job.
+  // Only route to the repairs list when the viewer has repairs of their own;
+  // a job parked at a punch status with none opens like any other job.
   const hasRepairs = isPunch && job.openPunchCount > 0;
   return (
     <Card>
       <View style={styles.cardTop}>
         <View style={styles.badges}>
           <Text style={[styles.badge, isPunch ? styles.badgeOrange : styles.badgeBlue]}>
-            {isPunch ? `${t("repairs").toUpperCase()} · ${job.openPunchCount}` : t("inspection").toUpperCase()}
+            {/* "· 0" told the crew nothing — the count only shows when it's real. */}
+            {isPunch
+              ? job.openPunchCount > 0
+                ? `${t("repairs").toUpperCase()} · ${job.openPunchCount}`
+                : t("repairs").toUpperCase()
+              : t("inspection").toUpperCase()}
           </Text>
+          {showMine && job.mine ? (
+            <Text style={[styles.badge, styles.badgeGreen]}>
+              {p({ es: "PARA TI", en: "FOR YOU" })}
+            </Text>
+          ) : null}
           {job.isService ? (
             <Text style={[styles.badge, styles.badgeGreen]}>
               {p({ es: "SERVICIO", en: "SERVICE" })}
@@ -215,6 +270,43 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 24, fontWeight: "700", color: colors.ink },
   subtitle: { fontSize: 13, color: colors.muted },
+  // Folder tabs: the active one is a white tab "open" over the rule below it.
+  tabs: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    marginTop: 12,
+    gap: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: "#D9E1EB",
+  },
+  tab: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 11,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    borderWidth: 2,
+    borderBottomWidth: 0,
+    borderColor: "transparent",
+  },
+  tabActive: {
+    backgroundColor: colors.card,
+    borderColor: "#D9E1EB",
+    marginBottom: -2,
+  },
+  tabText: { fontSize: 15, fontWeight: "700", color: colors.muted },
+  tabTextActive: { color: colors.blue },
+  emptyAssigned: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 14,
+    padding: 18,
+    alignItems: "center",
+    gap: 4,
+  },
+  emptyAssignedTitle: { fontSize: 15, fontWeight: "700", color: colors.ink, textAlign: "center" },
+  emptyAssignedHint: { fontSize: 13, fontWeight: "600", color: colors.blue },
   searchWrap: {
     flexDirection: "row",
     alignItems: "center",
