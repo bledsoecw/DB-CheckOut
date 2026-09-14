@@ -4,7 +4,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getJob, sendReport, submitCleanup, submitInspection, uploadJobPhoto } from "../api";
+import {
+  closeInspection,
+  getJob,
+  sendReport,
+  submitCleanup,
+  submitInspection,
+  uploadJobPhoto,
+} from "../api";
 import { BigButton, Card } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
@@ -84,6 +91,23 @@ export default function SendScreen({ navigation, route }: Props) {
           outcome: await sendReport(jobId, report, `Problema · Problem${suffix}`),
         });
       }
+      // LAST, and only after the reports: this ticks the checklist onto the
+      // job's "Final inspection" task, completes it, and is what moves the
+      // job on — to Punch List when the crew found something, otherwise to
+      // the PM's review. It carries the problem count itself, so the routing
+      // holds even if those reports are still sitting in the outbox.
+      items.push({
+        label: p({ es: "Inspección terminada", en: "Inspection finished" }),
+        outcome: await closeInspection(
+          jobId,
+          { answers: state.inspection },
+          // Only problems that still need a return trip. A "fixed on site"
+          // report is documentation of work already done — counting it would
+          // send a job with nothing left to repair to Punch List.
+          state.reports.filter((r) => !r.fixedOnSite).length,
+          `Cerrar inspección · Close inspection${suffix}`,
+        ),
+      });
       clear(new Date().toISOString());
       setReceipt(items);
     } finally {

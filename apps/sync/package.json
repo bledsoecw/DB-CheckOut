@@ -3,12 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "DB CheckOut sync server — thin bridge between the crew app and JobTread (zero runtime dependencies; tsx for local dev only)",
+  "description": "DB CheckOut sync server \u2014 thin bridge between the crew app and JobTread (zero runtime dependencies; tsx for local dev only)",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "start": "node --import tsx src/index.ts",
-    "test": "node --import tsx --test test/pave.test.ts test/jt.test.ts test/punchReview.test.ts test/auth.test.ts test/translate.test.ts"
+    "test": "node --import tsx --test test/pave.test.ts test/jt.test.ts test/punchReview.test.ts test/pipeline.test.ts test/auth.test.ts test/translate.test.ts"
   }
 }
