@@ -2,7 +2,7 @@
  * Self-registering JobTread webhook: on startup the server makes sure a
  * webhook pointing at PUBLIC_URL/webhooks/jobtread/WEBHOOK_SECRET exists,
  * so task/job changes made inside JobTread (a PM completing a punch task
- * on the board) still trigger the automatic Punch Review status flip.
+ * on the board) still trigger the automatic PM Review status flip.
  * Other webhooks in the org (e.g. the portal's) are never touched.
  */
 

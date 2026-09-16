@@ -23,7 +23,7 @@ repair work — wired into JobTread and the DB Production board.
 5. The **punch crew** sees assigned repairs in the same app: where to
    go, what to do, what to bring, before/after photos, and a big
    "Terminado" button. When the last repair closes, the job moves to
-   **Punch Review** automatically; the PM reviews the photos and notes,
+   **PM Review** automatically; the PM reviews the photos and notes,
    then sets **Job Completed**.
 
 ## Code
@@ -36,9 +36,9 @@ docs/              jobtread-setup.md is the JT build contract
 ```
 
 **Sync server** (`apps/sync`) — the bridge between the app and JobTread:
-queue of pipeline jobs (Final Inspection / Punch List / Punch Review),
+queue of pipeline jobs (Final Inspection / Punch List / PM Review),
 form submissions, problem reports → unassigned Punch List tasks, task
-completion with the automatic **Punch Review** status flip, and a
+completion with the automatic **PM Review** status flip, and a
 webhook receiver. Run it:
 
 ```
@@ -131,7 +131,7 @@ Key design decisions:
   once every report is assigned or dismissed.
 - **JT is the system of record** — checklists come from JT Forms,
   queue and assignments come from the Production board (job Status:
-  Production → Final Inspection → Punch List → Punch Review → Job Completed), and all
+  Production → Final Inspection → Punch List → PM Review → Job Completed), and all
   results land back on the JT job.
 
 Customer names and addresses in the mockups are sample data; PM names

@@ -105,13 +105,13 @@ field is normally Dave.
 | --- | --- |
 | `Final Inspection` | Job enters the crew app queue — service/QC crew (or a sales rep on far jobs) inspects & cleans up |
 | `Punch List` | Inspection reviewed; repairs assigned & in progress |
-| `Punch Review` | All punch items done — **set automatically by the sync server when the last punch task closes with its after photo**; PM reviews photos & notes |
-| `Job Completed` | PM approved the punch review (or clean pass with no punch items) |
+| `PM Review` (was `Punch Review` until 2026-09-16) | All punch items done — **set automatically by the sync server when the last punch task closes with its after photo**; PM reviews photos & notes |
+| `Job Completed` | PM approved the punch work in PM Review (or clean pass with no punch items) |
 | stays `Final Inspection` | Hold — correction required before advancing |
 
 The pipeline is strictly linear (no status is ever re-entered), so
 automations can safely key off status transitions. A rejected repair
-moves the job back from `Punch Review` to `Punch List`.
+moves the job back from `PM Review` to `Punch List`.
 
 ## Payment milestones (CONFIRMED — agreed with Shawn, roofing jobs)
 

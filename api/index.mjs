@@ -172,7 +172,8 @@ var STATUS = {
   production: "Production",
   finalInspection: "Final Inspection",
   punchList: "Punch List",
-  punchReview: "Punch Review",
+  /** Renamed in JT from "Punch Review" on 2026-09-16 — JT refuses the old value. */
+  pmReview: "PM Review",
   jobCompleted: "Job Completed",
   pendingFinalPayment: "Pending Final Payment"
 };
@@ -317,7 +318,7 @@ async function listSoldScope(pave, jobId) {
   }
 }
 async function listPipelineJobs(pave) {
-  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.punchReview];
+  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.pmReview];
   const out = [];
   let page = null;
   for (let i = 0; i < 10; i++) {
@@ -591,20 +592,20 @@ async function setJobStatus(pave, jobId, status) {
   });
 }
 
-// apps/sync/src/punchReview.ts
-function shouldFlipToPunchReview(currentStatus, tasks) {
+// apps/sync/src/pmReview.ts
+function shouldFlipToPmReview(currentStatus, tasks) {
   if (currentStatus !== STATUS.punchList) return false;
   if (tasks.length === 0) return false;
   return tasks.every((t) => t.progress >= 1);
 }
-async function applyPunchReviewFlip(pave, jobId) {
+async function applyPmReviewFlip(pave, jobId) {
   const [status, tasks] = await Promise.all([
     getJobStatusValue(pave, jobId),
     listPunchTasks(pave, jobId)
   ]);
-  if (!shouldFlipToPunchReview(status, tasks)) return null;
-  await setJobStatus(pave, jobId, STATUS.punchReview);
-  return STATUS.punchReview;
+  if (!shouldFlipToPmReview(status, tasks)) return null;
+  await setJobStatus(pave, jobId, STATUS.pmReview);
+  return STATUS.pmReview;
 }
 
 // apps/sync/src/translate.ts
@@ -837,10 +838,10 @@ function createHandler(deps) {
         let flipped = null;
         if (jobId) {
           try {
-            flipped = await applyPunchReviewFlip(deps.pave, jobId);
+            flipped = await applyPmReviewFlip(deps.pave, jobId);
           } catch (err) {
             console.warn(
-              `punch-review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
+              `PM Review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
             );
           }
         }
@@ -960,7 +961,7 @@ function createHandler(deps) {
         const body = await readBody(req);
         const note = body.note?.trim() ? `${body.note.trim()} \u2014 ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
-        const flipped = body.jobId ? await applyPunchReviewFlip(deps.pave, body.jobId) : null;
+        const flipped = body.jobId ? await applyPmReviewFlip(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });

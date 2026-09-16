@@ -34,7 +34,7 @@ import {
   uploadPhoto,
   type PhotoUpload,
 } from "./jt";
-import { applyPunchReviewFlip } from "./punchReview";
+import { applyPmReviewFlip } from "./pmReview";
 import { summarizeScope, transcribeNote, translateToSpanish, TRANSLATE_LIMITS } from "./translate";
 
 export interface RouterDeps {
@@ -171,7 +171,7 @@ export function createHandler(deps: RouterDeps) {
       }
 
       // JobTread webhook: POST /webhooks/jobtread/<WEBHOOK_SECRET>
-      // On any job/task event we re-evaluate the punch-review flip.
+      // On any job/task event we re-evaluate the PM Review flip.
       if (req.method === "POST" && parts[0] === "webhooks" && parts[1] === "jobtread") {
         if (!deps.webhookSecret || parts[2] !== deps.webhookSecret) {
           return json(res, 401, { error: "Bad webhook token" });
@@ -183,10 +183,10 @@ export function createHandler(deps: RouterDeps) {
           // Best-effort: a failed check must answer 200, or JobTread retries
           // the delivery and a JT hiccup turns into a 5xx retry storm.
           try {
-            flipped = await applyPunchReviewFlip(deps.pave, jobId);
+            flipped = await applyPmReviewFlip(deps.pave, jobId);
           } catch (err) {
             console.warn(
-              `punch-review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+              `PM Review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
         }
@@ -339,12 +339,12 @@ export function createHandler(deps: RouterDeps) {
         }
       }
 
-      // Crew finished a punch task -> mark complete, maybe flip to Punch Review.
+      // Crew finished a punch task -> mark complete, maybe flip to PM Review.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = (await readBody(req)) as { jobId?: string; note?: string };
         const note = body.note?.trim() ? `${body.note.trim()} — ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
-        const flipped = body.jobId ? await applyPunchReviewFlip(deps.pave, body.jobId) : null;
+        const flipped = body.jobId ? await applyPmReviewFlip(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }
 

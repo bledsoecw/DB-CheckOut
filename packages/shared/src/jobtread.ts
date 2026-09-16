@@ -35,7 +35,8 @@ export const STATUS = {
   production: "Production",
   finalInspection: "Final Inspection",
   punchList: "Punch List",
-  punchReview: "Punch Review",
+  /** Renamed in JT from "Punch Review" on 2026-09-16 — JT refuses the old value. */
+  pmReview: "PM Review",
   jobCompleted: "Job Completed",
   pendingFinalPayment: "Pending Final Payment",
 } as const;

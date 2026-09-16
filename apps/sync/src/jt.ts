@@ -199,7 +199,7 @@ export async function listSoldScope(pave: PaveClient, jobId: string): Promise<Sc
 
 /**
  * Jobs currently at Status = Final Inspection (the crew queue), plus any at
- * Punch List / Punch Review (so punch work stays visible until completed).
+ * Punch List / PM Review (so punch work stays visible until completed).
  *
  * Queried through the Status field's own values (each links back to its
  * job), so the queue is complete no matter how many jobs the org has —
@@ -214,7 +214,7 @@ interface StatusValuesPage {
 }
 
 export async function listPipelineJobs(pave: PaveClient): Promise<QueueJob[]> {
-  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.punchReview];
+  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.pmReview];
   const out: QueueJob[] = [];
   let page: string | null = null;
   for (let i = 0; i < 10; i++) {

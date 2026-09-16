@@ -51,7 +51,7 @@ test("listPipelineJobs asks the Status field for pipeline values and maps the jo
       customFieldValues: {
         nextPage: null,
         nodes: [
-          { job: rawJob("j4", "26-0407", "Punch Review") },
+          { job: rawJob("j4", "26-0407", "PM Review") },
           { job: rawJob("j1", "26-0418", "Final Inspection") },
           { job: null }, // status value whose job is gone
         ],
@@ -68,7 +68,7 @@ test("listPipelineJobs asks the Status field for pipeline values and maps the jo
     or: [
       [["value"], "=", "Final Inspection"],
       [["value"], "=", "Punch List"],
-      [["value"], "=", "Punch Review"],
+      [["value"], "=", "PM Review"],
     ],
   });
 });
