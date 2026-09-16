@@ -175,7 +175,7 @@ export function createHandler(deps: RouterDeps) {
       }
 
       // JobTread webhook: POST /webhooks/jobtread/<WEBHOOK_SECRET>
-      // On any job/task event we re-evaluate the punch-review flip.
+      // On any job/task event we re-evaluate the PM Review flip.
       if (req.method === "POST" && parts[0] === "webhooks" && parts[1] === "jobtread") {
         if (!deps.webhookSecret || parts[2] !== deps.webhookSecret) {
           return json(res, 401, { error: "Bad webhook token" });
@@ -369,7 +369,7 @@ export function createHandler(deps: RouterDeps) {
         }
       }
 
-      // Crew finished a punch task -> mark complete, maybe flip to Punch Review.
+      // Crew finished a punch task -> mark complete, maybe flip to PM Review.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = (await readBody(req)) as { jobId?: string; note?: string };
         const note = body.note?.trim() ? `${body.note.trim()} — ${session.name}` : session.name;

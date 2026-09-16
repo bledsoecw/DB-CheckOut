@@ -6,13 +6,13 @@
  *
  *   Final Inspection ──(crew finishes the inspection task)──┐
  *                                                           ├─ problems? ──> Punch List
- *                                                           └─ clean?    ──> Punch Review
- *   Punch List ──────(last punch task closes)──────────────────────────────> Punch Review
- *   Punch Review ────(PM reviews, then the sales rep speaks to the customer
+ *                                                           └─ clean?    ──> PM Review
+ *   Punch List ──────(last punch task closes)──────────────────────────────> PM Review
+ *   PM Review ───────(PM reviews, then the sales rep speaks to the customer
  *                     and ticks "Final check-off")──────────────────────────> Job Completed
  *
  * The PM's own "PM punch review" tick is a human gate with no status of its
- * own — the job waits at Punch Review through both of those check-offs, and
+ * own — the job waits at PM Review through both of those check-offs, and
  * only the sales rep's final one closes it. That is deliberate: Job Completed
  * fires the final 10% payment milestone, so a person talks to the customer
  * before any of this touches money.
@@ -34,7 +34,7 @@ import {
   setJobStatus,
   type PipelineTask,
 } from "./jt";
-import { shouldFlipToPunchReview } from "./punchReview";
+import { shouldFlipToPmReview } from "./pmReview";
 
 export interface PipelineInput {
   currentStatus: string;
@@ -68,18 +68,18 @@ export function openProblemCount(input: Pick<PipelineInput, "punchTasks" | "prob
  */
 export function nextPipelineStatus(input: PipelineInput): string | null {
   // The sales rep has spoken to the customer and ticked the last box.
-  if (input.currentStatus === STATUS.punchReview && input.checkOffDone) {
+  if (input.currentStatus === STATUS.pmReview && input.checkOffDone) {
     return STATUS.jobCompleted;
   }
 
   // Every repair is done — back to the PM to review (the pre-existing rule).
-  if (shouldFlipToPunchReview(input.currentStatus, input.punchTasks)) {
-    return STATUS.punchReview;
+  if (shouldFlipToPmReview(input.currentStatus, input.punchTasks)) {
+    return STATUS.pmReview;
   }
 
   // The crew has finished the inspection: problems decide which way it goes.
   if (input.currentStatus === STATUS.finalInspection && input.inspectionDone) {
-    return openProblemCount(input) > 0 ? STATUS.punchList : STATUS.punchReview;
+    return openProblemCount(input) > 0 ? STATUS.punchList : STATUS.pmReview;
   }
 
   return null;
@@ -103,7 +103,7 @@ export async function applyPipeline(
   const currentStatus = await getJobStatusValue(pave, jobId);
   const needsPunch = currentStatus === STATUS.punchList || currentStatus === STATUS.finalInspection;
   const needsMilestones =
-    currentStatus === STATUS.finalInspection || currentStatus === STATUS.punchReview;
+    currentStatus === STATUS.finalInspection || currentStatus === STATUS.pmReview;
   if (!needsPunch && !needsMilestones) return null;
 
   const [punchTasks, milestones] = await Promise.all([

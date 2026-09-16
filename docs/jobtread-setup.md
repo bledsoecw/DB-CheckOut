@@ -151,20 +151,20 @@ a dependency chain, so every task write the sync server makes passes
 | --- | --- |
 | `Final Inspection` | Job enters the crew app queue — service/QC crew (or a sales rep on far jobs) inspects & cleans up |
 | `Punch List` | **Set automatically when the crew completes "Final inspection" and the visit found open problems**; repairs assigned & in progress |
-| `Punch Review` | Set automatically either when the last punch task closes with its after photo, **or when a clean inspection completes with nothing to repair**; the PM reviews photos & notes and ticks "PM punch review" |
+| `PM Review` (was `Punch Review` until 2026-09-16) | Set automatically either when the last punch task closes with its after photo, **or when a clean inspection completes with nothing to repair**; the PM reviews photos & notes and ticks "PM punch review" |
 | `Job Completed` | **Set automatically when the sales rep ticks "Final check-off"** — they have spoken to the customer and all is well |
 | stays `Final Inspection` | Hold — correction required before advancing, or the job never got the template |
 
 ```
 Final Inspection ──(crew completes "Final inspection")──┬─ problems? ──> Punch List
-                                                        └─ clean?    ──> Punch Review
-Punch List ──────(last punch task closes)──────────────────────────────> Punch Review
-Punch Review ────(PM ticks "PM punch review", then the sales rep speaks
+                                                        └─ clean?    ──> PM Review
+Punch List ──────(last punch task closes)──────────────────────────────> PM Review
+PM Review ───────(PM ticks "PM punch review", then the sales rep speaks
                   to the customer and ticks "Final check-off")─────────> Job Completed
 ```
 
 The PM's own tick is a human gate with **no status of its own** — the job
-waits at `Punch Review` through both check-offs, and only the sales rep's
+waits at `PM Review` through both check-offs, and only the sales rep's
 closes it. That is deliberate: `Job Completed` fires the final 10% payment
 milestone, so a person talks to the customer before any of this touches
 money.
@@ -173,7 +173,7 @@ The pipeline is strictly linear (no status is ever re-entered), so
 automations can safely key off status transitions — and that is also what
 makes every rule idempotent: each is guarded on the status it moves OUT
 of, so a duplicate delivery from the app's offline outbox is a no-op. A
-rejected repair moves the job back from `Punch Review` to `Punch List`.
+rejected repair moves the job back from `PM Review` to `Punch List`.
 
 **The routing does not depend on write ordering.** The app's outbox
 (`flushOutbox`) continues past a failing item rather than stopping, so a

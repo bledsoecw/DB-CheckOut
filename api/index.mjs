@@ -172,31 +172,31 @@ var STATUS = {
   production: "Production",
   finalInspection: "Final Inspection",
   punchList: "Punch List",
-  punchReview: "Punch Review",
+  /** Renamed in JT from "Punch Review" on 2026-09-16 — JT refuses the old value. */
+  pmReview: "PM Review",
   jobCompleted: "Job Completed",
   pendingFinalPayment: "Pending Final Payment"
 };
+var ANSWER = {
+  ok: "OK",
+  na: "N/A",
+  action: "ACTION"
+};
+var INSPECTION_ITEMS = [
+  { fieldId: "22PdEQfPnVqh", subtask: "1. Shingle field flat \u2014 no exposed fasteners or unaddressed damage" },
+  { fieldId: "22PdEQfPnVqi", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
+  { fieldId: "22PdEQfPnVqj", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
+  { fieldId: "22PdEQfPnVqk", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
+  { fieldId: "22PdEQfPnVqm", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
+  { fieldId: "22PdEQfPnVqn", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
+  { fieldId: "22PdEQfPnVqp", subtask: "7. Sealant appropriate \u2014 not a substitute for flashing; roof surface clear" },
+  { fieldId: "22PdEQfPnVqq", subtask: "8. Attic / interior spot check \u2014 leak-prone areas inspected" }
+];
 var INSPECTION_FORM = {
   id: "22PdEQfPn8wQ",
   name: "DB Final Roofing Inspection",
-  optionFields: [
-    "22PdEQfPnVqh",
-    // 1. Shingle field flat — no exposed fasteners or unaddressed damage
-    "22PdEQfPnVqi",
-    // 2. Starter, eave/rake edges & drip edge complete and secure
-    "22PdEQfPnVqj",
-    // 3. Ridge & hip caps seated; valleys clean; transitions shed water
-    "22PdEQfPnVqk",
-    // 4. Pipe boots, static vents & ridge ventilation installed and sealed
-    "22PdEQfPnVqm",
-    // 5. Step, headwall & sidewall flashing complete and integrated
-    "22PdEQfPnVqn",
-    // 6. Chimneys, skylights & penetrations flashed/reset as scoped
-    "22PdEQfPnVqp",
-    // 7. Sealant appropriate — not a substitute for flashing; roof surface clear
-    "22PdEQfPnVqq"
-    // 8. Attic / interior spot check — leak-prone areas inspected
-  ],
+  /** Derived from INSPECTION_ITEMS so the fields and the subtasks can never drift apart. */
+  optionFields: INSPECTION_ITEMS.map((i) => i.fieldId),
   atticNotesField: "22PdEQfPnVqr",
   notesField: "22PdEQfPnVqs"
 };
@@ -220,8 +220,18 @@ var CLEANUP_FORM = {
 var TASK_TYPES = {
   /** Punch/repair items created from crew reports. */
   punchList: "22PLePTbJVrQ",
-  /** Optional: scheduling the inspection visit itself. */
-  inspection: "22PNJDrm6TsA"
+  /** The "Final inspection" pipeline task, and inspection visits generally. */
+  inspection: "22PNJDrm6TsA",
+  /** Planning bars that are not crew bookings ("Order materials", "Roof install"). */
+  preProduction: "22PDM6m8Vdqw",
+  /** The remaining pipeline milestones — deliberately NOT Punch List (see below). */
+  general: "22PBAjfWNQrT"
+};
+var PIPELINE_TASKS = {
+  /** Crew ticks the checklist here; completing it ends the inspection. */
+  finalInspection: { name: "Final inspection", typeId: TASK_TYPES.inspection },
+  /** Sales rep has spoken to the customer; completing it closes the job. */
+  finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general }
 };
 
 // apps/sync/src/jt.ts
@@ -317,7 +327,7 @@ async function listSoldScope(pave, jobId) {
   }
 }
 async function listPipelineJobs(pave) {
-  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.punchReview];
+  const statuses = [STATUS.finalInspection, STATUS.punchList, STATUS.pmReview];
   const out = [];
   let page = null;
   for (let i = 0; i < 10; i++) {
@@ -510,6 +520,54 @@ async function submitForm(pave, formId, jobId, values) {
   });
   return res.createFormSubmission.createdFormSubmission?.id ?? "";
 }
+var TASK_WRITE_GUARDS = { updateDependentTasks: false, notify: false };
+async function listPipelineTasks(pave, jobId) {
+  const res = await pave.query({
+    job: {
+      $: { id: jobId },
+      tasks: {
+        $: { size: 50 },
+        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} } }
+      }
+    }
+  });
+  return (res.job?.tasks.nodes ?? []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    progress: t.progress ?? 0,
+    taskTypeId: t.taskType?.id ?? null
+  }));
+}
+var sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+function findPipelineTask(tasks, spec) {
+  const typed = tasks.filter((t) => t.taskTypeId === spec.typeId);
+  if (typed.length === 1) return typed[0];
+  return typed.find((t) => sameName(t.name, spec.name)) ?? tasks.find((t) => sameName(t.name, spec.name));
+}
+async function closeInspectionTask(pave, taskId, answers, byName) {
+  const subtasks = INSPECTION_ITEMS.map((item) => ({
+    name: item.subtask,
+    isComplete: answers[item.fieldId] === ANSWER.ok || answers[item.fieldId] === ANSWER.na
+  }));
+  const res = await pave.query({
+    task: { $: { id: taskId }, description: {} }
+  });
+  const done = `\u2714 Inspected by ${byName} \u2014 via DB CheckOut`;
+  const description = res.task?.description ? `${res.task.description}
+
+${done}` : done;
+  await pave.query({
+    updateTask: {
+      $: {
+        id: taskId,
+        ...TASK_WRITE_GUARDS,
+        progress: 1,
+        subtasks,
+        description: description.slice(0, 4096)
+      }
+    }
+  });
+}
 async function createReportTask(pave, jobId, report) {
   const fixed = report.fixedOnSite === true;
   const lines = [report.englishNote];
@@ -539,7 +597,7 @@ async function createReportTask(pave, jobId, report) {
 async function completeTask(pave, taskId, note) {
   const trimmed = note?.trim();
   if (!trimmed) {
-    await pave.query({ updateTask: { $: { id: taskId, progress: 1 } } });
+    await pave.query({ updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1 } } });
     return;
   }
   const res = await pave.query({
@@ -550,7 +608,9 @@ async function completeTask(pave, taskId, note) {
 
 ${done}` : done;
   await pave.query({
-    updateTask: { $: { id: taskId, progress: 1, description: description.slice(0, 4096) } }
+    updateTask: {
+      $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) }
+    }
   });
 }
 async function uploadPhoto(pave, jobId, photo, fetchImpl = fetch) {
@@ -591,20 +651,50 @@ async function setJobStatus(pave, jobId, status) {
   });
 }
 
-// apps/sync/src/punchReview.ts
-function shouldFlipToPunchReview(currentStatus, tasks) {
+// apps/sync/src/pmReview.ts
+function shouldFlipToPmReview(currentStatus, tasks) {
   if (currentStatus !== STATUS.punchList) return false;
   if (tasks.length === 0) return false;
   return tasks.every((t) => t.progress >= 1);
 }
-async function applyPunchReviewFlip(pave, jobId) {
-  const [status, tasks] = await Promise.all([
-    getJobStatusValue(pave, jobId),
-    listPunchTasks(pave, jobId)
+
+// apps/sync/src/pipeline.ts
+function openProblemCount(input) {
+  const open = input.punchTasks.filter((t) => t.progress < 1).length;
+  return Math.max(open, input.problemsReported);
+}
+function nextPipelineStatus(input) {
+  if (input.currentStatus === STATUS.pmReview && input.checkOffDone) {
+    return STATUS.jobCompleted;
+  }
+  if (shouldFlipToPmReview(input.currentStatus, input.punchTasks)) {
+    return STATUS.pmReview;
+  }
+  if (input.currentStatus === STATUS.finalInspection && input.inspectionDone) {
+    return openProblemCount(input) > 0 ? STATUS.punchList : STATUS.pmReview;
+  }
+  return null;
+}
+var isDone = (task) => (task?.progress ?? 0) >= 1;
+async function applyPipeline(pave, jobId, opts = {}) {
+  const currentStatus = await getJobStatusValue(pave, jobId);
+  const needsPunch = currentStatus === STATUS.punchList || currentStatus === STATUS.finalInspection;
+  const needsMilestones = currentStatus === STATUS.finalInspection || currentStatus === STATUS.pmReview;
+  if (!needsPunch && !needsMilestones) return null;
+  const [punchTasks, milestones] = await Promise.all([
+    needsPunch ? listPunchTasks(pave, jobId) : Promise.resolve([]),
+    needsMilestones ? listPipelineTasks(pave, jobId) : Promise.resolve([])
   ]);
-  if (!shouldFlipToPunchReview(status, tasks)) return null;
-  await setJobStatus(pave, jobId, STATUS.punchReview);
-  return STATUS.punchReview;
+  const next = nextPipelineStatus({
+    currentStatus,
+    inspectionDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
+    checkOffDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalCheckOff)),
+    punchTasks,
+    problemsReported: opts.problemsReported ?? 0
+  });
+  if (!next) return null;
+  await setJobStatus(pave, jobId, next);
+  return next;
 }
 
 // apps/sync/src/translate.ts
@@ -837,10 +927,10 @@ function createHandler(deps) {
         let flipped = null;
         if (jobId) {
           try {
-            flipped = await applyPunchReviewFlip(deps.pave, jobId);
+            flipped = await applyPipeline(deps.pave, jobId);
           } catch (err) {
             console.warn(
-              `punch-review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
+              `pipeline check skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
             );
           }
         }
@@ -908,6 +998,17 @@ function createHandler(deps) {
           const id = await submitForm(deps.pave, form.id, jobId, checklistValues(sub));
           return json(res, 200, { submissionId: id });
         }
+        if (parts[2] === "close-inspection") {
+          const body = await readBody(req);
+          const problemsReported = typeof body.problemsReported === "number" && body.problemsReported > 0 ? Math.floor(body.problemsReported) : 0;
+          const milestones = await listPipelineTasks(deps.pave, jobId);
+          const task = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+          if (task) {
+            await closeInspectionTask(deps.pave, task.id, body.answers ?? {}, session.name);
+          }
+          const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
+          return json(res, 200, { completedTaskId: task?.id ?? null, flipped });
+        }
         if (parts[2] === "reports") {
           const report = await readBody(req);
           if (!report.location || !report.englishNote) {
@@ -960,7 +1061,7 @@ function createHandler(deps) {
         const body = await readBody(req);
         const note = body.note?.trim() ? `${body.note.trim()} \u2014 ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
-        const flipped = body.jobId ? await applyPunchReviewFlip(deps.pave, body.jobId) : null;
+        const flipped = body.jobId ? await applyPipeline(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });

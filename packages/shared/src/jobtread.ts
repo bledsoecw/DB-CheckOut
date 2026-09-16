@@ -35,7 +35,8 @@ export const STATUS = {
   production: "Production",
   finalInspection: "Final Inspection",
   punchList: "Punch List",
-  punchReview: "Punch Review",
+  /** Renamed in JT from "Punch Review" on 2026-09-16 — JT refuses the old value. */
+  pmReview: "PM Review",
   jobCompleted: "Job Completed",
   pendingFinalPayment: "Pending Final Payment",
 } as const;
@@ -126,7 +127,7 @@ export const TASK_TYPES = {
  * - "Punch list" is typed **General, never Punch List**. `listPunchTasks`
  *   filters on task type alone, so a permanently-open phase task typed
  *   Punch List would count as an unfinished punch item on every job and the
- *   Punch Review flip would never fire again, anywhere.
+ *   PM Review flip would never fire again, anywhere.
  * - "Order materials" and "Roof install" are typed **Pre-Production, not
  *   Install or Roofing**. The DB Production Board's task sweep accepts
  *   Install, Roofing AND untyped tasks and then resolves a crew from the

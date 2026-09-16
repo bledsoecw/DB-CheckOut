@@ -40,8 +40,8 @@ test("a finished inspection with open problems routes to Punch List", () => {
   assert.equal(next, STATUS.punchList);
 });
 
-test("a clean finished inspection goes to Punch Review for the PM, not to the customer", () => {
-  assert.equal(nextPipelineStatus(input({ inspectionDone: true })), STATUS.punchReview);
+test("a clean finished inspection goes to PM Review for the PM, not to the customer", () => {
+  assert.equal(nextPipelineStatus(input({ inspectionDone: true })), STATUS.pmReview);
 });
 
 test("an unfinished inspection moves nothing", () => {
@@ -51,14 +51,14 @@ test("an unfinished inspection moves nothing", () => {
 /**
  * The trap: "FIXED ON SITE" reports are Punch List tasks created already
  * complete. Counting them as problems would send a job with nothing left to
- * do to Punch List — and the punch-review rule would then flip it straight on
- * to Punch Review, skipping the PM's actual review of a clean pass.
+ * do to Punch List — and the PM Review rule would then flip it straight on
+ * to PM Review, skipping the PM's actual review of a clean pass.
  */
 test("corrections the crew already made are not open problems", () => {
   const next = nextPipelineStatus(
     input({ inspectionDone: true, punchTasks: [punch(1), punch(1)] }),
   );
-  assert.equal(next, STATUS.punchReview);
+  assert.equal(next, STATUS.pmReview);
 });
 
 /**
@@ -80,11 +80,11 @@ test("openProblemCount takes the larger of what landed and what the app saw", ()
 // Punch work finishes (the pre-existing rule, still in force)
 // --------------------------------------------------------------------------
 
-test("the last repair closing still flips Punch List to Punch Review", () => {
+test("the last repair closing still flips Punch List to PM Review", () => {
   const next = nextPipelineStatus(
     input({ currentStatus: STATUS.punchList, punchTasks: [punch(1), punch(1)] }),
   );
-  assert.equal(next, STATUS.punchReview);
+  assert.equal(next, STATUS.pmReview);
 });
 
 test("an open repair holds the job at Punch List", () => {
@@ -98,9 +98,9 @@ test("an open repair holds the job at Punch List", () => {
 // The sales rep closes the job
 // --------------------------------------------------------------------------
 
-test("the final check-off closes the job from Punch Review", () => {
+test("the final check-off closes the job from PM Review", () => {
   const next = nextPipelineStatus(
-    input({ currentStatus: STATUS.punchReview, checkOffDone: true }),
+    input({ currentStatus: STATUS.pmReview, checkOffDone: true }),
   );
   assert.equal(next, STATUS.jobCompleted);
 });

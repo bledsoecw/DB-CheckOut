@@ -200,7 +200,7 @@ function JobCard({
   showMine: boolean;
 }) {
   const { t, p } = useLang();
-  const isPunch = job.status === STATUS.punchList || job.status === STATUS.punchReview;
+  const isPunch = job.status === STATUS.punchList || job.status === STATUS.pmReview;
   // Only route to the repairs list when the viewer has repairs of their own;
   // a job parked at a punch status with none opens like any other job.
   const hasRepairs = isPunch && job.openPunchCount > 0;
