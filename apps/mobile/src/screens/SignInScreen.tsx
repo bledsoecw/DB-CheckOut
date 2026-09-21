@@ -12,6 +12,19 @@ const GSI_SRC = "https://accounts.google.com/gsi/client";
 type Gate = "loading" | "ready" | "offline" | "unconfigured";
 
 /**
+ * The demo browses sample data and sends nothing. It exists for showing
+ * the app around and for working on it without a server, so it is only
+ * offered when there is no configured server to sign in to — never as the
+ * next thing under a real "no access" message, where a crew member could
+ * do a whole visit into it.
+ */
+function demoOffered(gate: Gate): boolean {
+  if (gate === "unconfigured") return true;
+  const host = (globalThis as { location?: { hostname?: string } }).location?.hostname ?? "";
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+/**
  * First-open gate: Sign in with Google, company accounts only. The Google
  * ID token is exchanged server-side for a long-lived session, so people
  * sign in about once a month per device. Web-only for now (the app ships
@@ -128,17 +141,19 @@ export default function SignInScreen() {
           ) : null}
         </View>
       </View>
-      <Pressable
-        style={styles.demo}
-        onPress={async () => {
-          await enterDemoMode();
-          setMode("demo");
-        }}
-      >
-        <Text style={styles.demoText}>
-          {p({ es: "Ver demostración (datos de ejemplo)", en: "See a demo (sample data)" })}
-        </Text>
-      </Pressable>
+      {demoOffered(gate) ? (
+        <Pressable
+          style={styles.demo}
+          onPress={async () => {
+            await enterDemoMode();
+            setMode("demo");
+          }}
+        >
+          <Text style={styles.demoText}>
+            {p({ es: "Ver demostración (datos de ejemplo)", en: "See a demo (sample data)" })}
+          </Text>
+        </Pressable>
+      ) : null}
     </SafeAreaView>
   );
 }

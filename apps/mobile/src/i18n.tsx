@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { storage } from "./storage";
 import type { Bi, Lang } from "@shared/i18n";
 import { UI, pick, secondary } from "@shared/i18n";
 
@@ -23,7 +23,7 @@ export function LangProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLang] = useState<Lang>("es");
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((saved) => {
+    storage.getItem(STORAGE_KEY).then((saved) => {
       if (saved === "en" || saved === "es") setLang(saved);
     });
   }, []);
@@ -31,7 +31,7 @@ export function LangProvider({ children }: { children: React.ReactNode }) {
   const toggle = () => {
     setLang((prev) => {
       const next = prev === "es" ? "en" : "es";
-      AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {});
+      storage.setItem(STORAGE_KEY, next).catch(() => {});
       return next;
     });
   };

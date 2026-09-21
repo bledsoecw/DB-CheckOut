@@ -1,13 +1,13 @@
 /**
- * Local working state for a job visit (answers, notes, reports) persisted to
- * AsyncStorage so nothing is lost if the app is killed on the roof.
+ * Local working state for a job visit (answers, notes, reports) persisted on the
+ * phone (see storage.ts) so nothing is lost if the app is killed on the roof.
  * Held in a module-level store shared by every mounted screen, so the job
  * screen's counters update live as the checklist/report screens write.
  * Cleared when the visit is submitted.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { storage } from "./storage";
 import type { Answer } from "@shared/jobtread";
 import type { ProblemReport } from "@shared/types";
 
@@ -51,7 +51,7 @@ export function useVisit(jobId: string) {
     const listener = () => bump((n) => n + 1);
     listeners.add(listener);
     if (!memory.has(jobId)) {
-      AsyncStorage.getItem(key(jobId)).then((raw) => {
+      storage.getItem(key(jobId)).then((raw) => {
         if (!memory.has(jobId)) {
           memory.set(jobId, raw ? { ...EMPTY, ...(JSON.parse(raw) as VisitState) } : EMPTY);
           notify();
@@ -67,7 +67,7 @@ export function useVisit(jobId: string) {
     (patch: (prev: VisitState) => VisitState) => {
       const next = patch(memory.get(jobId) ?? EMPTY);
       memory.set(jobId, next);
-      AsyncStorage.setItem(key(jobId), JSON.stringify(next)).catch(() => {});
+      storage.setItem(key(jobId), JSON.stringify(next)).catch(() => {});
       notify();
     },
     [jobId],
@@ -97,7 +97,7 @@ export function useVisit(jobId: string) {
       const prev = memory.get(jobId) ?? EMPTY;
       const next = { ...EMPTY, lastSentAt: sentAt ?? prev.lastSentAt };
       memory.set(jobId, next);
-      AsyncStorage.setItem(key(jobId), JSON.stringify(next)).catch(() => {});
+      storage.setItem(key(jobId), JSON.stringify(next)).catch(() => {});
       notify();
     },
   };

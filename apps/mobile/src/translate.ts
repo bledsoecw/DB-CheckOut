@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { storage } from "./storage";
 import { translateBatch } from "./api";
 
 const KEY_PREFIX = "db-checkout.es.";
@@ -26,7 +26,7 @@ async function translateTexts(texts: string[]): Promise<void> {
   // On-device cache first
   const misses: string[] = [];
   for (const text of wanted) {
-    const cached = await AsyncStorage.getItem(KEY_PREFIX + hash(text)).catch(() => null);
+    const cached = await storage.getItem(KEY_PREFIX + hash(text)).catch(() => null);
     if (cached) memory.set(text, cached);
     else misses.push(text);
   }
@@ -38,7 +38,7 @@ async function translateTexts(texts: string[]): Promise<void> {
     const translated = translations[i];
     if (typeof translated === "string" && translated) {
       memory.set(text, translated);
-      void AsyncStorage.setItem(KEY_PREFIX + hash(text), translated).catch(() => {});
+      void storage.setItem(KEY_PREFIX + hash(text), translated).catch(() => {});
     }
   });
 }

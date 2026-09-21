@@ -7,6 +7,7 @@ import type { RootStackParamList } from "../../App";
 import {
   closeInspection,
   getJob,
+  isDemoMode,
   newClientRef,
   sendReport,
   uploadJobPhoto,
@@ -130,11 +131,13 @@ export default function SendScreen({ navigation, route }: Props) {
             <Text style={{ fontSize: 34, color: tint(overall) }}>{mark(overall)}</Text>
           </View>
           <Text style={styles.heroTitle}>
-            {overall === "sent"
-              ? p({ es: "Enviado a JobTread", en: "Sent to JobTread" })
-              : overall === "queued"
-                ? p({ es: "Guardado — aún no llega", en: "Saved — not delivered yet" })
-                : p({ es: "Algo no se pudo enviar", en: "Something could not be sent" })}
+            {isDemoMode()
+              ? p({ es: "Demostración — no se envió nada", en: "Demo — nothing was sent" })
+              : overall === "sent"
+                ? p({ es: "Enviado a JobTread", en: "Sent to JobTread" })
+                : overall === "queued"
+                  ? p({ es: "Guardado — aún no llega", en: "Saved — not delivered yet" })
+                  : p({ es: "Algo no se pudo enviar", en: "Something could not be sent" })}
           </Text>
 
           <Card style={styles.receipt}>

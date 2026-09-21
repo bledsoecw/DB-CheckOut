@@ -5,7 +5,7 @@
  *   again — nothing the crew does is ever lost to a dead spot.
  */
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { storage } from "./storage";
 import type { CloseInspectionRequest, JobDetail, ProblemReport, QueueJob, ScopeSummary } from "@shared/types";
 import { MOCK_JOBS, mockJobDetail } from "./mock";
 
@@ -42,11 +42,11 @@ export type AuthMode = "google" | "demo" | null;
 
 export async function loadAuth(): Promise<AuthMode> {
   // The shared team code is retired; anyone still carrying one signs in again.
-  await AsyncStorage.removeItem(LEGACY_TEAM_CODE_KEY);
-  const raw = await AsyncStorage.getItem(SESSION_KEY);
+  await storage.removeItem(LEGACY_TEAM_CODE_KEY);
+  const raw = await storage.getItem(SESSION_KEY);
   session = raw ? (JSON.parse(raw) as Session) : null;
-  demoMode = (await AsyncStorage.getItem(DEMO_KEY)) === "1";
-  const storedOutbox = await AsyncStorage.getItem(OUTBOX_KEY).catch(() => null);
+  demoMode = (await storage.getItem(DEMO_KEY)) === "1";
+  const storedOutbox = await storage.getItem(OUTBOX_KEY).catch(() => null);
   if (storedOutbox) {
     try {
       const parsed = JSON.parse(storedOutbox) as Array<Partial<OutboxItem>>;
@@ -93,14 +93,19 @@ export async function signInWithGoogle(credential: string): Promise<boolean> {
     return false;
   }
   demoMode = false;
-  await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  await AsyncStorage.removeItem(DEMO_KEY);
+  await storage.setItem(SESSION_KEY, JSON.stringify(session));
+  await storage.removeItem(DEMO_KEY);
   return true;
 }
 
 /** Display name of the signed-in person (null in demo / signed out). */
 export function currentUserName(): string | null {
   return session?.name ?? null;
+}
+
+/** True while browsing sample data: nothing is sent anywhere. */
+export function isDemoMode(): boolean {
+  return demoMode;
 }
 
 /** Called when the server rejects our session (expired or revoked). */
@@ -111,16 +116,16 @@ export function setOnUnauthorized(listener: (() => void) | null): void {
 export async function enterDemoMode(): Promise<void> {
   demoMode = true;
   session = null;
-  await AsyncStorage.setItem(DEMO_KEY, "1");
-  await AsyncStorage.removeItem(SESSION_KEY);
+  await storage.setItem(DEMO_KEY, "1");
+  await storage.removeItem(SESSION_KEY);
 }
 
 /** Sign out: forget the stored session. */
 export async function clearAuth(): Promise<void> {
   session = null;
   demoMode = false;
-  await AsyncStorage.removeItem(SESSION_KEY);
-  await AsyncStorage.removeItem(DEMO_KEY);
+  await storage.removeItem(SESSION_KEY);
+  await storage.removeItem(DEMO_KEY);
 }
 
 const connected = () => session != null;
@@ -181,7 +186,7 @@ let outbox: OutboxItem[] = [];
 const outboxListeners = new Set<() => void>();
 
 function notifyOutbox(): void {
-  void AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox)).catch(() => {});
+  void storage.setItem(OUTBOX_KEY, JSON.stringify(outbox)).catch(() => {});
   for (const listener of outboxListeners) listener();
 }
 
@@ -248,11 +253,11 @@ async function cached<T>(key: string, fresh: () => Promise<T>, demo: T): Promise
   try {
     const value = await fresh();
     // Cache best-effort: a full/blocked storage must not discard fresh data.
-    await AsyncStorage.setItem(CACHE_PREFIX + key, JSON.stringify(value)).catch(() => {});
+    await storage.setItem(CACHE_PREFIX + key, JSON.stringify(value)).catch(() => {});
     void flushOutbox();
     return value;
   } catch (err) {
-    const stale = await AsyncStorage.getItem(CACHE_PREFIX + key).catch(() => null);
+    const stale = await storage.getItem(CACHE_PREFIX + key).catch(() => null);
     if (stale) return JSON.parse(stale) as T;
     throw err;
   }
@@ -475,10 +480,10 @@ export async function getScopeSummary(jobId: string): Promise<ScopeSummaryResult
     const body = await request<ScopeSummary>("GET", `/jobs/${jobId}/scope-summary`);
     if (!body.en && !body.es) return { summary: null };
     const summary = { en: body.en, es: body.es };
-    await AsyncStorage.setItem(key, JSON.stringify(summary)).catch(() => {});
+    await storage.setItem(key, JSON.stringify(summary)).catch(() => {});
     return { summary };
   } catch (err) {
-    const stale = await AsyncStorage.getItem(key).catch(() => null);
+    const stale = await storage.getItem(key).catch(() => null);
     if (stale) return { summary: JSON.parse(stale) as ScopeSummary };
     return { summary: null, error: err instanceof Error ? err.message : String(err) };
   }

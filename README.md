@@ -97,9 +97,10 @@ npx expo start --web              # develop in the browser
 npx expo export --platform web    # static build (dist/) for Vercel
 ```
 
-With no server reachable it runs in demo mode on sample data; served
-from the same Vercel project as the sync server it uses same-origin
-requests and Google sign-in for the real queue. All writes go through
+Without a configured server (or on localhost) it offers a demo on
+sample data — banner on every screen, nothing sent; served from the
+same Vercel project as the sync server it uses same-origin requests and
+Google sign-in for the real queue, and the demo is not offered. All writes go through
 a persistent offline outbox — nothing is lost in a dead spot. Every send
 carries a client reference the server uses to recognise a re-send (a
 report or photo that landed but whose answer never came back is not
@@ -146,8 +147,12 @@ Key design decisions:
   note, with the original speech shown to the crew for confidence.
 - **Glove-friendly & minimal reading** — 44px+ targets everywhere,
   icon-heavy, one primary action per screen.
-- **Offline-first** — everything saves locally and syncs when signal
-  returns; the app says so in plain words ("Sin señal, no pasa nada").
+- **Offline-first** — everything saves locally (IndexedDB, so a visit
+  full of photos fits; `apps/mobile/src/storage.ts`) and syncs when
+  signal returns; the app says so in plain words ("Sin señal, no pasa
+  nada"). A service worker generated at build time
+  (`scripts/fix-web-html.mjs` → `public/sw.js`) caches the app shell, so
+  a cold open with no signal still opens the app.
 - **Photo gates** — cleanup proof photos and AFTER photos on repairs
   are required before items can close.
 - **Reports can be dismissed** — the PM can mark a report
