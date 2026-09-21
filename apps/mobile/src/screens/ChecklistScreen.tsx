@@ -2,7 +2,7 @@ import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { ANSWER, INSPECTION_FORM } from "@shared/jobtread";
+import { ANSWER, INSPECTION_CHECKLIST } from "@shared/jobtread";
 import { FIELD_LABELS } from "@shared/i18n";
 import type { RootStackParamList } from "../../App";
 import { BigButton, Card, LangPill, TriToggle } from "../components";
@@ -17,9 +17,9 @@ export default function ChecklistScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
   const { t, t2, p, s } = useLang();
   const { state, setAnswer, setNote } = useVisit(jobId);
-  const note = state.notes[INSPECTION_FORM.notesField] ?? "";
+  const note = state.notes[INSPECTION_CHECKLIST.notesKey] ?? "";
 
-  const done = INSPECTION_FORM.optionFields.filter((f) => state.inspection[f]).length;
+  const done = INSPECTION_CHECKLIST.keys.filter((f) => state.inspection[f]).length;
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -34,14 +34,14 @@ export default function ChecklistScreen({ navigation, route }: Props) {
         <LangPill />
         <View style={styles.count}>
           <Text style={styles.countText}>
-            {done}/{INSPECTION_FORM.optionFields.length}
+            {done}/{INSPECTION_CHECKLIST.keys.length}
           </Text>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }}>
         <Card style={{ padding: 0, overflow: "hidden" }}>
-          {INSPECTION_FORM.optionFields.map((fieldId, i) => (
+          {INSPECTION_CHECKLIST.keys.map((fieldId, i) => (
             <View
               key={fieldId}
               style={[styles.row, i > 0 ? styles.rowBorder : null]}
@@ -64,17 +64,17 @@ export default function ChecklistScreen({ navigation, route }: Props) {
           ))}
         </Card>
 
-        <VoiceNotesSection note={note} onChange={(text) => setNote(INSPECTION_FORM.notesField, text)} />
+        <VoiceNotesSection note={note} onChange={(text) => setNote(INSPECTION_CHECKLIST.notesKey, text)} />
 
         <BigButton
           bi={{ es: "Inspección completa ✓", en: "Inspection complete ✓" }}
           color={colors.blue}
-          disabled={done < INSPECTION_FORM.optionFields.length}
+          disabled={done < INSPECTION_CHECKLIST.keys.length}
           onPress={() => navigation.goBack()}
         />
-        {done < INSPECTION_FORM.optionFields.length ? (
+        {done < INSPECTION_CHECKLIST.keys.length ? (
           <Text style={styles.leftHint}>
-            {INSPECTION_FORM.optionFields.length - done}{" "}
+            {INSPECTION_CHECKLIST.keys.length - done}{" "}
             {p({ es: "puntos sin responder", en: "items unanswered" })}
           </Text>
         ) : null}

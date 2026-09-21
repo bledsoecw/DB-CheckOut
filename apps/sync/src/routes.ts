@@ -17,13 +17,8 @@ import {
   type SessionUser,
 } from "./auth";
 import { PaveError, type PaveClient } from "./pave";
-import {
-  CLEANUP_FORM,
-  INSPECTION_FORM,
-  PIPELINE_TASKS,
-  STATUS,
-} from "../../../packages/shared/src/jobtread";
-import type { ChecklistSubmission, ProblemReport } from "../../../packages/shared/src/types";
+import { PIPELINE_TASKS, STATUS } from "../../../packages/shared/src/jobtread";
+import type { CloseInspectionRequest, ProblemReport } from "../../../packages/shared/src/types";
 import {
   closeInspectionTask,
   completeTask,
@@ -34,9 +29,9 @@ import {
   listPipelineJobs,
   listPipelineTasks,
   listSoldScope,
-  submitForm,
   uploadPhoto,
   type PhotoUpload,
+  type VisitChecklists,
 } from "./jt";
 import { applyPipeline } from "./pipeline";
 import { summarizeScope, transcribeNote, translateToSpanish, TRANSLATE_LIMITS } from "./translate";
@@ -78,8 +73,30 @@ async function readBody(req: IncomingMessage, limit = 5_000_000): Promise<unknow
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function checklistValues(sub: ChecklistSubmission): Record<string, string> {
-  return { ...sub.answers, ...(sub.texts ?? {}) };
+const stringMap = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === "string") out[k] = v;
+  }
+  return out;
+};
+
+/**
+ * The visit as the app sends it (CloseInspectionRequest). Builds shipped
+ * before the checklists moved onto the task sent `answers` as one flat map of
+ * inspection answers — still accepted, so an outbox that queued a close on
+ * the old build delivers rather than fails.
+ */
+export function parseVisit(body: Partial<CloseInspectionRequest> & { answers?: unknown }): VisitChecklists {
+  const answers = (body.answers ?? {}) as Record<string, unknown>;
+  const nested = typeof answers["inspection"] === "object" || typeof answers["cleanup"] === "object";
+  const notes = stringMap(body.notes);
+  return {
+    inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
+    cleanup: nested ? stringMap(answers["cleanup"]) : {},
+    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"] },
+  };
 }
 
 const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
@@ -282,21 +299,21 @@ export function createHandler(deps: RouterDeps) {
       if (req.method === "POST" && parts[0] === "jobs" && parts.length === 3) {
         const jobId = parts[1];
         if (parts[2] === "inspection" || parts[2] === "cleanup") {
-          const sub = (await readBody(req)) as ChecklistSubmission;
-          const form = parts[2] === "inspection" ? INSPECTION_FORM : CLEANUP_FORM;
-          const id = await submitForm(deps.pave, form.id, jobId, checklistValues(sub));
-          return json(res, 200, { submissionId: id });
+          // Retired 2026-09-21: the JT forms these submitted no longer exist.
+          // The checklists ride on the job's scheduled "Final inspection"
+          // task and arrive through close-inspection below.
+          return json(res, 410, {
+            error: "Checklist forms were retired — the visit is sent through close-inspection",
+          });
         }
-        // The crew has finished the visit: tick the checklist onto the job's
-        // "Final inspection" task, complete it, and let the pipeline decide
-        // where the job goes. Called LAST in the send, after the problem
-        // reports — and it carries its own problem count anyway, because the
-        // outbox can deliver those after this (see PipelineInput).
+        // The crew has finished the visit: write both checklists onto the
+        // job's scheduled "Final inspection" task with the notes, complete
+        // it, and let the pipeline decide where the job goes. Called LAST in
+        // the send, after the problem reports — and it carries its own
+        // problem count anyway, because the outbox can deliver those after
+        // this (see PipelineInput).
         if (parts[2] === "close-inspection") {
-          const body = (await readBody(req)) as {
-            answers?: Record<string, string>;
-            problemsReported?: unknown;
-          };
+          const body = (await readBody(req)) as Partial<CloseInspectionRequest> & { answers?: unknown };
           const problemsReported =
             typeof body.problemsReported === "number" && body.problemsReported > 0
               ? Math.floor(body.problemsReported)
@@ -307,7 +324,7 @@ export function createHandler(deps: RouterDeps) {
           // complete, and the pipeline will leave the status alone. The PM
           // advances it from the board exactly as they did before.
           if (task) {
-            await closeInspectionTask(deps.pave, task.id, body.answers ?? {}, session.name);
+            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name);
           }
           const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
           return json(res, 200, { completedTaskId: task?.id ?? null, flipped });

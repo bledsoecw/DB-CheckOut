@@ -6,47 +6,68 @@ delete these objects in JT without updating this file.
 
 Organization: **Deitemeyer Brothers** — `22PBAjem8SSC`
 
-## Forms (targetType: job)
+## Crew checklists — on the scheduled "Final inspection" task (since 2026-09-21)
 
-The app renders these form templates as the crew checklists and writes
-answers back as form submissions. English field names are the JT record;
-the app displays the Spanish labels below (ES-first, EN below; the ES·EN
-pill flips priority). Canonical option values are always stored as
-`OK` / `N/A` / `ACTION` regardless of display language
-(display: BIEN / N-A / FALLA in ES mode, OK / N-A / FIX in EN mode).
+The crew checklists are the CHECKLIST (subtasks) on the job's scheduled
+**"Final inspection"** task, copied from the pipeline task template below.
+The two JT Forms the app used to submit — "DB Final Roofing Inspection"
+`22PdEQfPn8wQ` and "DB Site Cleanup" `22PdEQhB67dq` — were removed from
+JobTread and the app no longer submits any form. `POST /jobs/:id/inspection`
+and `/cleanup` answer 410.
 
-### DB Final Roofing Inspection — form `22PdEQfPn8wQ`
+When the crew finishes the visit (`POST /jobs/:id/close-inspection`) the
+sync server writes, in one `updateTask`:
 
-| Field id | JT field (EN, the record) | App label (ES) | Type |
-| --- | --- | --- | --- |
-| `22PdEQfPnVqh` | 1. Shingle field flat — no exposed fasteners or unaddressed damage | Tejas parejas, sin clavos expuestos | option |
-| `22PdEQfPnVqi` | 2. Starter, eave/rake edges & drip edge complete and secure | Drip edge y bordes firmes | option |
-| `22PdEQfPnVqj` | 3. Ridge & hip caps seated; valleys clean; transitions shed water | Caballete completo, valles limpios | option |
-| `22PdEQfPnVqk` | 4. Pipe boots, static vents & ridge ventilation installed and sealed | Botas y ventilas bien selladas | option |
-| `22PdEQfPnVqm` | 5. Step, headwall & sidewall flashing complete and integrated | Flashing en paredes completo | option |
-| `22PdEQfPnVqn` | 6. Chimneys, skylights & penetrations flashed/reset as scoped | Chimenea y tragaluz con flashing | option |
-| `22PdEQfPnVqp` | 7. Sealant appropriate — not a substitute for flashing; roof surface clear | Techo limpio, sin exceso de sellador | option |
-| `22PdEQfPnVqq` | 8. Attic / interior spot check — leak-prone areas inspected | Revisión del ático — puntos de fuga | option |
-| `22PdEQfPnVqr` | Attic access limitation / existing conditions | Limitación de acceso / condiciones existentes | longString |
-| `22PdEQfPnVqs` | Inspector notes (English) | Notas | longString |
+- the task's `subtasks`, replaced in full: the eight inspection items, then
+  the five cleanup items (`INSPECTION_ITEMS` / `CLEANUP_ITEMS` in
+  `packages/shared/src/jobtread.ts` — the subtask names below, word for
+  word, because a subtask has no id and is matched by name);
+- the task's `description`, with `✔ Inspected by <name> — via DB CheckOut`
+  and the inspector, attic-limitation and cleanup notes appended (once —
+  a duplicate outbox delivery finds its own stamp and leaves it);
+- `progress: 1`.
 
-### DB Site Cleanup — form `22PdEQhB67dq`
+Answers collapse to the subtask's two states: `OK` and `N/A` tick, `ACTION`
+does not — an `ACTION` is what created the `REPORT:` punch task, which is
+where that finding actually lives. English is the record; the app displays
+the Spanish labels (ES-first, the ES·EN pill flips priority; BIEN / N-A /
+FALLA in ES mode, OK / N-A / FIX in EN mode).
 
-| Field id | JT field (EN, the record) | App label (ES) | Type |
-| --- | --- | --- | --- |
-| `22PdEQhB6rSR` | 1. Driveway, walks & landscaping clean — magnet sweep completed | Barrido con imán — entrada, banquetas y jardín | option |
-| `22PdEQhB6rSS` | 2. Unused materials, pallets, tarps & crew debris removed or staged | Materiales, lonas y basura recogidos | option |
-| `22PdEQhB6rST` | 3. Gutters & downspouts clear of debris and reconnected | Canales y bajantes limpios y conectados | option |
-| `22PdEQhB6rSU` | 4. No production damage — siding, windows, doors, AC, plants | Sin daños — siding, ventanas, AC, plantas | option |
-| `22PdEQhB6rSV` | 5. General appearance — ready for the homeowner to view | Listo para que lo vea el cliente | option |
-| `22PdEQhB6rSW` | Cleanup notes (English) | Notas | longString |
+The item keys the app uses (`22PdEQ…`) are the ids of the retired form
+fields, kept as opaque keys so nothing saved on a phone was lost.
 
-### DB Customer Walkthrough — form `22PdEpi4SNW3`
+| App key | Subtask on "Final inspection" | App label (ES) |
+| --- | --- | --- |
+| `22PdEQfPnVqh` | 1. Shingle field flat — no exposed fasteners or unaddressed damage | Tejas parejas, sin clavos expuestos |
+| `22PdEQfPnVqi` | 2. Starter, eave/rake edges & drip edge complete and secure | Drip edge y bordes firmes |
+| `22PdEQfPnVqj` | 3. Ridge & hip caps seated; valleys clean; transitions shed water | Caballete completo, valles limpios |
+| `22PdEQfPnVqk` | 4. Pipe boots, static vents & ridge ventilation installed and sealed | Botas y ventilas bien selladas |
+| `22PdEQfPnVqm` | 5. Step, headwall & sidewall flashing complete and integrated | Flashing en paredes completo |
+| `22PdEQfPnVqn` | 6. Chimneys, skylights & penetrations flashed/reset as scoped | Chimenea y tragaluz con flashing |
+| `22PdEQfPnVqp` | 7. Sealant appropriate — not a substitute for flashing; roof surface clear | Techo limpio, sin exceso de sellador |
+| `22PdEQfPnVqq` | 8. Attic / interior spot check — leak-prone areas inspected | Revisión del ático — puntos de fuga |
+| `22PdEQhB6rSR` | Cleanup 1. Driveway, walks & landscaping clean — magnet sweep completed | Barrido con imán — entrada, banquetas y jardín |
+| `22PdEQhB6rSS` | Cleanup 2. Unused materials, pallets, tarps & crew debris removed or staged | Materiales, lonas y basura recogidos |
+| `22PdEQhB6rST` | Cleanup 3. Gutters & downspouts clear of debris and reconnected | Canales y bajantes limpios y conectados |
+| `22PdEQhB6rSU` | Cleanup 4. No production damage — siding, windows, doors, AC, plants | Sin daños — siding, ventanas, AC, plantas |
+| `22PdEQhB6rSV` | Cleanup 5. General appearance — ready for the homeowner to view | Listo para que lo vea el cliente |
+
+Free text (into the task description): `22PdEQfPnVqr` attic access
+limitation / existing conditions, `22PdEQfPnVqs` inspector notes,
+`22PdEQhB6rSW` cleanup notes.
+
+**The template carries only the eight inspection subtasks today.** The app
+writes all thirteen (the list replaces on update), so the PM sees the five
+cleanup lines once a visit is sent. Adding the five `Cleanup n.` subtasks to
+the template's "Final inspection" task makes them visible before the visit
+too — optional, and the names above are exact.
+
+### DB Customer Walkthrough — form `22PdEpi4SNW3` (still a JT Form)
 
 Sales-rep form at the Final Inspection milestone (does not wait for
 punch items — the rep communicates the repair plan). **Gate: the job
 does not move to `Pending Final Payment` until this form is
-submitted.** English-only (sales reps).
+submitted.** English-only (sales reps). Not used by the crew app.
 
 | Field id | Field | Type |
 | --- | --- | --- |
@@ -57,19 +78,9 @@ submitted.** English-only (sales reps).
 | `22PdEpi4SjQQ` | Customer concerns / commitments | longString |
 | `22PdEpi4SjQR` | Follow-up — who owns the next action & when | longString |
 
-Form roles:
-
-- Inspection & Cleanup submitters: Crew `22PEWdLwFuDb`, Site Manager
-  `22PEWeBJqFr4`, Roofing Production Manager `22PT7gAjFxyX`, Admin
-  `22PBAjexsjjX`, **Sales Team `22PEWdJcCip7`** (reps inspect far jobs
-  in the app, EN mode; punch fixes still route to the service crew)
-- Inspection & Cleanup reviewers: Roofing Production Manager
-  `22PT7gAjFxyX`, Construction Production Manager `22PEWd9dRa5k`,
-  Admin `22PBAjexsjjX`
-- Walkthrough submitters: Sales Team `22PEWdJcCip7`, Sales Team
-  Manager `22PWktxywW8z`, Admin `22PBAjexsjjX`
-- Walkthrough reviewers: Front Office `22PEWd4hUQ2j`, Accounts Manager
-  `22PQcyVsGZTt`, Admin `22PBAjexsjjX`
+Walkthrough roles: submitters Sales Team `22PEWdJcCip7`, Sales Team
+Manager `22PWktxywW8z`, Admin `22PBAjexsjjX`; reviewers Front Office
+`22PEWd4hUQ2j`, Accounts Manager `22PQcyVsGZTt`, Admin `22PBAjexsjjX`.
 
 ## Punch items → JT tasks
 
@@ -110,7 +121,7 @@ completing two of them is what moves the job's Status.
 | 1 | Order materials | Pre-Production `22PDM6m8Vdqw` | planning bar |
 | 2 | Roof install | Pre-Production `22PDM6m8Vdqw` | planning bar |
 | 3 | Final inspection | **Inspection `22PNJDrm6TsA`** | carries the 8 checklist items as **subtasks**; the crew app ticks them and completes it |
-| 4 | Punch list | General `22PBAjfWNQrT` | phase marker |
+| 4 | Punch list | General `22PBAjfWNQrT` | phase marker; **its checklist mirrors the job's punch to-dos** (name + ticked when the to-do closes), it completes with the last one, and a clean inspection marks it "not required" in the notes |
 | 5 | PM punch review | General `22PBAjfWNQrT` | PM's own check-off (no status of its own) |
 | 6 | Final check-off | General `22PBAjfWNQrT` | **sales rep** has spoken to the customer; completing it closes the job |
 
@@ -129,16 +140,32 @@ load-bearing:**
 
 **JobTread does not set `taskTemplate` on the copies** (verified live on
 job 25-0001): a copied task has no back-reference to the template. The
-task TYPE plus the name is the only durable marker there is — which is
-why `findPipelineTask` matches on type first and name second, and why
+task NAME is the durable marker — `findPipelineTask` matches on name,
+with the type only breaking a tie between two same-named tasks — so
 renaming one of these tasks in JT breaks its link to the automation.
+The type alone can never match: the org types every sales rep's
+inspection visit as Inspection too, so a job without the template has
+exactly one Inspection-typed task that is NOT the milestone, and older
+template copies carry no task types at all.
 
 **Subtasks are `{ name, isComplete }` — two states, not three.** The
-form's `OK` / `N/A` / `ACTION` collapses to ticked / unticked: OK and N/A
+app's `OK` / `N/A` / `ACTION` collapses to ticked / unticked: OK and N/A
 tick, ACTION does not. Nothing is lost, because an ACTION is what created
 the `REPORT:` punch task, which is where that finding actually lives.
 `subtasks` REPLACES on update (like `dependsOnTasks`), so the full list
 goes every write — which is what makes closing the inspection idempotent.
+
+**Template descriptions vs. the pipeline (open point, 2026-09-21).** The
+descriptions on the template's tasks were rewritten on 2026-09-17 and
+read punch work → PM Review → Final inspection → Job Completed ("PM
+Review … Completing this task moves the job to Final Inspection", "Final
+inspection … When it passes, move the job Status to Job Completed"). The
+template's task ORDER, the status table below, and live practice (both
+completed "Final inspection" tasks sit at `Punch List`) still say Final
+Inspection → Punch List → PM Review → Final check-off, which is what the
+sync server implements. If the prose is the intent, the routing in
+`apps/sync/src/pipeline.ts` has to change with it — decide one way and
+make the template say the same.
 
 `updateTask` defaults **`updateDependentTasks: true`**: JobTread cascades
 a date change onto everything downstream by its own rules. These six are
@@ -182,18 +209,17 @@ notice it. `POST /jobs/:id/close-inspection` therefore carries the visit's
 own `problemsReported` count, and the decision takes the larger of that
 and the open punch tasks actually on the job.
 
-The inspection FORM is still submitted alongside this. It stays the
-dated, role-gated, reviewable record — and the 40% payment milestone below
-is defined against it. The subtasks are what the PM sees on the Gantt; the
-form is the evidence.
+There is no form any more: the task's checklist plus its description
+(who inspected, the notes) and the photos on the job are the record.
 
 ## Payment milestones (CONFIRMED — agreed with Shawn, roofing jobs)
 
-- 40% due when the inspection form submission is approved by its
-  reviewer (the job leaves `Final Inspection`). One-time, dated,
-  photo-backed event. The sales rep's walkthrough visit carries this
-  milestone conversation.
-- Final 10% due on status → `Job Completed` (fires once).
+- 40% due at the inspection milestone — the template now links the 40%
+  scheduled invoice to the "Roof install" task, and the crew's completed
+  "Final inspection" task (dated, photo-backed) is the inspection record.
+  The sales rep's walkthrough visit carries this milestone conversation.
+- Final 10% due on status → `Job Completed` (fires once); the template
+  links the final scheduled invoice to "Final check-off".
 - `Pending Final Payment` additionally requires a submitted
   DB Customer Walkthrough form.
 

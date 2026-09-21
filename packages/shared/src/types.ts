@@ -96,12 +96,32 @@ export interface JobDetail extends QueueJob {
   soldScope: ScopeDocument[];
 }
 
-/** POST /jobs/:id/inspection and /jobs/:id/cleanup */
-export interface ChecklistSubmission {
-  /** Canonical answers keyed by JT form field id. */
-  answers: Record<string, Answer>;
-  /** Free-text field values keyed by JT form field id (notes, attic limitation). */
-  texts?: Record<string, string>;
+/**
+ * POST /jobs/:id/close-inspection — the whole visit, sent LAST after the
+ * problem reports. The answers become the checklist on the job's scheduled
+ * "Final inspection" task (eight inspection items, then the five cleanup
+ * items) and the notes go into that task's description; completing the task
+ * is what moves the job on.
+ */
+export interface CloseInspectionRequest {
+  /** Canonical answers keyed by checklist item key (INSPECTION_ITEMS / CLEANUP_ITEMS). */
+  answers: {
+    inspection: Record<string, Answer>;
+    cleanup: Record<string, Answer>;
+  };
+  notes?: {
+    /** Inspector notes (English). */
+    inspection?: string;
+    /** Attic access limitation / existing conditions. */
+    attic?: string;
+    /** Cleanup notes (English). */
+    cleanup?: string;
+  };
+  /**
+   * Problems the crew recorded THIS visit that still need a return trip.
+   * Carried here because the outbox can deliver the REPORT tasks after this.
+   */
+  problemsReported: number;
 }
 
 /**

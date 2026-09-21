@@ -32,6 +32,7 @@ import {
   listPipelineTasks,
   listPunchTasks,
   setJobStatus,
+  syncPunchListTask,
   type PipelineTask,
 } from "./jt";
 import { shouldFlipToPmReview } from "./pmReview";
@@ -92,8 +93,10 @@ const isDone = (task: PipelineTask | undefined): boolean => (task?.progress ?? 0
  * moved to, or null.
  *
  * This runs on every org-wide webhook event, so it reads the status first and
- * only fetches what the job's CURRENT rung actually needs — a job in none of
- * the three pipeline statuses costs exactly one query.
+ * a job outside the three pipeline statuses costs exactly one query. Inside
+ * them it also keeps the scheduled "Punch list" task's checklist in step with
+ * the punch to-dos (see syncPunchListTask) — best-effort, because the status
+ * decision must never fail over a checklist write.
  */
 export async function applyPipeline(
   pave: PaveClient,
@@ -101,23 +104,41 @@ export async function applyPipeline(
   opts: { problemsReported?: number } = {},
 ): Promise<string | null> {
   const currentStatus = await getJobStatusValue(pave, jobId);
-  const needsPunch = currentStatus === STATUS.punchList || currentStatus === STATUS.finalInspection;
-  const needsMilestones =
-    currentStatus === STATUS.finalInspection || currentStatus === STATUS.pmReview;
-  if (!needsPunch && !needsMilestones) return null;
+  const inPipeline =
+    currentStatus === STATUS.finalInspection ||
+    currentStatus === STATUS.punchList ||
+    currentStatus === STATUS.pmReview;
+  if (!inPipeline) return null;
+  // PM Review only waits on the sales rep's check-off; the punch to-dos are done.
+  const needsPunch = currentStatus !== STATUS.pmReview;
 
   const [punchTasks, milestones] = await Promise.all([
     needsPunch ? listPunchTasks(pave, jobId) : Promise.resolve<PunchTask[]>([]),
-    needsMilestones ? listPipelineTasks(pave, jobId) : Promise.resolve<PipelineTask[]>([]),
+    listPipelineTasks(pave, jobId),
   ]);
 
-  const next = nextPipelineStatus({
+  const input: PipelineInput = {
     currentStatus,
     inspectionDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
     checkOffDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalCheckOff)),
     punchTasks,
     problemsReported: opts.problemsReported ?? 0,
-  });
+  };
+  const next = nextPipelineStatus(input);
+
+  if (needsPunch) {
+    try {
+      await syncPunchListTask(pave, findPipelineTask(milestones, PIPELINE_TASKS.punchList), punchTasks, {
+        cleanInspection:
+          currentStatus === STATUS.finalInspection && input.inspectionDone && openProblemCount(input) === 0,
+      });
+    } catch (err) {
+      console.warn(
+        `punch list checklist not updated for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   if (!next) return null;
   await setJobStatus(pave, jobId, next);
   return next;

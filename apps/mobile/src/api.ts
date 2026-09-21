@@ -6,7 +6,7 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { ChecklistSubmission, JobDetail, ProblemReport, QueueJob, ScopeSummary } from "@shared/types";
+import type { CloseInspectionRequest, JobDetail, ProblemReport, QueueJob, ScopeSummary } from "@shared/types";
 import { MOCK_JOBS, mockJobDetail } from "./mock";
 
 /**
@@ -338,31 +338,19 @@ export async function flushOutbox(): Promise<number> {
 }
 
 // Typed helpers used by screens. `label` names the item in the outbox.
-export const submitInspection = (jobId: string, sub: ChecklistSubmission, label?: string) =>
-  post(`/jobs/${jobId}/inspection`, sub, label ?? "Inspección · Inspection");
-export const submitCleanup = (jobId: string, sub: ChecklistSubmission, label?: string) =>
-  post(`/jobs/${jobId}/cleanup`, sub, label ?? "Limpieza · Cleanup");
 export const sendReport = (jobId: string, report: ProblemReport, label?: string) =>
   post(`/jobs/${jobId}/reports`, report, label ?? "Reporte · Report");
 /**
- * Ends the visit: ticks the checklist onto the job's "Final inspection" task
- * in JobTread, completes it, and lets the server move the job on.
+ * Ends the visit: both checklists and the notes go onto the job's scheduled
+ * "Final inspection" task in JobTread (its checklist and its description),
+ * the task completes, and the server moves the job on.
  *
  * Sent LAST, after the problem reports — and it carries `problemsReported`
  * so the routing is right even when it isn't: `flushOutbox` continues past a
  * failing item, so a queued report can reach the server after this does.
  */
-export const closeInspection = (
-  jobId: string,
-  sub: ChecklistSubmission,
-  problemsReported: number,
-  label?: string,
-) =>
-  post(
-    `/jobs/${jobId}/close-inspection`,
-    { answers: sub.answers, problemsReported },
-    label ?? "Cerrar inspección · Close inspection",
-  );
+export const closeInspection = (jobId: string, visit: CloseInspectionRequest, label?: string) =>
+  post(`/jobs/${jobId}/close-inspection`, visit, label ?? "Inspección · Inspection");
 export const completePunchTask = (taskId: string, jobId: string, note?: string, label?: string) =>
   post(
     `/tasks/${taskId}/complete`,

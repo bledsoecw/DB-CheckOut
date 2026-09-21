@@ -3,20 +3,32 @@ import assert from "node:assert/strict";
 import type { PaveClient, PaveQuery } from "../src/pave";
 import {
   assignedTo,
+  checklistSubtasks,
+  closeInspectionTask,
   completeTask,
   createReportTask,
+  inspectionNote,
   listAssignedWorkByJob,
   listPipelineJobs,
+  listPipelineTasks,
   listPunchTasks,
   listSoldScope,
   selectScopeDocs,
-  submitForm,
+  syncPunchListTask,
   toQueueJob,
   toScopeLines,
   uploadPhoto,
+  type PipelineTask,
 } from "../src/jt";
 import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
-import { CUSTOM_FIELDS, INSPECTION_FORM, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import {
+  ANSWER,
+  CLEANUP_ITEMS,
+  CUSTOM_FIELDS,
+  INSPECTION_ITEMS,
+  TASK_TYPES,
+} from "../../../packages/shared/src/jobtread";
+import type { PunchTask } from "../../../packages/shared/src/types";
 
 function fakePave(responder: (q: PaveQuery) => unknown): { client: PaveClient; queries: PaveQuery[] } {
   const queries: PaveQuery[] = [];
@@ -86,43 +98,161 @@ test("listPipelineJobs follows pagination and sorts by job number", async () => 
   assert.deepEqual(jobs.map((j) => j.number), ["26-0002", "26-1357"]);
 });
 
-test("submitForm translates field ids into JT's name-keyed values with option arrays", async () => {
-  const { client, queries } = fakePave((q) => {
-    if ("form" in q) {
-      return {
-        form: {
-          fields: {
-            nodes: [
-              { id: INSPECTION_FORM.optionFields[0], name: "1. Shingle field flat", type: "option" },
-              { id: INSPECTION_FORM.notesField, name: "Inspector notes (English)", type: "longString" },
-            ],
-          },
-        },
-      };
-    }
-    return { createFormSubmission: { createdFormSubmission: { id: "sub1" } } };
-  });
-  const values = {
-    [INSPECTION_FORM.optionFields[0]]: "OK",
-    [INSPECTION_FORM.notesField]: "Two boots replaced",
-    "unknown-field-id": "dropped",
-  };
-  const id = await submitForm(client, INSPECTION_FORM.id, "job1", values);
-  assert.equal(id, "sub1");
-  assert.equal(queries.length, 2);
-  const dollar = (queries[1]["createFormSubmission"] as Record<string, unknown>)["$"] as Record<string, unknown>;
-  assert.equal(dollar["formId"], INSPECTION_FORM.id);
-  assert.equal(dollar["targetId"], "job1");
-  assert.equal(dollar["isSubmitted"], true);
-  // Verified against live Pave: names as keys, option answers as arrays.
-  assert.deepEqual(dollar["values"], {
-    "1. Shingle field flat": ["OK"],
-    "Inspector notes (English)": "Two boots replaced",
-  });
+// --------------------------------------------------------------------------
+// The visit lands on the scheduled "Final inspection" task
+// --------------------------------------------------------------------------
 
-  // Field metadata is cached — a second submission skips the form query.
-  await submitForm(client, INSPECTION_FORM.id, "job2", values);
-  assert.equal(queries.length, 3);
+const dollarOf = (q: PaveQuery, key: string): Record<string, unknown> =>
+  (q[key] as Record<string, unknown>)["$"] as Record<string, unknown>;
+
+test("checklistSubtasks writes the eight inspection items then the five cleanup items, OK and N/A ticked", () => {
+  const subtasks = checklistSubtasks({
+    inspection: {
+      [INSPECTION_ITEMS[0].key]: ANSWER.ok,
+      [INSPECTION_ITEMS[1].key]: ANSWER.na,
+      [INSPECTION_ITEMS[2].key]: ANSWER.action,
+      // items 4-8 unanswered
+    },
+    cleanup: { [CLEANUP_ITEMS[4].key]: ANSWER.ok },
+  });
+  assert.equal(subtasks.length, INSPECTION_ITEMS.length + CLEANUP_ITEMS.length);
+  assert.deepEqual(
+    subtasks.map((s) => s.name),
+    [...INSPECTION_ITEMS.map((i) => i.subtask), ...CLEANUP_ITEMS.map((i) => i.subtask)],
+  );
+  assert.deepEqual(
+    subtasks.map((s) => s.isComplete),
+    [true, true, false, false, false, false, false, false, false, false, false, false, true],
+  );
+});
+
+test("inspectionNote stamps who inspected and carries only the notes that were written", () => {
+  assert.equal(inspectionNote({ inspection: {}, cleanup: {} }, "Yahir Gonzalez"), "✔ Inspected by Yahir Gonzalez — via DB CheckOut");
+  const full = inspectionNote(
+    { inspection: {}, cleanup: {}, notes: { inspection: " Two boots resealed ", attic: "", cleanup: "Magnet run twice" } },
+    "Alberto Gonzalez",
+  );
+  assert.equal(
+    full,
+    "✔ Inspected by Alberto Gonzalez — via DB CheckOut\nInspector notes: Two boots resealed\nCleanup notes: Magnet run twice",
+  );
+});
+
+test("closeInspectionTask replaces the task's checklist, appends the notes and completes it in one guarded write", async () => {
+  const { client, queries } = fakePave((q) =>
+    "task" in q ? { task: { description: "Complete the quality inspection." } } : {},
+  );
+  await closeInspectionTask(
+    client,
+    "fi1",
+    { inspection: { [INSPECTION_ITEMS[0].key]: ANSWER.ok }, cleanup: {}, notes: { inspection: "Clean pass" } },
+    "Alberto Gonzalez",
+  );
+  assert.equal(queries.length, 2);
+  const dollar = dollarOf(queries[1], "updateTask");
+  assert.equal(dollar["id"], "fi1");
+  assert.equal(dollar["progress"], 1);
+  assert.equal(dollar["updateDependentTasks"], false, "the pipeline tasks are a chain — never let JT re-date them");
+  assert.equal(dollar["notify"], false);
+  assert.equal((dollar["subtasks"] as unknown[]).length, 13);
+  assert.equal(
+    dollar["description"],
+    "Complete the quality inspection.\n\n✔ Inspected by Alberto Gonzalez — via DB CheckOut\nInspector notes: Clean pass",
+  );
+});
+
+test("closeInspectionTask does not stamp the task twice when the outbox delivers the same close again", async () => {
+  const already = "Template text\n\n✔ Inspected by Alberto Gonzalez — via DB CheckOut";
+  const { client, queries } = fakePave((q) => ("task" in q ? { task: { description: already } } : {}));
+  await closeInspectionTask(client, "fi1", { inspection: {}, cleanup: {} }, "Alberto Gonzalez");
+  assert.equal(dollarOf(queries[1], "updateTask")["description"], already);
+});
+
+test("listPipelineTasks reads each task's checklist as two-state subtasks", async () => {
+  const { client, queries } = fakePave(() => ({
+    job: {
+      tasks: {
+        nodes: [
+          {
+            id: "fi",
+            name: "Final inspection",
+            progress: null,
+            taskType: { id: TASK_TYPES.inspection },
+            subtasks: [{ name: "1. Shingles", isComplete: true }, { name: "2. Edges", isComplete: null }],
+          },
+          { id: "pl", name: "Punch list", progress: 1, taskType: null, subtasks: null },
+        ],
+      },
+    },
+  }));
+  const tasks = await listPipelineTasks(client, "job1");
+  assert.deepEqual(tasks[0].subtasks, [
+    { name: "1. Shingles", isComplete: true },
+    { name: "2. Edges", isComplete: false },
+  ]);
+  assert.deepEqual(tasks[1], { id: "pl", name: "Punch list", progress: 1, taskTypeId: null, subtasks: [] });
+  assert.ok(JSON.stringify(queries[0]).includes("subtasks"), "the query selects the checklist");
+});
+
+// --------------------------------------------------------------------------
+// The scheduled "Punch list" task mirrors the punch to-dos
+// --------------------------------------------------------------------------
+
+function punchTask(name: string, progress: number): PunchTask {
+  return { id: `p-${name}`, name, description: null, progress, endDate: null, assignees: [], assigneeNames: [], mine: false };
+}
+
+function punchListTask(over: Partial<PipelineTask> = {}): PipelineTask {
+  return { id: "pl1", name: "Punch list", progress: 0, taskTypeId: TASK_TYPES.general, subtasks: [], ...over };
+}
+
+test("syncPunchListTask writes the to-dos onto the checklist when it differs", async () => {
+  const { client, queries } = fakePave(() => ({}));
+  const result = await syncPunchListTask(client, punchListTask(), [
+    punchTask("REPORT: Rear slope — pipe boot", 0),
+    punchTask("FIXED ON SITE: Ridge cap", 1),
+  ]);
+  assert.equal(result, "updated");
+  const dollar = dollarOf(queries[0], "updateTask");
+  assert.deepEqual(dollar["subtasks"], [
+    { name: "REPORT: Rear slope — pipe boot", isComplete: false },
+    { name: "FIXED ON SITE: Ridge cap", isComplete: true },
+  ]);
+  assert.equal(dollar["progress"], undefined, "an open item keeps the task open");
+  assert.equal(dollar["updateDependentTasks"], false);
+});
+
+test("syncPunchListTask is a no-op when the checklist already matches — the webhook it fires comes back quiet", async () => {
+  const { client, queries } = fakePave(() => ({}));
+  const task = punchListTask({ subtasks: [{ name: "REPORT: Gutter", isComplete: false }] });
+  assert.equal(await syncPunchListTask(client, task, [punchTask("REPORT: Gutter", 0)]), "unchanged");
+  assert.equal(queries.length, 0);
+});
+
+test("syncPunchListTask completes the task when the last item closes, and never re-opens it", async () => {
+  const { client, queries } = fakePave(() => ({}));
+  const task = punchListTask({ subtasks: [{ name: "REPORT: Gutter", isComplete: false }] });
+  assert.equal(await syncPunchListTask(client, task, [punchTask("REPORT: Gutter", 1)]), "updated");
+  assert.equal(dollarOf(queries[0], "updateTask")["progress"], 1);
+
+  // Already complete in JT and a new item shows up: the checklist updates, progress is left alone.
+  const done = punchListTask({ progress: 1, subtasks: [{ name: "REPORT: Gutter", isComplete: true }] });
+  await syncPunchListTask(client, done, [punchTask("REPORT: Gutter", 1), punchTask("REPORT: Vent", 0)]);
+  assert.equal(dollarOf(queries[1], "updateTask")["progress"], undefined);
+});
+
+test("syncPunchListTask marks the step not required after a clean inspection, once", async () => {
+  const { client, queries } = fakePave((q) => ("task" in q ? { task: { description: "Conditional." } } : {}));
+  assert.equal(await syncPunchListTask(client, punchListTask(), [], { cleanInspection: true }), "updated");
+  const dollar = dollarOf(queries[1], "updateTask");
+  assert.equal(dollar["progress"], 1);
+  assert.equal(dollar["description"], "Conditional.\n\n✔ Not required — clean inspection, nothing to fix (via DB CheckOut)");
+
+  // Without the clean-inspection signal (a webhook replay), nothing is written.
+  assert.equal(await syncPunchListTask(client, punchListTask(), []), "unchanged");
+  assert.equal(queries.length, 2);
+  // And a job without the template has nothing to mirror onto.
+  assert.equal(await syncPunchListTask(client, undefined, [punchTask("REPORT: x", 0)]), "none");
 });
 
 test("createReportTask creates an unassigned Punch List to-do with the English note", async () => {
@@ -460,6 +590,10 @@ test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count s
   // The filter must only ask for open punch/inspection tasks (progress != 1
   // keeps JT's null-progress items, which are open work too).
   const dollar = ((queries[0]["organization"] as Record<string, unknown>)["tasks"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  // Newest first: the scan stops after a few hundred tasks and the org has
+  // hundreds of older open sales inspections — oldest-first never reached
+  // anything assigned this month.
+  assert.deepEqual(dollar["sortBy"], [{ field: "createdAt", order: "desc" }]);
   assert.deepEqual(dollar["where"], {
     and: [
       {
@@ -541,4 +675,10 @@ test("listPunchTasks reads the real assignedMemberships shape", async () => {
   // could never show them. Guard the selection so that can't come back.
   const selection = JSON.stringify(queries[0]);
   assert.ok(selection.includes("assignedMemberships"), "the query asks for assignees");
+  // 50 tasks x 10 assignees with the user fields is over Pave's declared-size
+  // budget (live: "Request Entity Too Large" — every job screen 502'd).
+  const tasksArgs = ((queries[0]["job"] as Record<string, unknown>)["tasks"] as Record<string, unknown>);
+  const membersArgs = ((tasksArgs["nodes"] as Record<string, unknown>)["assignedMemberships"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal((tasksArgs["$"] as Record<string, unknown>)["size"], 50);
+  assert.equal(membersArgs["size"], 5);
 });

@@ -2,16 +2,9 @@ import React, { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
+import { CLEANUP_CHECKLIST, INSPECTION_CHECKLIST } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import {
-  closeInspection,
-  getJob,
-  sendReport,
-  submitCleanup,
-  submitInspection,
-  uploadJobPhoto,
-} from "../api";
+import { closeInspection, getJob, sendReport, uploadJobPhoto } from "../api";
 import { BigButton, Card } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
@@ -41,15 +34,13 @@ export default function SendScreen({ navigation, route }: Props) {
       .catch(() => {});
   }, [jobId]);
 
-  const inspectionDone = INSPECTION_FORM.optionFields.filter((f) => state.inspection[f]).length;
-  const cleanupDone = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
+  const inspectionDone = INSPECTION_CHECKLIST.keys.filter((f) => state.inspection[f]).length;
+  const cleanupDone = CLEANUP_CHECKLIST.keys.filter((f) => state.cleanup[f]).length;
 
-  // Each form only accepts its own field ids, so split the shared notes map.
-  const textsFor = (ids: readonly string[]) =>
-    Object.fromEntries(Object.entries(state.notes).filter(([id, v]) => ids.includes(id) && v.trim()));
+  const noteOr = (key: string): string | undefined => state.notes[key]?.trim() || undefined;
 
-  // THE send: the whole visit — photos, both forms, saved problems — goes
-  // up as one packet, and every piece gets a line on the receipt.
+  // THE send: the whole visit — photos, saved problems, then both checklists
+  // — goes up as one packet, and every piece gets a line on the receipt.
   const send = async () => {
     setSending(true);
     try {
@@ -66,46 +57,35 @@ export default function SendScreen({ navigation, route }: Props) {
           outcome: results.every((r) => r === "sent") ? "sent" : "queued",
         });
       }
-      items.push({
-        label: `${t("inspection")} · ${t2("inspection")}`,
-        outcome: await submitInspection(
-          jobId,
-          {
-            answers: state.inspection,
-            texts: textsFor([INSPECTION_FORM.atticNotesField, INSPECTION_FORM.notesField]),
-          },
-          `Inspección · Inspection${suffix}`,
-        ),
-      });
-      items.push({
-        label: `${t("cleanup")} · ${t2("cleanup")}`,
-        outcome: await submitCleanup(
-          jobId,
-          { answers: state.cleanup, texts: textsFor([CLEANUP_FORM.notesField]) },
-          `Limpieza · Cleanup${suffix}`,
-        ),
-      });
       for (const report of state.reports) {
         items.push({
           label: `${p({ es: "Problema", en: "Problem" })}: ${report.location}`,
           outcome: await sendReport(jobId, report, `Problema · Problem${suffix}`),
         });
       }
-      // LAST, and only after the reports: this ticks the checklist onto the
-      // job's "Final inspection" task, completes it, and is what moves the
-      // job on — to Punch List when the crew found something, otherwise to
-      // the PM's review. It carries the problem count itself, so the routing
-      // holds even if those reports are still sitting in the outbox.
+      // LAST, and only after the reports: both checklists and the notes land
+      // on the job's scheduled "Final inspection" task, it completes, and
+      // that is what moves the job on — to Punch List when the crew found
+      // something, otherwise to the PM's review. It carries the problem count
+      // itself, so the routing holds even if those reports are still sitting
+      // in the outbox.
       items.push({
-        label: p({ es: "Inspección terminada", en: "Inspection finished" }),
+        label: `${t("inspection")} + ${t("cleanup")} · ${t2("inspection")} + ${t2("cleanup")}`,
         outcome: await closeInspection(
           jobId,
-          { answers: state.inspection },
-          // Only problems that still need a return trip. A "fixed on site"
-          // report is documentation of work already done — counting it would
-          // send a job with nothing left to repair to Punch List.
-          state.reports.filter((r) => !r.fixedOnSite).length,
-          `Cerrar inspección · Close inspection${suffix}`,
+          {
+            answers: { inspection: state.inspection, cleanup: state.cleanup },
+            notes: {
+              inspection: noteOr(INSPECTION_CHECKLIST.notesKey),
+              attic: noteOr(INSPECTION_CHECKLIST.atticKey),
+              cleanup: noteOr(CLEANUP_CHECKLIST.notesKey),
+            },
+            // Only problems that still need a return trip. A "fixed on site"
+            // report is documentation of work already done — counting it would
+            // send a job with nothing left to repair to Punch List.
+            problemsReported: state.reports.filter((r) => !r.fixedOnSite).length,
+          },
+          `Inspección y limpieza · Inspection & cleanup${suffix}`,
         ),
       });
       clear(new Date().toISOString());
@@ -154,8 +134,8 @@ export default function SendScreen({ navigation, route }: Props) {
 
           <Text style={styles.resultSub}>
             {p({
-              es: "En JobTread: formularios en Forms del trabajo · problemas en Tasks (To-Dos) · fotos en Files.",
-              en: "In JobTread: forms under the job's Forms · problems under Tasks (To-Dos) · photos under Files.",
+              es: "En JobTread: la lista de la tarea «Final inspection» · problemas en Tasks · fotos en Files.",
+              en: "In JobTread: the checklist on the job's “Final inspection” task · problems under Tasks · photos under Files.",
             })}
           </Text>
           {!sent ? (
@@ -203,11 +183,11 @@ export default function SendScreen({ navigation, route }: Props) {
         </View>
 
         <SummaryRow
-          label={`${t("inspection")} — ${inspectionDone}/${INSPECTION_FORM.optionFields.length}`}
+          label={`${t("inspection")} — ${inspectionDone}/${INSPECTION_CHECKLIST.keys.length}`}
           sub={t2("inspection")}
         />
         <SummaryRow
-          label={`${t("cleanup")} — ${cleanupDone}/${CLEANUP_FORM.optionFields.length}`}
+          label={`${t("cleanup")} — ${cleanupDone}/${CLEANUP_CHECKLIST.keys.length}`}
           sub={t2("cleanup")}
         />
         {state.visitPhotos.length > 0 ? (

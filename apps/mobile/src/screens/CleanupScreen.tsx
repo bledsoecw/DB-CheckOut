@@ -2,7 +2,7 @@ import React from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { ANSWER, CLEANUP_FORM } from "@shared/jobtread";
+import { ANSWER, CLEANUP_CHECKLIST } from "@shared/jobtread";
 import { FIELD_LABELS } from "@shared/i18n";
 import type { RootStackParamList } from "../../App";
 import { BigButton, Card, LangPill, TriToggle } from "../components";
@@ -17,8 +17,8 @@ export default function CleanupScreen({ navigation, route }: Props) {
   const { jobId } = route.params;
   const { t, t2, p, s } = useLang();
   const { state, setAnswer, setNote } = useVisit(jobId);
-  const done = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
-  const note = state.notes[CLEANUP_FORM.notesField] ?? "";
+  const done = CLEANUP_CHECKLIST.keys.filter((f) => state.cleanup[f]).length;
+  const note = state.notes[CLEANUP_CHECKLIST.notesKey] ?? "";
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
@@ -33,13 +33,13 @@ export default function CleanupScreen({ navigation, route }: Props) {
         <LangPill />
         <View style={styles.count}>
           <Text style={styles.countText}>
-            {done}/{CLEANUP_FORM.optionFields.length}
+            {done}/{CLEANUP_CHECKLIST.keys.length}
           </Text>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }}>
-        {CLEANUP_FORM.optionFields.map((fieldId) => (
+        {CLEANUP_CHECKLIST.keys.map((fieldId) => (
           <Card key={fieldId} style={styles.item}>
             <View style={{ flex: 1, paddingRight: 8 }}>
               <Text style={styles.itemTitle}>{p(FIELD_LABELS[fieldId])}</Text>
@@ -56,7 +56,7 @@ export default function CleanupScreen({ navigation, route }: Props) {
             />
           </Card>
         ))}
-        <VoiceNotesSection note={note} onChange={(text) => setNote(CLEANUP_FORM.notesField, text)} />
+        <VoiceNotesSection note={note} onChange={(text) => setNote(CLEANUP_CHECKLIST.notesKey, text)} />
         <Text style={styles.hint}>
           {t("seeDamageReport")} · {t2("seeDamageReport")}
         </Text>
@@ -64,12 +64,12 @@ export default function CleanupScreen({ navigation, route }: Props) {
         <BigButton
           bi={{ es: "Limpieza completa ✓", en: "Cleanup complete ✓" }}
           color={colors.green}
-          disabled={done < CLEANUP_FORM.optionFields.length}
+          disabled={done < CLEANUP_CHECKLIST.keys.length}
           onPress={() => navigation.goBack()}
         />
-        {done < CLEANUP_FORM.optionFields.length ? (
+        {done < CLEANUP_CHECKLIST.keys.length ? (
           <Text style={styles.leftHint}>
-            {CLEANUP_FORM.optionFields.length - done}{" "}
+            {CLEANUP_CHECKLIST.keys.length - done}{" "}
             {p({ es: "puntos sin responder", en: "items unanswered" })}
           </Text>
         ) : null}

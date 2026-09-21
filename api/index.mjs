@@ -183,39 +183,34 @@ var ANSWER = {
   action: "ACTION"
 };
 var INSPECTION_ITEMS = [
-  { fieldId: "22PdEQfPnVqh", subtask: "1. Shingle field flat \u2014 no exposed fasteners or unaddressed damage" },
-  { fieldId: "22PdEQfPnVqi", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
-  { fieldId: "22PdEQfPnVqj", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
-  { fieldId: "22PdEQfPnVqk", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
-  { fieldId: "22PdEQfPnVqm", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
-  { fieldId: "22PdEQfPnVqn", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
-  { fieldId: "22PdEQfPnVqp", subtask: "7. Sealant appropriate \u2014 not a substitute for flashing; roof surface clear" },
-  { fieldId: "22PdEQfPnVqq", subtask: "8. Attic / interior spot check \u2014 leak-prone areas inspected" }
+  { key: "22PdEQfPnVqh", subtask: "1. Shingle field flat \u2014 no exposed fasteners or unaddressed damage" },
+  { key: "22PdEQfPnVqi", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
+  { key: "22PdEQfPnVqj", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
+  { key: "22PdEQfPnVqk", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
+  { key: "22PdEQfPnVqm", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
+  { key: "22PdEQfPnVqn", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
+  { key: "22PdEQfPnVqp", subtask: "7. Sealant appropriate \u2014 not a substitute for flashing; roof surface clear" },
+  { key: "22PdEQfPnVqq", subtask: "8. Attic / interior spot check \u2014 leak-prone areas inspected" }
 ];
-var INSPECTION_FORM = {
-  id: "22PdEQfPn8wQ",
-  name: "DB Final Roofing Inspection",
-  /** Derived from INSPECTION_ITEMS so the fields and the subtasks can never drift apart. */
-  optionFields: INSPECTION_ITEMS.map((i) => i.fieldId),
-  atticNotesField: "22PdEQfPnVqr",
-  notesField: "22PdEQfPnVqs"
+var CLEANUP_ITEMS = [
+  { key: "22PdEQhB6rSR", subtask: "Cleanup 1. Driveway, walks & landscaping clean \u2014 magnet sweep completed" },
+  { key: "22PdEQhB6rSS", subtask: "Cleanup 2. Unused materials, pallets, tarps & crew debris removed or staged" },
+  { key: "22PdEQhB6rST", subtask: "Cleanup 3. Gutters & downspouts clear of debris and reconnected" },
+  { key: "22PdEQhB6rSU", subtask: "Cleanup 4. No production damage \u2014 siding, windows, doors, AC, plants" },
+  { key: "22PdEQhB6rSV", subtask: "Cleanup 5. General appearance \u2014 ready for the homeowner to view" }
+];
+var INSPECTION_CHECKLIST = {
+  /** Item keys in crew order; derived so the app and the subtasks can never drift apart. */
+  keys: INSPECTION_ITEMS.map((i) => i.key),
+  /** Free text: attic access limitation / existing conditions. */
+  atticKey: "22PdEQfPnVqr",
+  /** Free text: inspector notes (English). */
+  notesKey: "22PdEQfPnVqs"
 };
-var CLEANUP_FORM = {
-  id: "22PdEQhB67dq",
-  name: "DB Site Cleanup",
-  optionFields: [
-    "22PdEQhB6rSR",
-    // 1. Driveway, walks & landscaping clean — magnet sweep completed
-    "22PdEQhB6rSS",
-    // 2. Unused materials, pallets, tarps & crew debris removed or staged
-    "22PdEQhB6rST",
-    // 3. Gutters & downspouts clear of debris and reconnected
-    "22PdEQhB6rSU",
-    // 4. No production damage — siding, windows, doors, AC, plants
-    "22PdEQhB6rSV"
-    // 5. General appearance — ready for the homeowner to view
-  ],
-  notesField: "22PdEQhB6rSW"
+var CLEANUP_CHECKLIST = {
+  keys: CLEANUP_ITEMS.map((i) => i.key),
+  /** Free text: cleanup notes (English). */
+  notesKey: "22PdEQhB6rSW"
 };
 var TASK_TYPES = {
   /** Punch/repair items created from crew reports. */
@@ -230,6 +225,8 @@ var TASK_TYPES = {
 var PIPELINE_TASKS = {
   /** Crew ticks the checklist here; completing it ends the inspection. */
   finalInspection: { name: "Final inspection", typeId: TASK_TYPES.inspection },
+  /** Its checklist mirrors the job's punch to-dos; it completes when the last one closes. */
+  punchList: { name: "Punch list", typeId: TASK_TYPES.general },
   /** Sales rep has spoken to the customer; completing it closes the job. */
   finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general }
 };
@@ -392,8 +389,12 @@ async function listPunchTasks(pave, jobId) {
           progress: {},
           endDate: {},
           taskType: { id: {} },
+          // 50 x 10 with the user fields is over Pave's declared-size budget
+          // ("Request Entity Too Large", verified live 2026-09-21 — it took
+          // every job screen down with a 502). 50 x 5 passes, and a punch
+          // item never has five assignees anyway.
           assignedMemberships: {
-            $: { size: 10 },
+            $: { size: 5 },
             nodes: { id: {}, user: { id: {}, name: {}, emailAddress: {} } }
           }
         }
@@ -446,6 +447,11 @@ async function listAssignedWorkByJob(pave, viewer) {
               // 50 x 10 nested memberships = 500 declared, verified live.
               size: 50,
               ...page ? { page } : {},
+              // Newest first: the org carries hundreds of old open
+              // Inspection-typed sales visits, and this scan stops after a
+              // few hundred tasks. Oldest-first (Pave's default) never
+              // reached anything assigned this month.
+              sortBy: [{ field: "createdAt", order: "desc" }],
               where: {
                 and: [
                   {
@@ -492,34 +498,6 @@ async function listAssignedWorkByJob(pave, viewer) {
   }
   return work;
 }
-var formFieldsCache = /* @__PURE__ */ new Map();
-async function getFormFields(pave, formId) {
-  const hit = formFieldsCache.get(formId);
-  if (hit) return hit;
-  const res = await pave.query({
-    form: { $: { id: formId }, fields: { $: { size: 50 }, nodes: { id: {}, name: {}, type: {} } } }
-  });
-  const fields = res.form?.fields.nodes ?? [];
-  if (fields.length > 0) formFieldsCache.set(formId, fields);
-  return fields;
-}
-async function submitForm(pave, formId, jobId, values) {
-  const fields = await getFormFields(pave, formId);
-  const byId = new Map(fields.map((f) => [f.id, f]));
-  const named = {};
-  for (const [fieldId, value] of Object.entries(values)) {
-    const field = byId.get(fieldId);
-    if (!field) continue;
-    named[field.name] = field.type === "option" ? [value] : value;
-  }
-  const res = await pave.query({
-    createFormSubmission: {
-      $: { formId, targetId: jobId, isSubmitted: true, values: named },
-      createdFormSubmission: { id: {} }
-    }
-  });
-  return res.createFormSubmission.createdFormSubmission?.id ?? "";
-}
 var TASK_WRITE_GUARDS = { updateDependentTasks: false, notify: false };
 async function listPipelineTasks(pave, jobId) {
   const res = await pave.query({
@@ -527,7 +505,8 @@ async function listPipelineTasks(pave, jobId) {
       $: { id: jobId },
       tasks: {
         $: { size: 50 },
-        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} } }
+        // subtasks is a plain array, not a paged connection — no size budget.
+        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} }, subtasks: { name: {}, isComplete: {} } }
       }
     }
   });
@@ -535,27 +514,42 @@ async function listPipelineTasks(pave, jobId) {
     id: t.id,
     name: t.name,
     progress: t.progress ?? 0,
-    taskTypeId: t.taskType?.id ?? null
+    taskTypeId: t.taskType?.id ?? null,
+    subtasks: (t.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true }))
   }));
 }
 var sameName = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
 function findPipelineTask(tasks, spec) {
-  const typed = tasks.filter((t) => t.taskTypeId === spec.typeId);
-  if (typed.length === 1) return typed[0];
-  return typed.find((t) => sameName(t.name, spec.name)) ?? tasks.find((t) => sameName(t.name, spec.name));
+  const named = tasks.filter((t) => sameName(t.name, spec.name));
+  if (named.length === 0) return void 0;
+  return named.find((t) => t.taskTypeId === spec.typeId) ?? named[0];
 }
-async function closeInspectionTask(pave, taskId, answers, byName) {
-  const subtasks = INSPECTION_ITEMS.map((item) => ({
-    name: item.subtask,
-    isComplete: answers[item.fieldId] === ANSWER.ok || answers[item.fieldId] === ANSWER.na
-  }));
+var CHECKLIST_STAMP = "via DB CheckOut";
+function checklistSubtasks(visit) {
+  const ticked = (answers, key) => answers[key] === ANSWER.ok || answers[key] === ANSWER.na;
+  return [
+    ...INSPECTION_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.inspection, item.key) })),
+    ...CLEANUP_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.cleanup, item.key) }))
+  ];
+}
+function inspectionNote(visit, byName) {
+  const notes = visit.notes ?? {};
+  const lines = [`\u2714 Inspected by ${byName} \u2014 ${CHECKLIST_STAMP}`];
+  if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
+  if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
+  if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
+  return lines.join("\n");
+}
+async function closeInspectionTask(pave, taskId, visit, byName) {
+  const subtasks = checklistSubtasks(visit);
   const res = await pave.query({
     task: { $: { id: taskId }, description: {} }
   });
-  const done = `\u2714 Inspected by ${byName} \u2014 via DB CheckOut`;
-  const description = res.task?.description ? `${res.task.description}
+  const note = inspectionNote(visit, byName);
+  const existing = res.task?.description ?? "";
+  const description = existing.includes(note) ? existing : existing ? `${existing}
 
-${done}` : done;
+${note}` : note;
   await pave.query({
     updateTask: {
       $: {
@@ -567,6 +561,40 @@ ${done}` : done;
       }
     }
   });
+}
+async function syncPunchListTask(pave, task, punchTasks, opts = {}) {
+  if (!task) return "none";
+  const complete = task.progress >= 1;
+  if (punchTasks.length === 0) {
+    if (!opts.cleanInspection || complete) return "unchanged";
+    const note = `\u2714 Not required \u2014 clean inspection, nothing to fix (${CHECKLIST_STAMP})`;
+    const res = await pave.query({
+      task: { $: { id: task.id }, description: {} }
+    });
+    const existing = res.task?.description ?? "";
+    const description = existing.includes(note) ? existing : existing ? `${existing}
+
+${note}` : note;
+    await pave.query({
+      updateTask: { $: { id: task.id, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) } }
+    });
+    return "updated";
+  }
+  const desired = punchTasks.map((t) => ({ name: t.name, isComplete: t.progress >= 1 }));
+  const allDone = desired.every((s) => s.isComplete);
+  const same = task.subtasks.length === desired.length && task.subtasks.every((s, i) => s.name === desired[i].name && s.isComplete === desired[i].isComplete);
+  if (same && (complete || !allDone)) return "unchanged";
+  await pave.query({
+    updateTask: {
+      $: {
+        id: task.id,
+        ...TASK_WRITE_GUARDS,
+        subtasks: desired,
+        ...allDone && !complete ? { progress: 1 } : {}
+      }
+    }
+  });
+  return "updated";
 }
 async function createReportTask(pave, jobId, report) {
   const fixed = report.fixedOnSite === true;
@@ -678,20 +706,32 @@ function nextPipelineStatus(input) {
 var isDone = (task) => (task?.progress ?? 0) >= 1;
 async function applyPipeline(pave, jobId, opts = {}) {
   const currentStatus = await getJobStatusValue(pave, jobId);
-  const needsPunch = currentStatus === STATUS.punchList || currentStatus === STATUS.finalInspection;
-  const needsMilestones = currentStatus === STATUS.finalInspection || currentStatus === STATUS.pmReview;
-  if (!needsPunch && !needsMilestones) return null;
+  const inPipeline = currentStatus === STATUS.finalInspection || currentStatus === STATUS.punchList || currentStatus === STATUS.pmReview;
+  if (!inPipeline) return null;
+  const needsPunch = currentStatus !== STATUS.pmReview;
   const [punchTasks, milestones] = await Promise.all([
     needsPunch ? listPunchTasks(pave, jobId) : Promise.resolve([]),
-    needsMilestones ? listPipelineTasks(pave, jobId) : Promise.resolve([])
+    listPipelineTasks(pave, jobId)
   ]);
-  const next = nextPipelineStatus({
+  const input = {
     currentStatus,
     inspectionDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
     checkOffDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalCheckOff)),
     punchTasks,
     problemsReported: opts.problemsReported ?? 0
-  });
+  };
+  const next = nextPipelineStatus(input);
+  if (needsPunch) {
+    try {
+      await syncPunchListTask(pave, findPipelineTask(milestones, PIPELINE_TASKS.punchList), punchTasks, {
+        cleanInspection: currentStatus === STATUS.finalInspection && input.inspectionDone && openProblemCount(input) === 0
+      });
+    } catch (err) {
+      console.warn(
+        `punch list checklist not updated for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
   if (!next) return null;
   await setJobStatus(pave, jobId, next);
   return next;
@@ -848,8 +888,23 @@ async function readBody(req, limit = 5e6) {
   if (size === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
-function checklistValues(sub) {
-  return { ...sub.answers, ...sub.texts ?? {} };
+var stringMap = (value) => {
+  if (!value || typeof value !== "object") return {};
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string") out[k] = v;
+  }
+  return out;
+};
+function parseVisit(body) {
+  const answers = body.answers ?? {};
+  const nested = typeof answers["inspection"] === "object" || typeof answers["cleanup"] === "object";
+  const notes = stringMap(body.notes);
+  return {
+    inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
+    cleanup: nested ? stringMap(answers["cleanup"]) : {},
+    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"] }
+  };
 }
 var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
 function decodeAudio(audioBase64) {
@@ -993,10 +1048,9 @@ function createHandler(deps) {
       if (req.method === "POST" && parts[0] === "jobs" && parts.length === 3) {
         const jobId = parts[1];
         if (parts[2] === "inspection" || parts[2] === "cleanup") {
-          const sub = await readBody(req);
-          const form = parts[2] === "inspection" ? INSPECTION_FORM : CLEANUP_FORM;
-          const id = await submitForm(deps.pave, form.id, jobId, checklistValues(sub));
-          return json(res, 200, { submissionId: id });
+          return json(res, 410, {
+            error: "Checklist forms were retired \u2014 the visit is sent through close-inspection"
+          });
         }
         if (parts[2] === "close-inspection") {
           const body = await readBody(req);
@@ -1004,7 +1058,7 @@ function createHandler(deps) {
           const milestones = await listPipelineTasks(deps.pave, jobId);
           const task = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
           if (task) {
-            await closeInspectionTask(deps.pave, task.id, body.answers ?? {}, session.name);
+            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name);
           }
           const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
           return json(res, 200, { completedTaskId: task?.id ?? null, flipped });

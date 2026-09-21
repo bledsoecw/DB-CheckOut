@@ -11,24 +11,29 @@ repair work — wired into JobTread and the DB Production board.
    automatically appears in the crew's app — the app only ever shows
    jobs that need inspection/cleanup or repairs assigned to the user.
 2. The crew drives to the job (built-in directions), runs the
-   **inspection checklist** and the **cleanup checklist** (both sourced
-   from JT Form templates), and reports problems with an annotated
-   photo, a location, and a voice note.
+   **inspection checklist** and the **cleanup checklist** — the checklist
+   on the job's scheduled **"Final inspection"** task — and reports
+   problems with an annotated photo, a location, and a voice note.
 3. Voice notes can be spoken in Spanish, English, or a mix — they are
    transcribed **into English** for the office, with the original
    speech kept alongside.
-4. Everything syncs back to JobTread: checklists as form submissions,
-   problem reports with photos and English notes. The PM reviews and
-   assigns repairs on the Production board.
-5. Finishing the visit completes the job's **"Final inspection"** task —
-   the eight checks ride on it as subtasks, so the app ticks the same
-   boxes the PM sees on the Gantt. That completion is what moves the job:
-   to **Punch List** if the crew found anything, otherwise straight to
-   **PM Review**.
+4. Everything syncs back to JobTread: problem reports as Punch List
+   to-dos with photos and English notes, and the visit itself onto the
+   scheduled tasks. The PM reviews and assigns repairs on the Production
+   board.
+5. Finishing the visit writes both checklists onto the job's
+   **"Final inspection"** task — the eight inspection checks and the five
+   cleanup checks are its subtasks, the notes go in its description — and
+   completes it, so the app ticks the same boxes the PM sees on the Gantt.
+   That completion is what moves the job: to **Punch List** if the crew
+   found anything, otherwise straight to **PM Review**. (No JT Forms: the
+   inspection and cleanup forms were retired on 2026-09-21.)
 6. The **punch crew** sees assigned repairs in the same app: where to
    go, what to do, what to bring, before/after photos, and a big
-   "Terminado" button. When the last repair closes, the job moves to
-   **PM Review** automatically.
+   "Terminado" button. The job's scheduled **"Punch list"** task mirrors
+   the open repairs as its checklist and completes with the last one;
+   when the last repair closes, the job moves to **PM Review**
+   automatically.
 7. The PM reviews the photos and notes and ticks **"PM punch review"**.
    The job then waits for the **sales rep**, who speaks to the customer
    and ticks **"Final check-off"** — that is what sets **Job Completed**,
@@ -50,10 +55,11 @@ docs/              jobtread-setup.md is the JT build contract
 
 **Sync server** (`apps/sync`) — the bridge between the app and JobTread:
 queue of pipeline jobs (Final Inspection / Punch List / PM Review),
-form submissions, problem reports → unassigned Punch List tasks, task
-completion, the closeout pipeline (`src/pipeline.ts` — which milestone
-completing moves the job to which status), and a webhook receiver. Run
-it:
+the visit's checklists onto the "Final inspection" task, problem reports
+→ unassigned Punch List tasks, task completion, the closeout pipeline
+(`src/pipeline.ts` — which milestone completing moves the job to which
+status, and the "Punch list" checklist mirror), and a webhook receiver.
+Run it:
 
 ```
 cp apps/sync/.env.example apps/sync/.env   # add JT_GRANT_KEY + auth vars
@@ -143,8 +149,9 @@ Key design decisions:
   no-action-needed with a reason (e.g. pre-existing damage); the photo
   and note stay on the JT job as documentation, and closeout unlocks
   once every report is assigned or dismissed.
-- **JT is the system of record** — checklists come from JT Forms,
-  queue and assignments come from the Production board (job Status:
+- **JT is the system of record** — checklists live on the job's
+  scheduled tasks, queue and assignments come from the Production board
+  (job Status:
   Production → Final Inspection → Punch List → PM Review → Job Completed), and all
   results land back on the JT job.
 

@@ -44,7 +44,7 @@ export const STATUS = {
 export type PipelineStatus = (typeof STATUS)[keyof typeof STATUS];
 
 // ---------------------------------------------------------------------------
-// Forms
+// Checklists — they ride on the job's scheduled "Final inspection" task
 // ---------------------------------------------------------------------------
 
 /** Canonical stored option values for checklist answers (display differs by language). */
@@ -57,46 +57,59 @@ export const ANSWER = {
 export type Answer = (typeof ANSWER)[keyof typeof ANSWER];
 
 /**
- * The eight inspection checks, in the order the crew works them.
+ * The crew checklists are the CHECKLIST on the job's scheduled "Final
+ * inspection" task (copied from the task template below), not JT Forms — the
+ * "DB Final Roofing Inspection" and "DB Site Cleanup" forms were retired on
+ * 2026-09-21. Every item here is one subtask on that task. A subtask has no
+ * id and is matched by NAME, so `subtask` must match the template word for
+ * word; `key` is the app's own stable id for the item (local visit state and
+ * the label table in i18n.ts) — the ids of the retired form fields, kept so
+ * nothing saved on a phone is lost.
  *
- * Each one is BOTH a form field (the reviewable record) and a subtask on the
- * job's "Final inspection" task (what the PM sees on the Gantt). `subtask`
- * is the exact subtask name written into JobTread — it must match the task
- * template `22PeHi4zyTkx`, because a subtask has no id and is matched by name.
+ * Answers collapse to the subtask's two states: OK and N/A tick, ACTION does
+ * not — an ACTION is what creates the REPORT: punch task, which is where that
+ * finding actually lives.
  */
 export const INSPECTION_ITEMS = [
-  { fieldId: "22PdEQfPnVqh", subtask: "1. Shingle field flat — no exposed fasteners or unaddressed damage" },
-  { fieldId: "22PdEQfPnVqi", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
-  { fieldId: "22PdEQfPnVqj", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
-  { fieldId: "22PdEQfPnVqk", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
-  { fieldId: "22PdEQfPnVqm", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
-  { fieldId: "22PdEQfPnVqn", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
-  { fieldId: "22PdEQfPnVqp", subtask: "7. Sealant appropriate — not a substitute for flashing; roof surface clear" },
-  { fieldId: "22PdEQfPnVqq", subtask: "8. Attic / interior spot check — leak-prone areas inspected" },
+  { key: "22PdEQfPnVqh", subtask: "1. Shingle field flat — no exposed fasteners or unaddressed damage" },
+  { key: "22PdEQfPnVqi", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
+  { key: "22PdEQfPnVqj", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
+  { key: "22PdEQfPnVqk", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
+  { key: "22PdEQfPnVqm", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
+  { key: "22PdEQfPnVqn", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
+  { key: "22PdEQfPnVqp", subtask: "7. Sealant appropriate — not a substitute for flashing; roof surface clear" },
+  { key: "22PdEQfPnVqq", subtask: "8. Attic / interior spot check — leak-prone areas inspected" },
 ] as const;
 
-export const INSPECTION_FORM = {
-  id: "22PdEQfPn8wQ",
-  name: "DB Final Roofing Inspection",
-  /** Derived from INSPECTION_ITEMS so the fields and the subtasks can never drift apart. */
-  optionFields: INSPECTION_ITEMS.map((i) => i.fieldId) as readonly string[],
-  atticNotesField: "22PdEQfPnVqr",
-  notesField: "22PdEQfPnVqs",
+/**
+ * The five cleanup checks. They go on the SAME task's checklist, after the
+ * eight inspection items, so the PM sees the whole visit in one place; the
+ * "Cleanup" prefix keeps them apart from the numbered inspection lines.
+ */
+export const CLEANUP_ITEMS = [
+  { key: "22PdEQhB6rSR", subtask: "Cleanup 1. Driveway, walks & landscaping clean — magnet sweep completed" },
+  { key: "22PdEQhB6rSS", subtask: "Cleanup 2. Unused materials, pallets, tarps & crew debris removed or staged" },
+  { key: "22PdEQhB6rST", subtask: "Cleanup 3. Gutters & downspouts clear of debris and reconnected" },
+  { key: "22PdEQhB6rSU", subtask: "Cleanup 4. No production damage — siding, windows, doors, AC, plants" },
+  { key: "22PdEQhB6rSV", subtask: "Cleanup 5. General appearance — ready for the homeowner to view" },
+] as const;
+
+export const INSPECTION_CHECKLIST = {
+  /** Item keys in crew order; derived so the app and the subtasks can never drift apart. */
+  keys: INSPECTION_ITEMS.map((i) => i.key) as readonly string[],
+  /** Free text: attic access limitation / existing conditions. */
+  atticKey: "22PdEQfPnVqr",
+  /** Free text: inspector notes (English). */
+  notesKey: "22PdEQfPnVqs",
 } as const;
 
-export const CLEANUP_FORM = {
-  id: "22PdEQhB67dq",
-  name: "DB Site Cleanup",
-  optionFields: [
-    "22PdEQhB6rSR", // 1. Driveway, walks & landscaping clean — magnet sweep completed
-    "22PdEQhB6rSS", // 2. Unused materials, pallets, tarps & crew debris removed or staged
-    "22PdEQhB6rST", // 3. Gutters & downspouts clear of debris and reconnected
-    "22PdEQhB6rSU", // 4. No production damage — siding, windows, doors, AC, plants
-    "22PdEQhB6rSV", // 5. General appearance — ready for the homeowner to view
-  ],
-  notesField: "22PdEQhB6rSW",
+export const CLEANUP_CHECKLIST = {
+  keys: CLEANUP_ITEMS.map((i) => i.key) as readonly string[],
+  /** Free text: cleanup notes (English). */
+  notesKey: "22PdEQhB6rSW",
 } as const;
 
+/** The sales-rep form at the Final Inspection milestone — still a JT Form, not used by the crew app. */
 export const WALKTHROUGH_FORM = {
   id: "22PdEpi4SNW3",
   name: "DB Customer Walkthrough",
@@ -143,16 +156,18 @@ export const TASK_TEMPLATES = {
 } as const;
 
 /**
- * The two pipeline tasks whose completion moves the job on.
+ * The pipeline tasks the sync server writes to.
  *
- * `typeId` is the primary match because a PM can rename a task in JT but
- * rarely retypes one; `name` disambiguates when a job carries more than one
- * task of that type (an Inspection-typed visit task alongside the pipeline
- * milestone) and is the only marker for the General-typed ones.
+ * Matched by NAME first, with `typeId` only breaking ties: the org uses the
+ * Inspection type for every sales rep's inspection visit, so a lone
+ * Inspection-typed task on a job is usually NOT the milestone, and older
+ * template copies carry no task types at all.
  */
 export const PIPELINE_TASKS = {
   /** Crew ticks the checklist here; completing it ends the inspection. */
   finalInspection: { name: "Final inspection", typeId: TASK_TYPES.inspection },
+  /** Its checklist mirrors the job's punch to-dos; it completes when the last one closes. */
+  punchList: { name: "Punch list", typeId: TASK_TYPES.general },
   /** Sales rep has spoken to the customer; completing it closes the job. */
   finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general },
 } as const;

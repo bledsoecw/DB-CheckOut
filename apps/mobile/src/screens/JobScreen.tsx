@@ -3,7 +3,7 @@ import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "r
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { JobDetail, ScopeDocument, ScopeSummary } from "@shared/types";
-import { CLEANUP_FORM, INSPECTION_FORM } from "@shared/jobtread";
+import { CLEANUP_CHECKLIST, INSPECTION_CHECKLIST } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
 import { getJob, getScopeSummary } from "../api";
 import CameraView from "../Camera";
@@ -35,10 +35,10 @@ export default function JobScreen({ navigation, route }: Props) {
 
   useEffect(() => navigation.addListener("focus", load), [navigation, load]);
 
-  const inspectionDone = INSPECTION_FORM.optionFields.filter((f) => state.inspection[f]).length;
-  const cleanupDone = CLEANUP_FORM.optionFields.filter((f) => state.cleanup[f]).length;
-  const inspectionLeft = INSPECTION_FORM.optionFields.length - inspectionDone;
-  const cleanupLeft = CLEANUP_FORM.optionFields.length - cleanupDone;
+  const inspectionDone = INSPECTION_CHECKLIST.keys.filter((f) => state.inspection[f]).length;
+  const cleanupDone = CLEANUP_CHECKLIST.keys.filter((f) => state.cleanup[f]).length;
+  const inspectionLeft = INSPECTION_CHECKLIST.keys.length - inspectionDone;
+  const cleanupLeft = CLEANUP_CHECKLIST.keys.length - cleanupDone;
 
   // One gate for the one send: photos + both checklists complete.
   const missing = [
@@ -115,13 +115,13 @@ export default function JobScreen({ navigation, route }: Props) {
 
         <Tile
           title={{ es: "Inspección", en: "Inspection" }}
-          progress={`${inspectionDone}/${INSPECTION_FORM.optionFields.length}`}
+          progress={`${inspectionDone}/${INSPECTION_CHECKLIST.keys.length}`}
           color={colors.blue}
           onPress={() => navigation.navigate("Checklist", { jobId })}
         />
         <Tile
           title={{ es: "Limpieza", en: "Cleanup" }}
-          progress={`${cleanupDone}/${CLEANUP_FORM.optionFields.length}`}
+          progress={`${cleanupDone}/${CLEANUP_CHECKLIST.keys.length}`}
           color={colors.green}
           onPress={() => navigation.navigate("Cleanup", { jobId })}
         />
@@ -153,8 +153,8 @@ export default function JobScreen({ navigation, route }: Props) {
         ) : (
           <Text style={styles.footnote}>
             {p({
-              es: `Revisa fotos, formularios${state.reports.length > 0 ? ` y ${state.reports.length} problema(s)` : ""} antes del único envío.`,
-              en: `Review photos, forms${state.reports.length > 0 ? ` and ${state.reports.length} problem(s)` : ""} before the one send.`,
+              es: `Revisa fotos, listas${state.reports.length > 0 ? ` y ${state.reports.length} problema(s)` : ""} antes del único envío.`,
+              en: `Review photos, checklists${state.reports.length > 0 ? ` and ${state.reports.length} problem(s)` : ""} before the one send.`,
             })}
           </Text>
         )}

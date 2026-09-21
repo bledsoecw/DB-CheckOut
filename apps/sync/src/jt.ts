@@ -6,6 +6,7 @@
 import type { PaveClient } from "./pave";
 import {
   ANSWER,
+  CLEANUP_ITEMS,
   CUSTOM_FIELDS,
   INSPECTION_ITEMS,
   ORGANIZATION_ID,
@@ -294,8 +295,12 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
           progress: {},
           endDate: {},
           taskType: { id: {} },
+          // 50 x 10 with the user fields is over Pave's declared-size budget
+          // ("Request Entity Too Large", verified live 2026-09-21 — it took
+          // every job screen down with a 502). 50 x 5 passes, and a punch
+          // item never has five assignees anyway.
           assignedMemberships: {
-            $: { size: 10 },
+            $: { size: 5 },
             nodes: { id: {}, user: { id: {}, name: {}, emailAddress: {} } },
           },
         },
@@ -403,6 +408,11 @@ export async function listAssignedWorkByJob(
               // 50 x 10 nested memberships = 500 declared, verified live.
               size: 50,
               ...(page ? { page } : {}),
+              // Newest first: the org carries hundreds of old open
+              // Inspection-typed sales visits, and this scan stops after a
+              // few hundred tasks. Oldest-first (Pave's default) never
+              // reached anything assigned this month.
+              sortBy: [{ field: "createdAt", order: "desc" }],
               where: {
                 and: [
                   {
@@ -456,59 +466,6 @@ export async function listAssignedWorkByJob(
 // Mutations
 // --------------------------------------------------------------------------
 
-interface FormFieldMeta {
-  id: string;
-  name: string;
-  type: string;
-}
-
-/** Form field metadata, cached per form — the fields only change when the form is edited in JT. */
-const formFieldsCache = new Map<string, FormFieldMeta[]>();
-
-async function getFormFields(pave: PaveClient, formId: string): Promise<FormFieldMeta[]> {
-  const hit = formFieldsCache.get(formId);
-  if (hit) return hit;
-  const res = await pave.query<{
-    form: { fields: { nodes: FormFieldMeta[] } } | null;
-  }>({
-    form: { $: { id: formId }, fields: { $: { size: 50 }, nodes: { id: {}, name: {}, type: {} } } },
-  });
-  const fields = res.form?.fields.nodes ?? [];
-  if (fields.length > 0) formFieldsCache.set(formId, fields);
-  return fields;
-}
-
-/**
- * Submit a filled form (inspection / cleanup / walkthrough) onto a job.
- * The app works in field IDS, but createFormSubmission wants values keyed
- * by field NAME, with option answers as arrays — verified against live
- * Pave (id-keyed values are rejected as "missing required field").
- */
-export async function submitForm(
-  pave: PaveClient,
-  formId: string,
-  jobId: string,
-  values: Record<string, string>,
-): Promise<string> {
-  const fields = await getFormFields(pave, formId);
-  const byId = new Map(fields.map((f) => [f.id, f]));
-  const named: Record<string, string | string[]> = {};
-  for (const [fieldId, value] of Object.entries(values)) {
-    const field = byId.get(fieldId);
-    if (!field) continue;
-    named[field.name] = field.type === "option" ? [value] : value;
-  }
-  const res = await pave.query<{
-    createFormSubmission: { createdFormSubmission?: { id: string } };
-  }>({
-    createFormSubmission: {
-      $: { formId, targetId: jobId, isSubmitted: true, values: named },
-      createdFormSubmission: { id: {} },
-    },
-  });
-  return res.createFormSubmission.createdFormSubmission?.id ?? "";
-}
-
 /**
  * Every task write the sync server makes carries these.
  *
@@ -530,6 +487,13 @@ export interface PipelineTask {
   /** 0..1; JT leaves it null until someone touches the task. */
   progress: number;
   taskTypeId: string | null;
+  /** The task's checklist, in order. Two states — there is no third. */
+  subtasks: Subtask[];
+}
+
+export interface Subtask {
+  name: string;
+  isComplete: boolean;
 }
 
 /**
@@ -544,6 +508,7 @@ export async function listPipelineTasks(pave: PaveClient, jobId: string): Promis
     name: string;
     progress: number | null;
     taskType: { id: string } | null;
+    subtasks?: Array<{ name?: string | null; isComplete?: boolean | null }> | null;
   }
   const res = await pave.query<{
     job: { tasks: { nodes: RawPipelineTask[] } } | null;
@@ -552,7 +517,8 @@ export async function listPipelineTasks(pave: PaveClient, jobId: string): Promis
       $: { id: jobId },
       tasks: {
         $: { size: 50 },
-        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} } },
+        // subtasks is a plain array, not a paged connection — no size budget.
+        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} }, subtasks: { name: {}, isComplete: {} } },
       },
     },
   });
@@ -561,6 +527,7 @@ export async function listPipelineTasks(pave: PaveClient, jobId: string): Promis
     name: t.name,
     progress: t.progress ?? 0,
     taskTypeId: t.taskType?.id ?? null,
+    subtasks: (t.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true })),
   }));
 }
 
@@ -570,49 +537,85 @@ const sameName = (a: string, b: string): boolean =>
 /**
  * Find one pipeline milestone among a job's tasks.
  *
- * Type first, name second: a PM will rename a task on the Gantt long before
- * they retype one, but "General" is shared by three of the six milestones so
- * the name is what separates them. Returns undefined freely — a job that
- * never got the template simply has no milestone to complete, and the caller
- * treats that as "nothing to do" rather than an error.
+ * Name first, type only to break a tie. The org uses the Inspection type for
+ * every sales rep's inspection visit ("26-0921 Rob Gamble 567-…"), so a lone
+ * Inspection-typed task on a job is usually NOT the milestone — picking it by
+ * type would rewrite a sales rep's visit with the crew's checklist. Older
+ * template copies carry no task types at all, which is the other reason the
+ * name has to carry the match. Returns undefined freely — a job that never
+ * got the template simply has no milestone, and the caller treats that as
+ * "nothing to do" rather than an error.
  */
 export function findPipelineTask(
   tasks: PipelineTask[],
   spec: { name: string; typeId: string },
 ): PipelineTask | undefined {
-  const typed = tasks.filter((t) => t.taskTypeId === spec.typeId);
-  if (typed.length === 1) return typed[0];
-  return typed.find((t) => sameName(t.name, spec.name)) ?? tasks.find((t) => sameName(t.name, spec.name));
+  const named = tasks.filter((t) => sameName(t.name, spec.name));
+  if (named.length === 0) return undefined;
+  return named.find((t) => t.taskTypeId === spec.typeId) ?? named[0];
 }
 
+/** The visit's checklist answers and free-text notes, as the app sends them. */
+export interface VisitChecklists {
+  inspection: Record<string, string>;
+  cleanup: Record<string, string>;
+  notes?: { inspection?: string; attic?: string; cleanup?: string };
+}
+
+/** Marks every description line this server writes, so a replay can find its own stamp. */
+export const CHECKLIST_STAMP = "via DB CheckOut";
+
 /**
- * Close the inspection: tick the subtasks the crew answered and mark the
- * task done, in ONE write.
- *
- * `subtasks` REPLACES on update (same as dependsOnTasks), so the full list
- * goes every time — which is what makes this idempotent if the outbox
- * delivers the same close twice.
+ * The checklist as JobTread stores it: eight inspection items, then the five
+ * cleanup items, ticked or not.
  *
  * The collapse from three answers to two states is deliberate and lossy:
  * a subtask is only `{ name, isComplete }`, so OK and N/A both tick and
  * ACTION does not. Nothing is lost overall — an ACTION is what created the
  * `REPORT:` punch task, which is where that finding actually lives.
  */
+export function checklistSubtasks(visit: VisitChecklists): Subtask[] {
+  const ticked = (answers: Record<string, string>, key: string): boolean =>
+    answers[key] === ANSWER.ok || answers[key] === ANSWER.na;
+  return [
+    ...INSPECTION_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.inspection, item.key) })),
+    ...CLEANUP_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.cleanup, item.key) })),
+  ];
+}
+
+/** What the visit adds to the task's description: who inspected, and the notes. */
+export function inspectionNote(visit: VisitChecklists, byName: string): string {
+  const notes = visit.notes ?? {};
+  const lines = [`✔ Inspected by ${byName} — ${CHECKLIST_STAMP}`];
+  if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
+  if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
+  if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
+  return lines.join("\n");
+}
+
+/**
+ * Close the inspection: write the visit's checklist onto the job's scheduled
+ * "Final inspection" task, put the notes in its description, and mark the
+ * task done — in ONE write.
+ *
+ * `subtasks` REPLACES on update (same as dependsOnTasks), so the full list
+ * goes every time, and the stamp is only appended when it isn't there yet —
+ * together that is what makes this idempotent when the outbox delivers the
+ * same close twice.
+ */
 export async function closeInspectionTask(
   pave: PaveClient,
   taskId: string,
-  answers: Record<string, string>,
+  visit: VisitChecklists,
   byName: string,
 ): Promise<void> {
-  const subtasks = INSPECTION_ITEMS.map((item) => ({
-    name: item.subtask,
-    isComplete: answers[item.fieldId] === ANSWER.ok || answers[item.fieldId] === ANSWER.na,
-  }));
+  const subtasks = checklistSubtasks(visit);
   const res = await pave.query<{ task: { description: string | null } | null }>({
     task: { $: { id: taskId }, description: {} },
   });
-  const done = `✔ Inspected by ${byName} — via DB CheckOut`;
-  const description = res.task?.description ? `${res.task.description}\n\n${done}` : done;
+  const note = inspectionNote(visit, byName);
+  const existing = res.task?.description ?? "";
+  const description = existing.includes(note) ? existing : existing ? `${existing}\n\n${note}` : note;
   await pave.query({
     updateTask: {
       $: {
@@ -624,6 +627,59 @@ export async function closeInspectionTask(
       },
     },
   });
+}
+
+/**
+ * Mirror the job's punch to-dos onto the scheduled "Punch list" task's
+ * checklist, so the PM's Gantt shows what is open and what is done without
+ * opening each to-do. The to-dos stay the record (they carry the assignee,
+ * the photos and the work order); this is the view.
+ *
+ * Writes only when something differs, so the taskUpdated webhook this write
+ * fires comes straight back as "unchanged" — no loop. Completes the task
+ * when the last item closes (never re-opens it), and on a clean inspection
+ * with nothing to fix marks it not required, as the template asks.
+ */
+export async function syncPunchListTask(
+  pave: PaveClient,
+  task: PipelineTask | undefined,
+  punchTasks: PunchTask[],
+  opts: { cleanInspection?: boolean } = {},
+): Promise<"updated" | "unchanged" | "none"> {
+  if (!task) return "none";
+  const complete = task.progress >= 1;
+
+  if (punchTasks.length === 0) {
+    if (!opts.cleanInspection || complete) return "unchanged";
+    const note = `✔ Not required — clean inspection, nothing to fix (${CHECKLIST_STAMP})`;
+    const res = await pave.query<{ task: { description: string | null } | null }>({
+      task: { $: { id: task.id }, description: {} },
+    });
+    const existing = res.task?.description ?? "";
+    const description = existing.includes(note) ? existing : existing ? `${existing}\n\n${note}` : note;
+    await pave.query({
+      updateTask: { $: { id: task.id, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) } },
+    });
+    return "updated";
+  }
+
+  const desired: Subtask[] = punchTasks.map((t) => ({ name: t.name, isComplete: t.progress >= 1 }));
+  const allDone = desired.every((s) => s.isComplete);
+  const same =
+    task.subtasks.length === desired.length &&
+    task.subtasks.every((s, i) => s.name === desired[i].name && s.isComplete === desired[i].isComplete);
+  if (same && (complete || !allDone)) return "unchanged";
+  await pave.query({
+    updateTask: {
+      $: {
+        id: task.id,
+        ...TASK_WRITE_GUARDS,
+        subtasks: desired,
+        ...(allDone && !complete ? { progress: 1 } : {}),
+      },
+    },
+  });
+  return "updated";
 }
 
 /**

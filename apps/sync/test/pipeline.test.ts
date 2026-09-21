@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nextPipelineStatus, openProblemCount, type PipelineInput } from "../src/pipeline";
+import { applyPipeline, nextPipelineStatus, openProblemCount, type PipelineInput } from "../src/pipeline";
 import { findPipelineTask, type PipelineTask } from "../src/jt";
-import { PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import type { PaveClient, PaveQuery } from "../src/pave";
+import { CUSTOM_FIELDS, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 import type { PunchTask } from "../../../packages/shared/src/types";
 
 function punch(progress: number): PunchTask {
@@ -137,19 +138,54 @@ test("each move is idempotent — re-deciding at the destination stays put", () 
 // --------------------------------------------------------------------------
 
 function pipelineTask(name: string, taskTypeId: string | null, progress = 0): PipelineTask {
-  return { id: `id-${name}`, name, progress, taskTypeId };
+  return { id: `id-${name}`, name, progress, taskTypeId, subtasks: [] };
 }
 
-test("the inspection milestone is found by its type", () => {
+test("the milestones are found by name", () => {
   const tasks = [
     pipelineTask("Order materials", TASK_TYPES.preProduction),
     pipelineTask("Final inspection", TASK_TYPES.inspection),
+    pipelineTask("Punch list", TASK_TYPES.general),
     pipelineTask("Final check-off", TASK_TYPES.general),
   ];
-  assert.equal(
-    findPipelineTask(tasks, PIPELINE_TASKS.finalInspection)?.name,
-    "Final inspection",
-  );
+  assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.finalInspection)?.name, "Final inspection");
+  assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.punchList)?.name, "Punch list");
+  assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.finalCheckOff)?.name, "Final check-off");
+  // Case and spacing don't matter — older manual tasks say "Final Inspection".
+  assert.equal(findPipelineTask([pipelineTask(" final INSPECTION ", null)], PIPELINE_TASKS.finalInspection)?.name, " final INSPECTION ");
+});
+
+/**
+ * The org uses the Inspection type for every sales rep's inspection visit.
+ * A job at Final Inspection without the template has exactly one
+ * Inspection-typed task — the rep's visit — and closing the crew's checklist
+ * onto it would rewrite that visit. The type alone must never match.
+ */
+test("a lone Inspection-typed sales visit is not the milestone", () => {
+  const tasks = [
+    pipelineTask("26-0921 Rob Gamble 567-259-9774", TASK_TYPES.inspection),
+    pipelineTask("Order materials", TASK_TYPES.preProduction),
+  ];
+  assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.finalInspection), undefined);
+});
+
+test("older template copies with no task types still match by name", () => {
+  const tasks = [
+    pipelineTask("Final inspection", TASK_TYPES.inspection),
+    pipelineTask("Punch list", null),
+    pipelineTask("PM punch review", null),
+    pipelineTask("Final check-off", null),
+  ];
+  assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.finalCheckOff)?.id, "id-Final check-off");
+  assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.punchList)?.id, "id-Punch list");
+});
+
+test("when two tasks share the name, the one with the milestone's type wins", () => {
+  const tasks = [
+    pipelineTask("Final inspection", TASK_TYPES.general),
+    pipelineTask("Final inspection", TASK_TYPES.inspection),
+  ];
+  assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.finalInspection)?.taskTypeId, TASK_TYPES.inspection);
 });
 
 test("the name separates milestones that share the General type", () => {
@@ -178,4 +214,119 @@ test("a job without the template has no milestone, and that is not an error", ()
     findPipelineTask([pipelineTask("REPORT: gutter", TASK_TYPES.punchList)], PIPELINE_TASKS.finalCheckOff),
     undefined,
   );
+});
+
+// --------------------------------------------------------------------------
+// applyPipeline end to end, against a fake Pave
+// --------------------------------------------------------------------------
+
+interface FakeJob {
+  status: string;
+  punch: Array<{ id: string; name: string; progress: number | null }>;
+  milestones: Array<{ id: string; name: string; progress: number | null; typeId: string | null; subtasks: Array<{ name: string; isComplete: boolean }> }>;
+}
+
+/** Answers the four query shapes applyPipeline uses and records every write. */
+function fakeJobPave(job: FakeJob): { client: PaveClient; writes: PaveQuery[] } {
+  const writes: PaveQuery[] = [];
+  const client: PaveClient = {
+    async query<T>(q: PaveQuery): Promise<T> {
+      if ("updateTask" in q || "updateJob" in q) {
+        writes.push(q);
+        return {} as T;
+      }
+      const jobQ = q["job"] as Record<string, unknown>;
+      if (!("tasks" in jobQ)) {
+        return {
+          job: { id: "job1", number: "26-0001", name: "x", customFieldValues: { nodes: [{ value: job.status, customField: { id: CUSTOM_FIELDS.status } }] } },
+        } as T;
+      }
+      const wantsAssignees = JSON.stringify(jobQ).includes("assignedMemberships");
+      if (wantsAssignees) {
+        return {
+          job: {
+            tasks: {
+              nodes: job.punch.map((t) => ({ ...t, description: null, endDate: null, taskType: { id: TASK_TYPES.punchList }, assignedMemberships: { nodes: [] } })),
+            },
+          },
+        } as T;
+      }
+      return {
+        job: { tasks: { nodes: job.milestones.map((m) => ({ id: m.id, name: m.name, progress: m.progress, taskType: m.typeId ? { id: m.typeId } : null, subtasks: m.subtasks })) } },
+      } as T;
+    },
+  };
+  return { client, writes };
+}
+
+const templateOn = (finalInspectionProgress: number | null, punchListSubtasks: Array<{ name: string; isComplete: boolean }> = []) => [
+  { id: "fi", name: "Final inspection", progress: finalInspectionProgress, typeId: TASK_TYPES.inspection, subtasks: [] },
+  { id: "pl", name: "Punch list", progress: null, typeId: TASK_TYPES.general, subtasks: punchListSubtasks },
+  { id: "co", name: "Final check-off", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
+];
+
+test("applyPipeline moves a finished inspection with problems to Punch List and mirrors them onto the Punch list task", async () => {
+  const { client, writes } = fakeJobPave({
+    status: STATUS.finalInspection,
+    punch: [{ id: "r1", name: "REPORT: Rear slope — pipe boot", progress: null }],
+    milestones: templateOn(1),
+  });
+  assert.equal(await applyPipeline(client, "job1", { problemsReported: 1 }), STATUS.punchList);
+  const checklist = writes.find((w) => "updateTask" in w);
+  const status = writes.find((w) => "updateJob" in w);
+  assert.deepEqual(((checklist!["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>)["subtasks"], [
+    { name: "REPORT: Rear slope — pipe boot", isComplete: false },
+  ]);
+  assert.deepEqual(((status!["updateJob"] as Record<string, unknown>)["$"] as Record<string, unknown>)["customFieldValues"], {
+    [CUSTOM_FIELDS.status]: STATUS.punchList,
+  });
+});
+
+test("applyPipeline marks the Punch list step not required after a clean inspection and sends the job to PM Review", async () => {
+  const fake = fakeJobPave({ status: STATUS.finalInspection, punch: [], milestones: templateOn(1) });
+  // The not-required note reads the task description first.
+  const base = fake.client.query.bind(fake.client);
+  fake.client.query = async <T,>(q: PaveQuery): Promise<T> =>
+    "task" in q ? ({ task: { description: null } } as T) : base<T>(q);
+  assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
+  const notRequired = fake.writes.find((w) => "updateTask" in w);
+  const dollar = (notRequired!["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(dollar["id"], "pl");
+  assert.equal(dollar["progress"], 1);
+  assert.match(String(dollar["description"]), /Not required — clean inspection/);
+});
+
+test("applyPipeline writes nothing when a webhook replays a job whose checklist already matches", async () => {
+  const { client, writes } = fakeJobPave({
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "REPORT: Gutter", progress: 0 }],
+    milestones: templateOn(1, [{ name: "REPORT: Gutter", isComplete: false }]),
+  });
+  assert.equal(await applyPipeline(client, "job1"), null);
+  assert.equal(writes.length, 0);
+});
+
+test("applyPipeline closes the last repair: Punch list task completes and the job goes to PM Review", async () => {
+  const { client, writes } = fakeJobPave({
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "REPORT: Gutter", progress: 1 }],
+    milestones: templateOn(1, [{ name: "REPORT: Gutter", isComplete: false }]),
+  });
+  assert.equal(await applyPipeline(client, "job1"), STATUS.pmReview);
+  const task = writes.find((w) => "updateTask" in w);
+  const dollar = (task!["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(dollar["progress"], 1);
+  assert.deepEqual(dollar["subtasks"], [{ name: "REPORT: Gutter", isComplete: true }]);
+});
+
+test("applyPipeline leaves a job outside the pipeline alone after a single read", async () => {
+  let reads = 0;
+  const fake = fakeJobPave({ status: STATUS.production, punch: [], milestones: [] });
+  const base = fake.client.query.bind(fake.client);
+  fake.client.query = async <T,>(q: PaveQuery): Promise<T> => {
+    reads += 1;
+    return base<T>(q);
+  };
+  assert.equal(await applyPipeline(fake.client, "job1"), null);
+  assert.equal(reads, 1);
 });
