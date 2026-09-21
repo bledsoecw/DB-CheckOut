@@ -56,11 +56,11 @@ Free text (into the task description): `22PdEQfPnVqr` attic access
 limitation / existing conditions, `22PdEQfPnVqs` inspector notes,
 `22PdEQhB6rSW` cleanup notes.
 
-**The template carries only the eight inspection subtasks today.** The app
-writes all thirteen (the list replaces on update), so the PM sees the five
-cleanup lines once a visit is sent. Adding the five `Cleanup n.` subtasks to
-the template's "Final inspection" task makes them visible before the visit
-too — optional, and the names above are exact.
+**The template carries all thirteen subtasks** (the five `Cleanup n.`
+lines were added to its "Final inspection" task on 2026-09-21), so every
+job copied from it shows the whole checklist before the visit. Jobs copied
+earlier have eight; the app writes all thirteen either way, because the
+list replaces on update.
 
 ### DB Customer Walkthrough — form `22PdEpi4SNW3` (still a JT Form)
 
