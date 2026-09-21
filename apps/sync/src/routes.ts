@@ -233,9 +233,7 @@ export function createHandler(deps: RouterDeps) {
         // One line per delivery: what JT sent and what we made of it. The
         // payload shape is not documented anywhere we can read, and a wrong
         // guess here is a silent no-op forever.
-        console.log(
-          `jobtread webhook keys=${Object.keys(body).join(",")} jobId=${jobId ?? "-"} body=${JSON.stringify(body).slice(0, 700)}`,
-        );
+        console.log(`jobtread webhook ${describeWebhook(body)} jobId=${jobId ?? "-"}`);
         let flipped: string | null = null;
         if (jobId) {
           // Best-effort: a failed check must answer 200, or JobTread retries
@@ -491,14 +489,52 @@ export function createHandler(deps: RouterDeps) {
   };
 }
 
-/** Best-effort job id extraction from a JT webhook payload (shape varies by event). */
+const asObject = (v: unknown): Record<string, unknown> | undefined =>
+  v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+const asId = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+/**
+ * The job a JobTread webhook delivery is about.
+ *
+ * JT's real shape (seen live 2026-09-21): `{ _type: "root", createdEvent:
+ * { _type: "event", data: { next: <record>, previous?: <record> }, job?,
+ * account?, comment?, … } }`. On a task event the record carries `jobId`
+ * (and `targetType: "job"` + `targetId`); on a job event the record is the
+ * job itself. The older guesses (a bare `jobId`, `job.id`, `task.target`)
+ * stay so hand-made payloads keep working.
+ */
 export function extractJobId(body: Record<string, unknown>): string | null {
-  const direct = (body["jobId"] ?? (body["job"] as Record<string, unknown> | undefined)?.["id"]);
-  if (typeof direct === "string") return direct;
-  const task = body["task"] as Record<string, unknown> | undefined;
-  const target = task?.["target"] as Record<string, unknown> | undefined;
-  if (typeof target?.["id"] === "string" && target?.["type"] === "job") return target["id"] as string;
+  const direct = asId(body["jobId"]) ?? asId(asObject(body["job"])?.["id"]);
+  if (direct) return direct;
+  const target = asObject(asObject(body["task"])?.["target"]);
+  if (target?.["type"] === "job" && asId(target["id"])) return target["id"] as string;
+
+  const event = asObject(body["createdEvent"]) ?? asObject(body["event"]);
+  if (!event) return null;
+  const related = asId(asObject(event["job"])?.["id"]);
+  if (related) return related;
+  const data = asObject(event["data"]);
+  for (const record of [asObject(data?.["next"]), asObject(data?.["previous"])]) {
+    if (!record) continue;
+    const viaTask = asId(record["jobId"]) ?? (record["targetType"] === "job" ? asId(record["targetId"]) : null);
+    if (viaTask) return viaTask;
+    // The record is the job itself (jobUpdated): it has a number, never a jobId.
+    if (asId(record["number"]) && asId(record["id"])) return record["id"] as string;
+  }
   return null;
+}
+
+/** One compact line per delivery: enough to see the shape without logging the record. */
+export function describeWebhook(body: Record<string, unknown>): string {
+  const event = asObject(body["createdEvent"]) ?? asObject(body["event"]);
+  if (!event) return `keys=${Object.keys(body).join(",")}`;
+  const data = asObject(event["data"]);
+  const next = asObject(data?.["next"]);
+  const kind =
+    asId(event["type"]) ??
+    asId(event["eventType"]) ??
+    (next ? (asId(next["jobId"]) ? "task" : asId(next["number"]) ? "job" : "record") : "?");
+  return `event=${kind} eventKeys=${Object.keys(event).join(",")} next=${next ? Object.keys(next).slice(0, 12).join(",") : "-"}`;
 }
 
 export const _internal = { STATUS };

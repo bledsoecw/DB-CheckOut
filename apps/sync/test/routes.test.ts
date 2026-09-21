@@ -51,7 +51,7 @@ test("parseVisit tolerates a missing or malformed body", () => {
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mintSession } from "../src/auth";
-import { createHandler, type RouterDeps } from "../src/routes";
+import { createHandler, describeWebhook, extractJobId, type RouterDeps } from "../src/routes";
 import type { PaveClient, PaveQuery } from "../src/pave";
 
 const SECRET = "routes-test-secret";
@@ -200,4 +200,36 @@ test("a report photo is attached to its punch to-do and to the Final inspection 
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("extractJobId reads JobTread's real delivery shape, and the older guesses", () => {
+  // Seen live 2026-09-21 (trimmed): a task event, the job id on the record.
+  const taskEvent = {
+    _type: "root",
+    createdEvent: {
+      _type: "event",
+      account: { _type: "account", id: "22PPwHV46nxy" },
+      comment: null,
+      createdAt: "2026-09-21T13:37:23.778Z",
+      data: {
+        next: { id: "22PeuuepCGBk", name: "26-1558 Michael Taylor", jobId: "22PeuuT4kfMy", isToDo: false, targetType: "job", taskTypeId: "22PNJDrm6TsA" },
+      },
+    },
+  };
+  assert.equal(extractJobId(taskEvent), "22PeuuT4kfMy");
+  assert.match(describeWebhook(taskEvent), /event=task eventKeys=_type,account,comment,createdAt,data next=id,name,jobId/);
+
+  // A job event: the record is the job itself.
+  assert.equal(
+    extractJobId({ createdEvent: { data: { previous: { id: "j1", number: "26-0001" }, next: { id: "j1", number: "26-0001" } } } }),
+    "j1",
+  );
+  // A related job on the event wins when present.
+  assert.equal(extractJobId({ createdEvent: { job: { id: "j2" }, data: { next: { id: "t", jobId: "j9" } } } }), "j2");
+  // The older, hand-made shapes still work.
+  assert.equal(extractJobId({ jobId: "j3" }), "j3");
+  assert.equal(extractJobId({ job: { id: "j4" } }), "j4");
+  assert.equal(extractJobId({ task: { target: { type: "job", id: "j5" } } }), "j5");
+  assert.equal(extractJobId({ createdEvent: { data: { next: { id: "x" } } } }), null);
+  assert.equal(extractJobId({}), null);
 });

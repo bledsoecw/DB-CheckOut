@@ -1116,9 +1116,7 @@ function createHandler(deps) {
         }
         const body = await readBody(req);
         const jobId = extractJobId(body);
-        console.log(
-          `jobtread webhook keys=${Object.keys(body).join(",")} jobId=${jobId ?? "-"} body=${JSON.stringify(body).slice(0, 700)}`
-        );
+        console.log(`jobtread webhook ${describeWebhook(body)} jobId=${jobId ?? "-"}`);
         let flipped = null;
         if (jobId) {
           try {
@@ -1294,13 +1292,33 @@ function createHandler(deps) {
     }
   };
 }
+var asObject = (v) => v && typeof v === "object" ? v : void 0;
+var asId = (v) => typeof v === "string" && v ? v : null;
 function extractJobId(body) {
-  const direct = body["jobId"] ?? body["job"]?.["id"];
-  if (typeof direct === "string") return direct;
-  const task = body["task"];
-  const target = task?.["target"];
-  if (typeof target?.["id"] === "string" && target?.["type"] === "job") return target["id"];
+  const direct = asId(body["jobId"]) ?? asId(asObject(body["job"])?.["id"]);
+  if (direct) return direct;
+  const target = asObject(asObject(body["task"])?.["target"]);
+  if (target?.["type"] === "job" && asId(target["id"])) return target["id"];
+  const event = asObject(body["createdEvent"]) ?? asObject(body["event"]);
+  if (!event) return null;
+  const related = asId(asObject(event["job"])?.["id"]);
+  if (related) return related;
+  const data = asObject(event["data"]);
+  for (const record of [asObject(data?.["next"]), asObject(data?.["previous"])]) {
+    if (!record) continue;
+    const viaTask = asId(record["jobId"]) ?? (record["targetType"] === "job" ? asId(record["targetId"]) : null);
+    if (viaTask) return viaTask;
+    if (asId(record["number"]) && asId(record["id"])) return record["id"];
+  }
   return null;
+}
+function describeWebhook(body) {
+  const event = asObject(body["createdEvent"]) ?? asObject(body["event"]);
+  if (!event) return `keys=${Object.keys(body).join(",")}`;
+  const data = asObject(event["data"]);
+  const next = asObject(data?.["next"]);
+  const kind = asId(event["type"]) ?? asId(event["eventType"]) ?? (next ? asId(next["jobId"]) ? "task" : asId(next["number"]) ? "job" : "record" : "?");
+  return `event=${kind} eventKeys=${Object.keys(event).join(",")} next=${next ? Object.keys(next).slice(0, 12).join(",") : "-"}`;
 }
 
 // apps/sync/src/webhookRegistration.ts
