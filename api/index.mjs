@@ -183,22 +183,29 @@ var ANSWER = {
   action: "ACTION"
 };
 var INSPECTION_ITEMS = [
-  { key: "22PdEQfPnVqh", subtask: "1. Shingle field flat \u2014 no exposed fasteners or unaddressed damage" },
-  { key: "22PdEQfPnVqi", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
-  { key: "22PdEQfPnVqj", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
-  { key: "22PdEQfPnVqk", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
-  { key: "22PdEQfPnVqm", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
-  { key: "22PdEQfPnVqn", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
-  { key: "22PdEQfPnVqp", subtask: "7. Sealant appropriate \u2014 not a substitute for flashing; roof surface clear" },
-  { key: "22PdEQfPnVqq", subtask: "8. Attic / interior spot check \u2014 leak-prone areas inspected" }
+  { key: "22PdEQfPnVqh", code: "1", subtask: "1. Shingle field flat \u2014 no exposed fasteners or unaddressed damage" },
+  { key: "22PdEQfPnVqi", code: "2", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
+  { key: "22PdEQfPnVqj", code: "3", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
+  { key: "22PdEQfPnVqk", code: "4", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
+  { key: "22PdEQfPnVqm", code: "5", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
+  { key: "22PdEQfPnVqn", code: "6", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
+  { key: "22PdEQfPnVqp", code: "7", subtask: "7. Sealant appropriate \u2014 not a substitute for flashing; roof surface clear" },
+  { key: "22PdEQfPnVqq", code: "8", subtask: "8. Attic / interior spot check \u2014 leak-prone areas inspected" }
 ];
 var CLEANUP_ITEMS = [
-  { key: "22PdEQhB6rSR", subtask: "Cleanup 1. Driveway, walks & landscaping clean \u2014 magnet sweep completed" },
-  { key: "22PdEQhB6rSS", subtask: "Cleanup 2. Unused materials, pallets, tarps & crew debris removed or staged" },
-  { key: "22PdEQhB6rST", subtask: "Cleanup 3. Gutters & downspouts clear of debris and reconnected" },
-  { key: "22PdEQhB6rSU", subtask: "Cleanup 4. No production damage \u2014 siding, windows, doors, AC, plants" },
-  { key: "22PdEQhB6rSV", subtask: "Cleanup 5. General appearance \u2014 ready for the homeowner to view" }
+  { key: "22PdEQhB6rSR", code: "C1", subtask: "Cleanup 1. Driveway, walks & landscaping clean \u2014 magnet sweep completed" },
+  { key: "22PdEQhB6rSS", code: "C2", subtask: "Cleanup 2. Unused materials, pallets, tarps & crew debris removed or staged" },
+  { key: "22PdEQhB6rST", code: "C3", subtask: "Cleanup 3. Gutters & downspouts clear of debris and reconnected" },
+  { key: "22PdEQhB6rSU", code: "C4", subtask: "Cleanup 4. No production damage \u2014 siding, windows, doors, AC, plants" },
+  { key: "22PdEQhB6rSV", code: "C5", subtask: "Cleanup 5. General appearance \u2014 ready for the homeowner to view" }
 ];
+var CHECKLIST_ITEMS = [
+  ...INSPECTION_ITEMS,
+  ...CLEANUP_ITEMS
+];
+function checklistItemByKey(key) {
+  return key ? CHECKLIST_ITEMS.find((item) => item.key === key) : void 0;
+}
 var INSPECTION_CHECKLIST = {
   /** Item keys in crew order; derived so the app and the subtasks can never drift apart. */
   keys: INSPECTION_ITEMS.map((i) => i.key),
@@ -499,6 +506,10 @@ async function listAssignedWorkByJob(pave, viewer) {
   return work;
 }
 var TASK_WRITE_GUARDS = { updateDependentTasks: false, notify: false };
+function isInspectionClosed(task) {
+  if (!task) return false;
+  return task.progress >= 1 || (task.description ?? "").includes(INSPECTED_STAMP);
+}
 async function listPipelineTasks(pave, jobId) {
   const res = await pave.query({
     job: {
@@ -506,7 +517,14 @@ async function listPipelineTasks(pave, jobId) {
       tasks: {
         $: { size: 50 },
         // subtasks is a plain array, not a paged connection — no size budget.
-        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} }, subtasks: { name: {}, isComplete: {} } }
+        nodes: {
+          id: {},
+          name: {},
+          progress: {},
+          taskType: { id: {} },
+          description: {},
+          subtasks: { name: {}, isComplete: {} }
+        }
       }
     }
   });
@@ -515,6 +533,7 @@ async function listPipelineTasks(pave, jobId) {
     name: t.name,
     progress: t.progress ?? 0,
     taskTypeId: t.taskType?.id ?? null,
+    description: t.description ?? null,
     subtasks: (t.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true }))
   }));
 }
@@ -525,26 +544,58 @@ function findPipelineTask(tasks, spec) {
   return named.find((t) => t.taskTypeId === spec.typeId) ?? named[0];
 }
 var CHECKLIST_STAMP = "via DB CheckOut";
-function checklistSubtasks(visit) {
-  const ticked = (answers, key) => answers[key] === ANSWER.ok || answers[key] === ANSWER.na;
-  return [
-    ...INSPECTION_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.inspection, item.key) })),
-    ...CLEANUP_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.cleanup, item.key) }))
-  ];
+var INSPECTED_STAMP = "\u2714 Inspected by ";
+var ITEM_MARKER = /DB CheckOut item: ([A-Z]?\d+)/;
+var oneLine = (text, max) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+};
+function findingSuffix(findings) {
+  if (findings.length === 0) return "";
+  const parts = findings.map((f) => {
+    const note = oneLine(f.note, 160);
+    return f.fixedOnSite ? `\u2714 FIXED ON SITE${note ? ` \u2014 ${note}` : ""}` : `\u26A0 REPORT${note ? ` \u2014 ${note}` : ""}`;
+  });
+  return ` \xB7 ${parts.join(" | ")}`;
+}
+function checklistSubtasks(visit, current = []) {
+  const answered = { ...visit.cleanup, ...visit.inspection };
+  const findingsFor = (key) => (visit.findings ?? []).filter((f) => f.itemKey === key);
+  return CHECKLIST_ITEMS.map((item) => {
+    const findings = findingsFor(item.key);
+    const answer = answered[item.key];
+    const already = current.find((s) => s.name.startsWith(item.subtask))?.isComplete === true;
+    const ticked = answer === ANSWER.ok || answer === ANSWER.na || answer === ANSWER.action && findings.length > 0 && findings.every((f) => f.fixedOnSite) || already;
+    return { name: `${item.subtask}${findingSuffix(findings)}`, isComplete: ticked };
+  });
 }
 function inspectionNote(visit, byName) {
   const notes = visit.notes ?? {};
-  const lines = [`\u2714 Inspected by ${byName} \u2014 ${CHECKLIST_STAMP}`];
+  const lines = [`${INSPECTED_STAMP}${byName} \u2014 ${CHECKLIST_STAMP}`];
   if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
   if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
   if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
+  const findings = (visit.findings ?? []).filter((f) => checklistItemByKey(f.itemKey));
+  if (findings.length > 0) {
+    lines.push("Findings:");
+    for (const f of findings) {
+      const item = checklistItemByKey(f.itemKey);
+      const state = f.fixedOnSite ? "FIXED ON SITE" : "REPORT \u2014 punch item";
+      const photos = f.photos > 0 ? ` (${f.photos} photo${f.photos === 1 ? "" : "s"})` : "";
+      lines.push(`- ${item.subtask}: ${state}${photos}${f.note.trim() ? ` \u2014 ${f.note.trim()}` : ""}`);
+    }
+  }
   return lines.join("\n");
 }
 async function closeInspectionTask(pave, taskId, visit, byName) {
-  const subtasks = checklistSubtasks(visit);
   const res = await pave.query({
-    task: { $: { id: taskId }, description: {} }
+    task: { $: { id: taskId }, description: {}, subtasks: { name: {}, isComplete: {} } }
   });
+  const current = (res.task?.subtasks ?? []).map((st) => ({
+    name: st.name ?? "",
+    isComplete: st.isComplete === true
+  }));
+  const subtasks = checklistSubtasks(visit, current);
   const note = inspectionNote(visit, byName);
   const existing = res.task?.description ?? "";
   const description = existing.includes(note) ? existing : existing ? `${existing}
@@ -561,6 +612,24 @@ ${note}` : note;
       }
     }
   });
+}
+async function syncInspectionChecklist(pave, task, punchTasks) {
+  if (!task || task.subtasks.length === 0) return "none";
+  const doneCodes = new Set(
+    punchTasks.filter((t) => t.progress >= 1).map((t) => ITEM_MARKER.exec(t.description ?? "")?.[1]).filter((code) => Boolean(code))
+  );
+  if (doneCodes.size === 0) return "unchanged";
+  let changed = false;
+  const subtasks = task.subtasks.map((st) => {
+    if (st.isComplete) return st;
+    const item = CHECKLIST_ITEMS.find((i) => st.name.startsWith(i.subtask));
+    if (!item || !doneCodes.has(item.code)) return st;
+    changed = true;
+    return { ...st, isComplete: true };
+  });
+  if (!changed) return "unchanged";
+  await pave.query({ updateTask: { $: { id: task.id, ...TASK_WRITE_GUARDS, subtasks } } });
+  return "updated";
 }
 async function syncPunchListTask(pave, task, punchTasks, opts = {}) {
   if (!task) return "none";
@@ -580,7 +649,10 @@ ${note}` : note;
     });
     return "updated";
   }
-  const desired = punchTasks.map((t) => ({ name: t.name, isComplete: t.progress >= 1 }));
+  const desired = punchTasks.map((t) => {
+    const note = oneLine((t.description ?? "").split("\n")[0] ?? "", 140);
+    return { name: note ? `${t.name} \u2014 ${note}` : t.name, isComplete: t.progress >= 1 };
+  });
   const allDone = desired.every((s) => s.isComplete);
   const same = task.subtasks.length === desired.length && task.subtasks.every((s, i) => s.name === desired[i].name && s.isComplete === desired[i].isComplete);
   if (same && (complete || !allDone)) return "unchanged";
@@ -635,6 +707,9 @@ async function createReportTask(pave, jobId, report, clientRef2) {
   if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
   if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
   if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
+  const item = checklistItemByKey(report.itemKey);
+  if (item) lines.push(`Checklist: ${item.subtask}
+DB CheckOut item: ${item.code}`);
   if (marker) lines.push(marker);
   const res = await pave.query({
     createTask: {
@@ -702,7 +777,7 @@ async function uploadPhoto(pave, jobId, photo, fetchImpl = fetch) {
       $: {
         targetId,
         targetType,
-        name: `${photo.label} ${stamp} \u2014 ${photo.byName}`,
+        name: `${photo.title ?? photo.label} ${stamp} \u2014 ${photo.byName}`,
         uploadRequestId: request.id,
         description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` \xB7 ${marker}` : ""}`
       },
@@ -717,6 +792,10 @@ async function setJobStatus(pave, jobId, status) {
       $: { id: jobId, customFieldValues: { [CUSTOM_FIELDS.status]: status } }
     }
   });
+}
+function checklistItemTitle(itemKey) {
+  const item = checklistItemByKey(itemKey);
+  return item ? oneLine(item.subtask, 60) : void 0;
 }
 
 // apps/sync/src/pmReview.ts
@@ -755,7 +834,7 @@ async function applyPipeline(pave, jobId, opts = {}) {
   ]);
   const input = {
     currentStatus,
-    inspectionDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
+    inspectionDone: isInspectionClosed(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
     checkOffDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalCheckOff)),
     punchTasks,
     problemsReported: opts.problemsReported ?? 0
@@ -766,9 +845,10 @@ async function applyPipeline(pave, jobId, opts = {}) {
       await syncPunchListTask(pave, findPipelineTask(milestones, PIPELINE_TASKS.punchList), punchTasks, {
         cleanInspection: currentStatus === STATUS.finalInspection && input.inspectionDone && openProblemCount(input) === 0
       });
+      await syncInspectionChecklist(pave, findPipelineTask(milestones, PIPELINE_TASKS.finalInspection), punchTasks);
     } catch (err) {
       console.warn(
-        `punch list checklist not updated for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
+        `checklists not updated for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
@@ -945,10 +1025,18 @@ function parseVisit(body) {
   const answers = body.answers ?? {};
   const nested = typeof answers["inspection"] === "object" || typeof answers["cleanup"] === "object";
   const notes = stringMap(body.notes);
+  const findings = Array.isArray(body.findings) ? body.findings.filter((f) => Boolean(f) && typeof f === "object").filter((f) => typeof f["itemKey"] === "string").map((f) => ({
+    itemKey: String(f["itemKey"]),
+    fixedOnSite: f["fixedOnSite"] === true,
+    location: typeof f["location"] === "string" ? f["location"] : "",
+    note: typeof f["note"] === "string" ? f["note"] : "",
+    photos: typeof f["photos"] === "number" && f["photos"] > 0 ? Math.floor(f["photos"]) : 0
+  })) : [];
   return {
     inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
     cleanup: nested ? stringMap(answers["cleanup"]) : {},
-    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"] }
+    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"] },
+    findings
   };
 }
 var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
@@ -966,6 +1054,10 @@ function decodeAudio(audioBase64) {
   return { mimeType, base64: dataUri[2] };
 }
 var MAX_PHOTO_BYTES = 4e6;
+var oneLineTitle = (text) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 60 ? `${flat.slice(0, 59)}\u2026` : flat;
+};
 function decodePhoto(imageBase64) {
   if (typeof imageBase64 !== "string" || !imageBase64) return null;
   let contentType = "image/jpeg";
@@ -1145,20 +1237,44 @@ function createHandler(deps) {
           }
           const photo = decodePhoto(body.imageBase64);
           if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });
+          const ref = clientRef(req);
           let taskId = typeof body.taskId === "string" && body.taskId ? body.taskId : void 0;
           if (!taskId && typeof body.reportRef === "string" && clientRefMarker(body.reportRef)) {
             taskId = await findTaskByRef(deps.pave, jobId, body.reportRef) ?? void 0;
             if (!taskId) return json(res, 409, { error: "The report this photo belongs to has not reached JobTread yet" });
           }
+          const itemTitle = checklistItemTitle(typeof body.itemKey === "string" ? body.itemKey : void 0);
+          const where = typeof body.location === "string" && body.location.trim() ? body.location.trim() : void 0;
+          const title = itemTitle ? `${itemTitle} \u2014 ${label}` : where ? `${oneLineTitle(where)} \u2014 ${label}` : void 0;
+          let inspectionTaskId;
+          if (label === "INSPECTION" || label === "REPORT") {
+            try {
+              inspectionTaskId = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection)?.id;
+            } catch {
+            }
+          }
+          const primaryTaskId = taskId ?? (label === "INSPECTION" ? inspectionTaskId : void 0);
           const upload = {
             label,
             ...photo,
-            taskId,
+            taskId: primaryTaskId,
             byName: session.name,
-            clientRef: clientRef(req)
+            clientRef: ref,
+            title
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
-          return json(res, 200, { fileId });
+          let inspectionFileId = null;
+          if (label === "REPORT" && inspectionTaskId && inspectionTaskId !== primaryTaskId) {
+            try {
+              inspectionFileId = await uploadPhoto(deps.pave, jobId, {
+                ...upload,
+                taskId: inspectionTaskId,
+                clientRef: ref ? `${ref}.fi` : void 0
+              });
+            } catch {
+            }
+          }
+          return json(res, 200, { fileId, inspectionFileId });
         }
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {

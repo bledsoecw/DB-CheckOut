@@ -29,9 +29,11 @@ import type { PunchTask } from "../../../packages/shared/src/types";
 import {
   findPipelineTask,
   getJobStatusValue,
+  isInspectionClosed,
   listPipelineTasks,
   listPunchTasks,
   setJobStatus,
+  syncInspectionChecklist,
   syncPunchListTask,
   type PipelineTask,
 } from "./jt";
@@ -39,7 +41,7 @@ import { shouldFlipToPmReview } from "./pmReview";
 
 export interface PipelineInput {
   currentStatus: string;
-  /** The job's "Final inspection" task is complete. */
+  /** The crew closed the inspection on the job's "Final inspection" task (see isInspectionClosed). */
   inspectionDone: boolean;
   /** The job's "Final check-off" task is complete. */
   checkOffDone: boolean;
@@ -119,7 +121,7 @@ export async function applyPipeline(
 
   const input: PipelineInput = {
     currentStatus,
-    inspectionDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
+    inspectionDone: isInspectionClosed(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
     checkOffDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalCheckOff)),
     punchTasks,
     problemsReported: opts.problemsReported ?? 0,
@@ -132,9 +134,11 @@ export async function applyPipeline(
         cleanInspection:
           currentStatus === STATUS.finalInspection && input.inspectionDone && openProblemCount(input) === 0,
       });
+      // A closed punch item ticks the inspection line it came from.
+      await syncInspectionChecklist(pave, findPipelineTask(milestones, PIPELINE_TASKS.finalInspection), punchTasks);
     } catch (err) {
       console.warn(
-        `punch list checklist not updated for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+        `checklists not updated for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

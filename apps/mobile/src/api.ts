@@ -435,8 +435,18 @@ export const sendReport = (jobId: string, report: ProblemReport, label?: string,
  * report's task, and answers 409 (kept, retried) while the report itself
  * is still on its way.
  */
-export const uploadReportPhoto = (jobId: string, imageBase64: string, reportRef: string, outboxLabel?: string) =>
-  post(`/jobs/${jobId}/photos`, { label: "REPORT", imageBase64, reportRef }, outboxLabel ?? "Foto · Photo");
+export const uploadReportPhoto = (
+  jobId: string,
+  imageBase64: string,
+  reportRef: string,
+  outboxLabel?: string,
+  about: { itemKey?: string; location?: string } = {},
+) =>
+  post(
+    `/jobs/${jobId}/photos`,
+    { label: "REPORT", imageBase64, reportRef, ...about },
+    outboxLabel ?? "Foto · Photo",
+  );
 /**
  * Ends the visit: both checklists and the notes go onto the job's scheduled
  * "Final inspection" task in JobTread (its checklist and its description),

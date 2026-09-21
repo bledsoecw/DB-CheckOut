@@ -56,7 +56,7 @@ export default function ChecklistScreen({ navigation, route }: Props) {
                   setAnswer("inspection", fieldId, answer);
                   if (answer === ANSWER.action) {
                     // The failed line becomes the report's "Where is it?".
-                    navigation.navigate("Report", { jobId, from: FIELD_LABELS[fieldId].en });
+                    navigation.navigate("Report", { jobId, from: FIELD_LABELS[fieldId].en, itemKey: fieldId });
                   }
                 }}
               />

@@ -20,6 +20,7 @@ import { PaveError, type PaveClient } from "./pave";
 import { PIPELINE_TASKS, STATUS } from "../../../packages/shared/src/jobtread";
 import type { CloseInspectionRequest, ProblemReport } from "../../../packages/shared/src/types";
 import {
+  checklistItemTitle,
   clientRefMarker,
   closeInspectionTask,
   completeTask,
@@ -104,10 +105,23 @@ export function parseVisit(body: Partial<CloseInspectionRequest> & { answers?: u
   const answers = (body.answers ?? {}) as Record<string, unknown>;
   const nested = typeof answers["inspection"] === "object" || typeof answers["cleanup"] === "object";
   const notes = stringMap(body.notes);
+  const findings = Array.isArray(body.findings)
+    ? (body.findings as unknown[])
+        .filter((f): f is Record<string, unknown> => Boolean(f) && typeof f === "object")
+        .filter((f) => typeof f["itemKey"] === "string")
+        .map((f) => ({
+          itemKey: String(f["itemKey"]),
+          fixedOnSite: f["fixedOnSite"] === true,
+          location: typeof f["location"] === "string" ? f["location"] : "",
+          note: typeof f["note"] === "string" ? f["note"] : "",
+          photos: typeof f["photos"] === "number" && f["photos"] > 0 ? Math.floor(f["photos"]) : 0,
+        }))
+    : [];
   return {
     inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
     cleanup: nested ? stringMap(answers["cleanup"]) : {},
     notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"] },
+    findings,
   };
 }
 
@@ -142,6 +156,11 @@ export function decodeAudio(
   return { mimeType, base64: dataUri[2] };
 }
 const MAX_PHOTO_BYTES = 4_000_000;
+
+const oneLineTitle = (text: string): string => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 60 ? `${flat.slice(0, 59)}…` : flat;
+};
 
 /** Accepts a data URI or bare base64; returns bytes + content type or null. */
 export function decodePhoto(imageBase64: unknown): { data: Buffer; contentType: string } | null {
@@ -382,6 +401,9 @@ export function createHandler(deps: RouterDeps) {
             taskId?: unknown;
             /** The client reference of the report this photo belongs to. */
             reportRef?: unknown;
+            /** The checklist item the report came from, and where it is. */
+            itemKey?: unknown;
+            location?: unknown;
             imageBase64?: unknown;
           };
           const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
@@ -390,6 +412,7 @@ export function createHandler(deps: RouterDeps) {
           }
           const photo = decodePhoto(body.imageBase64);
           if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });
+          const ref = clientRef(req);
           let taskId = typeof body.taskId === "string" && body.taskId ? body.taskId : undefined;
           if (!taskId && typeof body.reportRef === "string" && clientRefMarker(body.reportRef)) {
             // The photo belongs to a report the app sent as its own item. The
@@ -399,15 +422,47 @@ export function createHandler(deps: RouterDeps) {
             taskId = (await findTaskByRef(deps.pave, jobId, body.reportRef)) ?? undefined;
             if (!taskId) return json(res, 409, { error: "The report this photo belongs to has not reached JobTread yet" });
           }
+          // "8. Attic… — REPORT" / "Cleanup 4… — REPORT": the item leads the file name.
+          const itemTitle = checklistItemTitle(typeof body.itemKey === "string" ? body.itemKey : undefined);
+          const where = typeof body.location === "string" && body.location.trim() ? body.location.trim() : undefined;
+          const title = itemTitle ? `${itemTitle} — ${label}` : where ? `${oneLineTitle(where)} — ${label}` : undefined;
+
+          // Inspection photos and the report's photos both belong with the
+          // inspection: a visit photo lands on the "Final inspection" task
+          // instead of the bare job, and a report photo is attached there
+          // too, next to the checklist line it documents — as well as on the
+          // punch to-do, where the crew and the PM work it.
+          let inspectionTaskId: string | undefined;
+          if (label === "INSPECTION" || label === "REPORT") {
+            try {
+              inspectionTaskId = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection)?.id;
+            } catch {
+              // no template on the job, or JT hiccup — the primary upload below still happens
+            }
+          }
+          const primaryTaskId = taskId ?? (label === "INSPECTION" ? inspectionTaskId : undefined);
           const upload: PhotoUpload = {
             label: label as PhotoUpload["label"],
             ...photo,
-            taskId,
+            taskId: primaryTaskId,
             byName: session.name,
-            clientRef: clientRef(req),
+            clientRef: ref,
+            title,
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
-          return json(res, 200, { fileId });
+          let inspectionFileId: string | null = null;
+          if (label === "REPORT" && inspectionTaskId && inspectionTaskId !== primaryTaskId) {
+            try {
+              inspectionFileId = await uploadPhoto(deps.pave, jobId, {
+                ...upload,
+                taskId: inspectionTaskId,
+                clientRef: ref ? `${ref}.fi` : undefined,
+              });
+            } catch {
+              // best-effort: the photo is on the punch to-do already
+            }
+          }
+          return json(res, 200, { fileId, inspectionFileId });
         }
       }
 

@@ -138,7 +138,7 @@ test("each move is idempotent — re-deciding at the destination stays put", () 
 // --------------------------------------------------------------------------
 
 function pipelineTask(name: string, taskTypeId: string | null, progress = 0): PipelineTask {
-  return { id: `id-${name}`, name, progress, taskTypeId, subtasks: [] };
+  return { id: `id-${name}`, name, progress, taskTypeId, description: null, subtasks: [] };
 }
 
 test("the milestones are found by name", () => {
@@ -222,8 +222,8 @@ test("a job without the template has no milestone, and that is not an error", ()
 
 interface FakeJob {
   status: string;
-  punch: Array<{ id: string; name: string; progress: number | null }>;
-  milestones: Array<{ id: string; name: string; progress: number | null; typeId: string | null; subtasks: Array<{ name: string; isComplete: boolean }> }>;
+  punch: Array<{ id: string; name: string; progress: number | null; description?: string }>;
+  milestones: Array<{ id: string; name: string; progress: number | null; typeId: string | null; description?: string; subtasks: Array<{ name: string; isComplete: boolean }> }>;
 }
 
 /** Answers the four query shapes applyPipeline uses and records every write. */
@@ -246,13 +246,13 @@ function fakeJobPave(job: FakeJob): { client: PaveClient; writes: PaveQuery[] } 
         return {
           job: {
             tasks: {
-              nodes: job.punch.map((t) => ({ ...t, description: null, endDate: null, taskType: { id: TASK_TYPES.punchList }, assignedMemberships: { nodes: [] } })),
+              nodes: job.punch.map((t) => ({ ...t, description: t.description ?? null, endDate: null, taskType: { id: TASK_TYPES.punchList }, assignedMemberships: { nodes: [] } })),
             },
           },
         } as T;
       }
       return {
-        job: { tasks: { nodes: job.milestones.map((m) => ({ id: m.id, name: m.name, progress: m.progress, taskType: m.typeId ? { id: m.typeId } : null, subtasks: m.subtasks })) } },
+        job: { tasks: { nodes: job.milestones.map((m) => ({ id: m.id, name: m.name, progress: m.progress, taskType: m.typeId ? { id: m.typeId } : null, description: m.description ?? null, subtasks: m.subtasks })) } },
       } as T;
     },
   };
@@ -329,4 +329,47 @@ test("applyPipeline leaves a job outside the pipeline alone after a single read"
   };
   assert.equal(await applyPipeline(fake.client, "job1"), null);
   assert.equal(reads, 1);
+});
+
+test("applyPipeline treats a stamped inspection as closed even while reported lines keep its progress under 100%", async () => {
+  const { client, writes } = fakeJobPave({
+    status: STATUS.finalInspection,
+    punch: [{ id: "r1", name: "REPORT: Attic", progress: null, description: "Leak\nDB CheckOut item: 8" }],
+    milestones: [
+      {
+        id: "fi",
+        name: "Final inspection",
+        progress: 0.85,
+        typeId: TASK_TYPES.inspection,
+        description: "Template\n\n✔ Inspected by Carl Bledsoe — via DB CheckOut",
+        subtasks: [{ name: "8. Attic / interior spot check — leak-prone areas inspected · ⚠ REPORT — Leak", isComplete: false }],
+      },
+      ...templateOn(0).slice(1),
+    ],
+  });
+  assert.equal(await applyPipeline(client, "job1", { problemsReported: 1 }), STATUS.punchList);
+  assert.ok(writes.some((w) => "updateJob" in w));
+});
+
+test("applyPipeline ticks the inspection line when its punch item closes", async () => {
+  const { client, writes } = fakeJobPave({
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "REPORT: Attic", progress: 1, description: "Leak\nDB CheckOut item: 8" }],
+    milestones: [
+      {
+        id: "fi",
+        name: "Final inspection",
+        progress: 0.92,
+        typeId: TASK_TYPES.inspection,
+        description: "✔ Inspected by Carl Bledsoe — via DB CheckOut",
+        subtasks: [{ name: "8. Attic / interior spot check — leak-prone areas inspected · ⚠ REPORT — Leak", isComplete: false }],
+      },
+      ...templateOn(0, [{ name: "REPORT: Attic — Leak", isComplete: false }]).slice(1),
+    ],
+  });
+  assert.equal(await applyPipeline(client, "job1"), STATUS.pmReview);
+  const inspectionWrite = writes.find((w) => "updateTask" in w && ((w["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>)["id"] === "fi");
+  assert.ok(inspectionWrite, "the Final inspection task was written");
+  const subtasks = ((inspectionWrite!["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>)["subtasks"] as Array<{ isComplete: boolean }>;
+  assert.equal(subtasks[0].isComplete, true);
 });

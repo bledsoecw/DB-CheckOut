@@ -14,7 +14,7 @@ import { VoiceNoteButton } from "../VoiceNote";
 type Props = NativeStackScreenProps<RootStackParamList, "Report">;
 
 export default function ReportScreen({ navigation, route }: Props) {
-  const { jobId, from } = route.params;
+  const { jobId, from, itemKey } = route.params;
   const { t, t2, p, s, lang } = useLang();
   const { state, addReport, addReportPhoto, removeReportPhoto, clearReportPhotos } = useVisit(jobId);
   // Coming from a FALLA/FIX tap, the checklist line pre-fills "Where is it?".
@@ -55,6 +55,7 @@ export default function ReportScreen({ navigation, route }: Props) {
     // The task name the PM sees in JobTread: the detail, or the note's start.
     const location = detail.trim() || note.trim().slice(0, 60);
     addReport({
+      itemKey,
       location,
       englishNote: note.trim(),
       heardText: heard.trim() || undefined,

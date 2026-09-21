@@ -27,11 +27,24 @@ sync server writes, in one `updateTask`:
   a duplicate outbox delivery finds its own stamp and leaves it);
 - `progress: 1`.
 
-Answers collapse to the subtask's two states: `OK` and `N/A` tick, `ACTION`
-does not — an `ACTION` is what created the `REPORT:` punch task, which is
-where that finding actually lives. English is the record; the app displays
-the Spanish labels (ES-first, the ES·EN pill flips priority; BIEN / N-A /
-FALLA in ES mode, OK / N-A / FIX in EN mode).
+Answers collapse to the subtask's two states. `OK` and `N/A` tick. An
+`ACTION` the crew **fixed on site** ticks too (nothing is left to do) and
+its entry reads `… · ✔ FIXED ON SITE — <note>`. An `ACTION` that became a
+`REPORT:` punch task stays unticked with `… · ⚠ REPORT — <note>` on the
+entry, and is ticked by the sync server when that punch task closes (the
+task carries `DB CheckOut item: 8` to say which line it came from). The
+same findings are listed in full in the task description, and the
+report's photos are attached to the "Final inspection" task as well as to
+the punch to-do, named after the line (`8. Attic … — REPORT …`). Visit
+photos attach to the "Final inspection" task instead of the bare job.
+
+**JobTread derives a checklist task's progress from its ticks** (ticked /
+total, whatever `progress` is written), so a reported line keeps "Final
+inspection" under 100% until the punch work is done. The pipeline
+therefore reads the `✔ Inspected by …` stamp in the description, not the
+progress, to know the crew closed the inspection. English is the record;
+the app displays the Spanish labels (ES-first, the ES·EN pill flips
+priority; BIEN / N-A / FALLA in ES mode, OK / N-A / FIX in EN mode).
 
 The item keys the app uses (`22PdEQ…`) are the ids of the retired form
 fields, kept as opaque keys so nothing saved on a phone was lost.
@@ -121,7 +134,7 @@ completing two of them is what moves the job's Status.
 | 1 | Order materials | Pre-Production `22PDM6m8Vdqw` | planning bar |
 | 2 | Roof install | Pre-Production `22PDM6m8Vdqw` | planning bar |
 | 3 | Final inspection | **Inspection `22PNJDrm6TsA`** | carries the 8 checklist items as **subtasks**; the crew app ticks them and completes it |
-| 4 | Punch list | General `22PBAjfWNQrT` | phase marker; **its checklist mirrors the job's punch to-dos** (name + ticked when the to-do closes), it completes with the last one, and a clean inspection marks it "not required" in the notes |
+| 4 | Punch list | General `22PBAjfWNQrT` | phase marker; **its checklist mirrors the job's punch to-dos** (`REPORT: <where> — <note>`, ticked when the to-do closes), it completes with the last one, and a clean inspection marks it "not required" in the notes |
 | 5 | PM punch review | General `22PBAjfWNQrT` | PM's own check-off (no status of its own) |
 | 6 | Final check-off | General `22PBAjfWNQrT` | **sales rep** has spoken to the customer; completing it closes the job |
 

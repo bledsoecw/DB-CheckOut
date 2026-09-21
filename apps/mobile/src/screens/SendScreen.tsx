@@ -80,7 +80,10 @@ export default function SendScreen({ navigation, route }: Props) {
         const results: SendOutcome[] = [await sendReport(jobId, rest, `Problema · Problem: ${report.location}${suffix}`, ref)];
         for (const [i, uri] of photos.entries()) {
           results.push(
-            await uploadReportPhoto(jobId, uri, ref, `Foto ${i + 1}/${photos.length} · ${report.location}${suffix}`),
+            await uploadReportPhoto(jobId, uri, ref, `Foto ${i + 1}/${photos.length} · ${report.location}${suffix}`, {
+              itemKey: report.itemKey,
+              location: report.location,
+            }),
           );
         }
         items.push({
@@ -105,6 +108,18 @@ export default function SendScreen({ navigation, route }: Props) {
               attic: noteOr(INSPECTION_CHECKLIST.atticKey),
               cleanup: noteOr(CLEANUP_CHECKLIST.notesKey),
             },
+            // What each ACTION line found, so the note lands on that line
+            // and a fixed-on-site line is ticked — whether or not the
+            // REPORT sends above have reached JobTread yet.
+            findings: state.reports
+              .filter((r) => r.itemKey)
+              .map((r) => ({
+                itemKey: r.itemKey as string,
+                fixedOnSite: r.fixedOnSite === true,
+                location: r.location,
+                note: r.englishNote,
+                photos: (r.photosBase64?.length ?? 0) + (r.photoBase64 ? 1 : 0),
+              })),
             // Only problems that still need a return trip. A "fixed on site"
             // report is documentation of work already done — counting it would
             // send a job with nothing left to repair to Punch List.

@@ -5,6 +5,8 @@ import {
   assignedTo,
   checklistSubtasks,
   closeInspectionTask,
+  isInspectionClosed,
+  syncInspectionChecklist,
   completeTask,
   createReportTask,
   findFileByRef,
@@ -140,6 +142,122 @@ test("inspectionNote stamps who inspected and carries only the notes that were w
   );
 });
 
+test("a finding puts its note on the checklist line: fixed on site ticks it, a report leaves it open", () => {
+  const subtasks = checklistSubtasks({
+    inspection: { [INSPECTION_ITEMS[7].key]: ANSWER.action },
+    cleanup: { [CLEANUP_ITEMS[3].key]: ANSWER.action },
+    findings: [
+      { itemKey: INSPECTION_ITEMS[7].key, fixedOnSite: false, location: "Attic", note: "Leak at the vent boot", photos: 1 },
+      { itemKey: CLEANUP_ITEMS[3].key, fixedOnSite: true, location: "Plants", note: "Plants squished, reshaped the flashing", photos: 2 },
+    ],
+  });
+  const attic = subtasks[7];
+  const plants = subtasks[11];
+  assert.equal(attic.name, `${INSPECTION_ITEMS[7].subtask} · ⚠ REPORT — Leak at the vent boot`);
+  assert.equal(attic.isComplete, false, "a reported item waits for its punch work");
+  assert.equal(plants.name, `${CLEANUP_ITEMS[3].subtask} · ✔ FIXED ON SITE — Plants squished, reshaped the flashing`);
+  assert.equal(plants.isComplete, true, "nothing is left to do on a fixed-on-site item");
+  // Two findings on one line, and a long note, stay on one readable entry.
+  const two = checklistSubtasks({
+    inspection: { [INSPECTION_ITEMS[0].key]: ANSWER.action },
+    cleanup: {},
+    findings: [
+      { itemKey: INSPECTION_ITEMS[0].key, fixedOnSite: true, location: "a", note: "x".repeat(400), photos: 0 },
+      { itemKey: INSPECTION_ITEMS[0].key, fixedOnSite: false, location: "b", note: "second", photos: 0 },
+    ],
+  })[0];
+  assert.ok(two.name.includes(" | ⚠ REPORT — second"));
+  assert.ok(two.name.length < INSPECTION_ITEMS[0].subtask.length + 220);
+  assert.equal(two.isComplete, false, "one open report on the line keeps it open");
+});
+
+test("a replayed close keeps a line that JobTread already shows ticked", () => {
+  const current = [{ name: `${INSPECTION_ITEMS[7].subtask} · ⚠ REPORT — old note`, isComplete: true }];
+  const subtasks = checklistSubtasks(
+    {
+      inspection: { [INSPECTION_ITEMS[7].key]: ANSWER.action },
+      cleanup: {},
+      findings: [{ itemKey: INSPECTION_ITEMS[7].key, fixedOnSite: false, location: "Attic", note: "old note", photos: 0 }],
+    },
+    current,
+  );
+  assert.equal(subtasks[7].isComplete, true);
+});
+
+test("inspectionNote lists the findings in full under the stamp", () => {
+  const note = inspectionNote(
+    {
+      inspection: {},
+      cleanup: {},
+      findings: [
+        { itemKey: CLEANUP_ITEMS[3].key, fixedOnSite: true, location: "Plants", note: "Plants squished", photos: 2 },
+        { itemKey: INSPECTION_ITEMS[7].key, fixedOnSite: false, location: "Attic", note: "Leak at the boot", photos: 1 },
+        { itemKey: "not-an-item", fixedOnSite: false, location: "x", note: "ignored", photos: 0 },
+      ],
+    },
+    "Carl Bledsoe",
+  );
+  assert.equal(
+    note,
+    [
+      "✔ Inspected by Carl Bledsoe — via DB CheckOut",
+      "Findings:",
+      `- ${CLEANUP_ITEMS[3].subtask}: FIXED ON SITE (2 photos) — Plants squished`,
+      `- ${INSPECTION_ITEMS[7].subtask}: REPORT — punch item (1 photo) — Leak at the boot`,
+    ].join("\n"),
+  );
+});
+
+test("isInspectionClosed reads the stamp, because JT derives a checklist task's progress from its ticks", () => {
+  const base = punchListTask({ name: "Final inspection", taskTypeId: TASK_TYPES.inspection });
+  assert.equal(isInspectionClosed({ ...base, progress: 0.85, description: "Template text\n\n✔ Inspected by Carl — via DB CheckOut" }), true);
+  assert.equal(isInspectionClosed({ ...base, progress: 0.85, description: "Template text" }), false);
+  assert.equal(isInspectionClosed({ ...base, progress: 1, description: null }), true);
+  assert.equal(isInspectionClosed(undefined), false);
+});
+
+test("syncInspectionChecklist ticks the line a closed punch item came from and keeps its note", async () => {
+  const { client, queries } = fakePave(() => ({}));
+  const task = punchListTask({
+    id: "fi",
+    name: "Final inspection",
+    subtasks: [
+      { name: `${INSPECTION_ITEMS[7].subtask} · ⚠ REPORT — Leak at the boot`, isComplete: false },
+      { name: CLEANUP_ITEMS[0].subtask, isComplete: true },
+    ],
+  });
+  const done = { ...punchTask("REPORT: Attic", 1), description: "Leak at the boot\n\nChecklist: 8. Attic\nDB CheckOut item: 8" };
+  const open = { ...punchTask("REPORT: Gutter", 0), description: "x\nDB CheckOut item: C3" };
+  assert.equal(await syncInspectionChecklist(client, task, [done, open]), "updated");
+  const dollar = dollarOf(queries[0], "updateTask");
+  assert.deepEqual(dollar["subtasks"], [
+    { name: `${INSPECTION_ITEMS[7].subtask} · ⚠ REPORT — Leak at the boot`, isComplete: true },
+    { name: CLEANUP_ITEMS[0].subtask, isComplete: true },
+  ]);
+  // Nothing new to tick: no write.
+  const ticked = punchListTask({ id: "fi", subtasks: [{ name: INSPECTION_ITEMS[7].subtask, isComplete: true }] });
+  assert.equal(await syncInspectionChecklist(client, ticked, [done]), "unchanged");
+  assert.equal(await syncInspectionChecklist(client, undefined, [done]), "none");
+  assert.equal(queries.length, 1);
+});
+
+test("createReportTask names the checklist item the report came from", async () => {
+  const { client, queries } = fakePave(() => ({ createTask: { createdTask: { id: "t" } } }));
+  await createReportTask(client, "job1", { itemKey: INSPECTION_ITEMS[7].key, location: "Attic", englishNote: "Leak" });
+  const description = String((queries[0]["createTask"] as Record<string, unknown>)["$"] && ((queries[0]["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>)["description"]);
+  assert.ok(description.includes(`Checklist: ${INSPECTION_ITEMS[7].subtask}`));
+  assert.ok(description.includes("DB CheckOut item: 8"));
+});
+
+test("the Punch list mirror carries each report's note on its entry", async () => {
+  const { client, queries } = fakePave(() => ({}));
+  const report = { ...punchTask("REPORT: Attic", 0), description: "Leak at the boot\n\nCrew said: x" };
+  await syncPunchListTask(client, punchListTask(), [report]);
+  assert.deepEqual(dollarOf(queries[0], "updateTask")["subtasks"], [
+    { name: "REPORT: Attic — Leak at the boot", isComplete: false },
+  ]);
+});
+
 test("closeInspectionTask replaces the task's checklist, appends the notes and completes it in one guarded write", async () => {
   const { client, queries } = fakePave((q) =>
     "task" in q ? { task: { description: "Complete the quality inspection." } } : {},
@@ -192,7 +310,7 @@ test("listPipelineTasks reads each task's checklist as two-state subtasks", asyn
     { name: "1. Shingles", isComplete: true },
     { name: "2. Edges", isComplete: false },
   ]);
-  assert.deepEqual(tasks[1], { id: "pl", name: "Punch list", progress: 1, taskTypeId: null, subtasks: [] });
+  assert.deepEqual(tasks[1], { id: "pl", name: "Punch list", progress: 1, taskTypeId: null, description: null, subtasks: [] });
   assert.ok(JSON.stringify(queries[0]).includes("subtasks"), "the query selects the checklist");
 });
 
@@ -205,7 +323,15 @@ function punchTask(name: string, progress: number): PunchTask {
 }
 
 function punchListTask(over: Partial<PipelineTask> = {}): PipelineTask {
-  return { id: "pl1", name: "Punch list", progress: 0, taskTypeId: TASK_TYPES.general, subtasks: [], ...over };
+  return {
+    id: "pl1",
+    name: "Punch list",
+    progress: 0,
+    taskTypeId: TASK_TYPES.general,
+    description: null,
+    subtasks: [],
+    ...over,
+  } as PipelineTask;
 }
 
 test("syncPunchListTask writes the to-dos onto the checklist when it differs", async () => {

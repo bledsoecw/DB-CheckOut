@@ -71,14 +71,14 @@ export type Answer = (typeof ANSWER)[keyof typeof ANSWER];
  * finding actually lives.
  */
 export const INSPECTION_ITEMS = [
-  { key: "22PdEQfPnVqh", subtask: "1. Shingle field flat — no exposed fasteners or unaddressed damage" },
-  { key: "22PdEQfPnVqi", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
-  { key: "22PdEQfPnVqj", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
-  { key: "22PdEQfPnVqk", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
-  { key: "22PdEQfPnVqm", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
-  { key: "22PdEQfPnVqn", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
-  { key: "22PdEQfPnVqp", subtask: "7. Sealant appropriate — not a substitute for flashing; roof surface clear" },
-  { key: "22PdEQfPnVqq", subtask: "8. Attic / interior spot check — leak-prone areas inspected" },
+  { key: "22PdEQfPnVqh", code: "1", subtask: "1. Shingle field flat — no exposed fasteners or unaddressed damage" },
+  { key: "22PdEQfPnVqi", code: "2", subtask: "2. Starter, eave/rake edges & drip edge complete and secure" },
+  { key: "22PdEQfPnVqj", code: "3", subtask: "3. Ridge & hip caps seated; valleys clean; transitions shed water" },
+  { key: "22PdEQfPnVqk", code: "4", subtask: "4. Pipe boots, static vents & ridge ventilation installed and sealed" },
+  { key: "22PdEQfPnVqm", code: "5", subtask: "5. Step, headwall & sidewall flashing complete and integrated" },
+  { key: "22PdEQfPnVqn", code: "6", subtask: "6. Chimneys, skylights & penetrations flashed/reset as scoped" },
+  { key: "22PdEQfPnVqp", code: "7", subtask: "7. Sealant appropriate — not a substitute for flashing; roof surface clear" },
+  { key: "22PdEQfPnVqq", code: "8", subtask: "8. Attic / interior spot check — leak-prone areas inspected" },
 ] as const;
 
 /**
@@ -87,12 +87,26 @@ export const INSPECTION_ITEMS = [
  * "Cleanup" prefix keeps them apart from the numbered inspection lines.
  */
 export const CLEANUP_ITEMS = [
-  { key: "22PdEQhB6rSR", subtask: "Cleanup 1. Driveway, walks & landscaping clean — magnet sweep completed" },
-  { key: "22PdEQhB6rSS", subtask: "Cleanup 2. Unused materials, pallets, tarps & crew debris removed or staged" },
-  { key: "22PdEQhB6rST", subtask: "Cleanup 3. Gutters & downspouts clear of debris and reconnected" },
-  { key: "22PdEQhB6rSU", subtask: "Cleanup 4. No production damage — siding, windows, doors, AC, plants" },
-  { key: "22PdEQhB6rSV", subtask: "Cleanup 5. General appearance — ready for the homeowner to view" },
+  { key: "22PdEQhB6rSR", code: "C1", subtask: "Cleanup 1. Driveway, walks & landscaping clean — magnet sweep completed" },
+  { key: "22PdEQhB6rSS", code: "C2", subtask: "Cleanup 2. Unused materials, pallets, tarps & crew debris removed or staged" },
+  { key: "22PdEQhB6rST", code: "C3", subtask: "Cleanup 3. Gutters & downspouts clear of debris and reconnected" },
+  { key: "22PdEQhB6rSU", code: "C4", subtask: "Cleanup 4. No production damage — siding, windows, doors, AC, plants" },
+  { key: "22PdEQhB6rSV", code: "C5", subtask: "Cleanup 5. General appearance — ready for the homeowner to view" },
 ] as const;
+
+/** Every checklist item, in JT order. `code` is the short id written into a REPORT task ("DB CheckOut item: 8"). */
+export const CHECKLIST_ITEMS: ReadonlyArray<{ key: string; code: string; subtask: string }> = [
+  ...INSPECTION_ITEMS,
+  ...CLEANUP_ITEMS,
+];
+
+export function checklistItemByKey(key: string | undefined): { key: string; code: string; subtask: string } | undefined {
+  return key ? CHECKLIST_ITEMS.find((item) => item.key === key) : undefined;
+}
+
+export function checklistItemByCode(code: string | undefined): { key: string; code: string; subtask: string } | undefined {
+  return code ? CHECKLIST_ITEMS.find((item) => item.code === code) : undefined;
+}
 
 export const INSPECTION_CHECKLIST = {
   /** Item keys in crew order; derived so the app and the subtasks can never drift apart. */

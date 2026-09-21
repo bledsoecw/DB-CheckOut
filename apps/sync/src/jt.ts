@@ -6,9 +6,10 @@
 import type { PaveClient } from "./pave";
 import {
   ANSWER,
-  CLEANUP_ITEMS,
+  CHECKLIST_ITEMS,
+  checklistItemByCode,
+  checklistItemByKey,
   CUSTOM_FIELDS,
-  INSPECTION_ITEMS,
   ORGANIZATION_ID,
   SERVICE_PROJECT_TYPES,
   STATUS,
@@ -16,6 +17,7 @@ import {
 } from "../../../packages/shared/src/jobtread";
 import type {
   Assignee,
+  ChecklistFinding,
   JobDetail,
   ProblemReport,
   PunchTask,
@@ -484,11 +486,26 @@ const TASK_WRITE_GUARDS = { updateDependentTasks: false, notify: false } as cons
 export interface PipelineTask {
   id: string;
   name: string;
-  /** 0..1; JT leaves it null until someone touches the task. */
+  /**
+   * 0..1; JT leaves it null until someone touches the task — and on a task
+   * with a checklist JT DERIVES it (ticked / total), ignoring what is written.
+   */
   progress: number;
   taskTypeId: string | null;
+  description: string | null;
   /** The task's checklist, in order. Two states — there is no third. */
   subtasks: Subtask[];
+}
+
+/**
+ * The crew has closed the inspection on this task. Not `progress >= 1`: a
+ * checklist task's progress is the ticked share, and a reported item stays
+ * unticked until its punch work is done — the stamp close-inspection writes
+ * is what says the visit happened.
+ */
+export function isInspectionClosed(task: PipelineTask | undefined): boolean {
+  if (!task) return false;
+  return task.progress >= 1 || (task.description ?? "").includes(INSPECTED_STAMP);
 }
 
 export interface Subtask {
@@ -508,6 +525,7 @@ export async function listPipelineTasks(pave: PaveClient, jobId: string): Promis
     name: string;
     progress: number | null;
     taskType: { id: string } | null;
+    description?: string | null;
     subtasks?: Array<{ name?: string | null; isComplete?: boolean | null }> | null;
   }
   const res = await pave.query<{
@@ -518,7 +536,14 @@ export async function listPipelineTasks(pave: PaveClient, jobId: string): Promis
       tasks: {
         $: { size: 50 },
         // subtasks is a plain array, not a paged connection — no size budget.
-        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} }, subtasks: { name: {}, isComplete: {} } },
+        nodes: {
+          id: {},
+          name: {},
+          progress: {},
+          taskType: { id: {} },
+          description: {},
+          subtasks: { name: {}, isComplete: {} },
+        },
       },
     },
   });
@@ -527,6 +552,7 @@ export async function listPipelineTasks(pave: PaveClient, jobId: string): Promis
     name: t.name,
     progress: t.progress ?? 0,
     taskTypeId: t.taskType?.id ?? null,
+    description: t.description ?? null,
     subtasks: (t.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true })),
   }));
 }
@@ -555,48 +581,93 @@ export function findPipelineTask(
   return named.find((t) => t.taskTypeId === spec.typeId) ?? named[0];
 }
 
-/** The visit's checklist answers and free-text notes, as the app sends them. */
+/** The visit's checklist answers, free-text notes and per-item findings, as the app sends them. */
 export interface VisitChecklists {
   inspection: Record<string, string>;
   cleanup: Record<string, string>;
   notes?: { inspection?: string; attic?: string; cleanup?: string };
+  findings?: ChecklistFinding[];
 }
 
 /** Marks every description line this server writes, so a replay can find its own stamp. */
 export const CHECKLIST_STAMP = "via DB CheckOut";
+/** The line close-inspection writes; its presence is what "the inspection is closed" means. */
+export const INSPECTED_STAMP = "✔ Inspected by ";
+/** Written into a REPORT task so its checklist item can be ticked when the work is done. */
+const ITEM_MARKER = /DB CheckOut item: ([A-Z]?\d+)/;
+
+const oneLine = (text: string, max: number): string => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/**
+ * What a checklist entry says about its findings, appended to the item's
+ * name — a JT checklist entry is only a name and a tick, so the name is the
+ * one place a note can sit right on the item.
+ */
+function findingSuffix(findings: ChecklistFinding[]): string {
+  if (findings.length === 0) return "";
+  const parts = findings.map((f) => {
+    const note = oneLine(f.note, 160);
+    return f.fixedOnSite ? `✔ FIXED ON SITE${note ? ` — ${note}` : ""}` : `⚠ REPORT${note ? ` — ${note}` : ""}`;
+  });
+  return ` · ${parts.join(" | ")}`;
+}
 
 /**
  * The checklist as JobTread stores it: eight inspection items, then the five
- * cleanup items, ticked or not.
+ * cleanup items.
  *
- * The collapse from three answers to two states is deliberate and lossy:
- * a subtask is only `{ name, isComplete }`, so OK and N/A both tick and
- * ACTION does not. Nothing is lost overall — an ACTION is what created the
- * `REPORT:` punch task, which is where that finding actually lives.
+ * Ticked: OK, N/A, an ACTION the crew corrected on the spot (nothing is
+ * left to do), and anything JT already shows ticked (a reported item whose
+ * punch work has since closed — a replayed close must not untick it).
+ * A reported ACTION stays unticked until its punch task closes; that is
+ * what keeps the task's progress honest on the Gantt, and the finding's
+ * note rides on the entry's name either way.
  */
-export function checklistSubtasks(visit: VisitChecklists): Subtask[] {
-  const ticked = (answers: Record<string, string>, key: string): boolean =>
-    answers[key] === ANSWER.ok || answers[key] === ANSWER.na;
-  return [
-    ...INSPECTION_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.inspection, item.key) })),
-    ...CLEANUP_ITEMS.map((item) => ({ name: item.subtask, isComplete: ticked(visit.cleanup, item.key) })),
-  ];
+export function checklistSubtasks(visit: VisitChecklists, current: Subtask[] = []): Subtask[] {
+  const answered = { ...visit.cleanup, ...visit.inspection };
+  const findingsFor = (key: string) => (visit.findings ?? []).filter((f) => f.itemKey === key);
+  return CHECKLIST_ITEMS.map((item) => {
+    const findings = findingsFor(item.key);
+    const answer = answered[item.key];
+    const already = current.find((s) => s.name.startsWith(item.subtask))?.isComplete === true;
+    const ticked =
+      answer === ANSWER.ok ||
+      answer === ANSWER.na ||
+      (answer === ANSWER.action && findings.length > 0 && findings.every((f) => f.fixedOnSite)) ||
+      already;
+    return { name: `${item.subtask}${findingSuffix(findings)}`, isComplete: ticked };
+  });
 }
 
-/** What the visit adds to the task's description: who inspected, and the notes. */
+/** What the visit adds to the task's description: who inspected, the notes, the findings in full. */
 export function inspectionNote(visit: VisitChecklists, byName: string): string {
   const notes = visit.notes ?? {};
-  const lines = [`✔ Inspected by ${byName} — ${CHECKLIST_STAMP}`];
+  const lines = [`${INSPECTED_STAMP}${byName} — ${CHECKLIST_STAMP}`];
   if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
   if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
   if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
+  const findings = (visit.findings ?? []).filter((f) => checklistItemByKey(f.itemKey));
+  if (findings.length > 0) {
+    lines.push("Findings:");
+    for (const f of findings) {
+      const item = checklistItemByKey(f.itemKey)!;
+      const state = f.fixedOnSite ? "FIXED ON SITE" : "REPORT — punch item";
+      const photos = f.photos > 0 ? ` (${f.photos} photo${f.photos === 1 ? "" : "s"})` : "";
+      lines.push(`- ${item.subtask}: ${state}${photos}${f.note.trim() ? ` — ${f.note.trim()}` : ""}`);
+    }
+  }
   return lines.join("\n");
 }
 
 /**
  * Close the inspection: write the visit's checklist onto the job's scheduled
- * "Final inspection" task, put the notes in its description, and mark the
- * task done — in ONE write.
+ * "Final inspection" task, put the notes and findings in its description,
+ * and mark it done — in ONE write. (JT derives a checklist task's progress
+ * from its ticks, so `progress: 1` only lands when everything is ticked;
+ * the pipeline reads the description stamp instead — see isInspectionClosed.)
  *
  * `subtasks` REPLACES on update (same as dependsOnTasks), so the full list
  * goes every time, and the stamp is only appended when it isn't there yet —
@@ -609,10 +680,16 @@ export async function closeInspectionTask(
   visit: VisitChecklists,
   byName: string,
 ): Promise<void> {
-  const subtasks = checklistSubtasks(visit);
-  const res = await pave.query<{ task: { description: string | null } | null }>({
-    task: { $: { id: taskId }, description: {} },
+  const res = await pave.query<{
+    task: { description: string | null; subtasks: Array<{ name?: string | null; isComplete?: boolean | null }> | null } | null;
+  }>({
+    task: { $: { id: taskId }, description: {}, subtasks: { name: {}, isComplete: {} } },
   });
+  const current: Subtask[] = (res.task?.subtasks ?? []).map((st) => ({
+    name: st.name ?? "",
+    isComplete: st.isComplete === true,
+  }));
+  const subtasks = checklistSubtasks(visit, current);
   const note = inspectionNote(visit, byName);
   const existing = res.task?.description ?? "";
   const description = existing.includes(note) ? existing : existing ? `${existing}\n\n${note}` : note;
@@ -627,6 +704,38 @@ export async function closeInspectionTask(
       },
     },
   });
+}
+
+/**
+ * When a REPORT punch task closes, tick the checklist item it came from on
+ * the "Final inspection" task. The link is the "DB CheckOut item: 8" line
+ * the report was created with; the entry is matched by its item's base
+ * name, so the note on the entry's name is kept. Writes only on a change.
+ */
+export async function syncInspectionChecklist(
+  pave: PaveClient,
+  task: PipelineTask | undefined,
+  punchTasks: PunchTask[],
+): Promise<"updated" | "unchanged" | "none"> {
+  if (!task || task.subtasks.length === 0) return "none";
+  const doneCodes = new Set(
+    punchTasks
+      .filter((t) => t.progress >= 1)
+      .map((t) => ITEM_MARKER.exec(t.description ?? "")?.[1])
+      .filter((code): code is string => Boolean(code)),
+  );
+  if (doneCodes.size === 0) return "unchanged";
+  let changed = false;
+  const subtasks = task.subtasks.map((st) => {
+    if (st.isComplete) return st;
+    const item = CHECKLIST_ITEMS.find((i) => st.name.startsWith(i.subtask));
+    if (!item || !doneCodes.has(item.code)) return st;
+    changed = true;
+    return { ...st, isComplete: true };
+  });
+  if (!changed) return "unchanged";
+  await pave.query({ updateTask: { $: { id: task.id, ...TASK_WRITE_GUARDS, subtasks } } });
+  return "updated";
 }
 
 /**
@@ -663,7 +772,12 @@ export async function syncPunchListTask(
     return "updated";
   }
 
-  const desired: Subtask[] = punchTasks.map((t) => ({ name: t.name, isComplete: t.progress >= 1 }));
+  // The entry carries the report's note (the first line of the to-do's
+  // description), so the PM reads the finding without opening the to-do.
+  const desired: Subtask[] = punchTasks.map((t) => {
+    const note = oneLine((t.description ?? "").split("\n")[0] ?? "", 140);
+    return { name: note ? `${t.name} — ${note}` : t.name, isComplete: t.progress >= 1 };
+  });
   const allDone = desired.every((s) => s.isComplete);
   const same =
     task.subtasks.length === desired.length &&
@@ -753,6 +867,8 @@ export async function createReportTask(
   if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
   if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
   if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
+  const item = checklistItemByKey(report.itemKey);
+  if (item) lines.push(`Checklist: ${item.subtask}\nDB CheckOut item: ${item.code}`);
   if (marker) lines.push(marker);
   const res = await pave.query<{ createTask: { createdTask?: { id: string } } }>({
     createTask: {
@@ -809,6 +925,8 @@ export interface PhotoUpload {
   byName: string;
   /** The app's send reference; a re-send of a photo that already landed is skipped. */
   clientRef?: string;
+  /** Leads the file name instead of the bare label — "8. Attic… — REPORT". */
+  title?: string;
 }
 
 /**
@@ -858,7 +976,7 @@ export async function uploadPhoto(
       $: {
         targetId,
         targetType,
-        name: `${photo.label} ${stamp} — ${photo.byName}`,
+        name: `${photo.title ?? photo.label} ${stamp} — ${photo.byName}`,
         uploadRequestId: request.id,
         description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` · ${marker}` : ""}`,
       },
@@ -876,3 +994,11 @@ export async function setJobStatus(pave: PaveClient, jobId: string, status: stri
     },
   });
 }
+
+/** "8. Attic / interior spot check…" for a photo's file name, from the item it belongs to. */
+export function checklistItemTitle(itemKey: string | undefined): string | undefined {
+  const item = checklistItemByKey(itemKey);
+  return item ? oneLine(item.subtask, 60) : undefined;
+}
+
+export { checklistItemByCode };

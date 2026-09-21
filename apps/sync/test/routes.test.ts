@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseVisit } from "../src/routes";
-import { ANSWER, CLEANUP_ITEMS, INSPECTION_ITEMS } from "../../../packages/shared/src/jobtread";
+import { ANSWER, CLEANUP_ITEMS, INSPECTION_ITEMS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 test("parseVisit reads the app's close-inspection body: both checklists and the notes", () => {
   const visit = parseVisit({
@@ -15,6 +15,22 @@ test("parseVisit reads the app's close-inspection body: both checklists and the 
   assert.deepEqual(visit.inspection, { [INSPECTION_ITEMS[0].key]: ANSWER.ok });
   assert.deepEqual(visit.cleanup, { [CLEANUP_ITEMS[0].key]: ANSWER.action });
   assert.deepEqual(visit.notes, { inspection: "Clean pass", attic: "", cleanup: "Magnet run" });
+});
+
+test("parseVisit reads the findings and drops malformed ones", () => {
+  const visit = parseVisit({
+    answers: { inspection: {}, cleanup: {} },
+    findings: [
+      { itemKey: INSPECTION_ITEMS[7].key, fixedOnSite: true, location: "Attic", note: "Leak", photos: 2 },
+      { nope: true } as never,
+      { itemKey: CLEANUP_ITEMS[0].key } as never,
+    ],
+    problemsReported: 0,
+  });
+  assert.deepEqual(visit.findings, [
+    { itemKey: INSPECTION_ITEMS[7].key, fixedOnSite: true, location: "Attic", note: "Leak", photos: 2 },
+    { itemKey: CLEANUP_ITEMS[0].key, fixedOnSite: false, location: "", note: "", photos: 0 },
+  ]);
 });
 
 test("parseVisit still accepts the flat inspection map older app builds queued in their outbox", () => {
@@ -144,5 +160,44 @@ test("the retired checklist form endpoints answer 410", async () => {
     const call = fakeHttp("POST", path, {}, { answers: {} });
     await handle(call.req, call.res);
     assert.equal(call.out.status, 410);
+  }
+});
+
+test("a report photo is attached to its punch to-do and to the Final inspection task, named after the checklist line", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(
+    routerDeps((q) => {
+      if ("job" in q) {
+        const wantsPipeline = JSON.stringify(q).includes("subtasks");
+        return wantsPipeline
+          ? { job: { tasks: { nodes: [{ id: "fi", name: "Final inspection", progress: 0.9, taskType: { id: TASK_TYPES.inspection }, description: null, subtasks: [] }] } } }
+          : { job: { tasks: { nodes: [{ id: "t9" }] } } };
+      }
+      if ("task" in q) return { task: { files: { nodes: [] } } };
+      if ("createUploadRequest" in q) {
+        return { createUploadRequest: { createdUploadRequest: { id: "u1", url: "https://up.example", method: "PUT", headers: {} } } };
+      }
+      return { createFile: { createdFile: { id: `f${queries.filter((x) => "createFile" in x).length}` } } };
+    }, queries),
+  );
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
+  try {
+    const call = fakeHttp(
+      "POST",
+      "/jobs/job1/photos",
+      { "x-client-ref": "1758400000000-ab12cd.p0" },
+      { label: "REPORT", imageBase64: PIXEL, reportRef: "1758400000000-ab12cd", itemKey: INSPECTION_ITEMS[7].key, location: "Attic" },
+    );
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, 200);
+    const body = JSON.parse(call.out.body) as { fileId: string; inspectionFileId: string | null };
+    assert.ok(body.fileId && body.inspectionFileId, "two files: the to-do's and the inspection task's");
+    const created = queries.filter((q) => "createFile" in q).map((q) => (q["createFile"] as Record<string, unknown>)["$"] as Record<string, unknown>);
+    assert.deepEqual(created.map((c) => c["targetId"]), ["t9", "fi"]);
+    assert.match(String(created[0]["name"]), /^8\. Attic \/ interior spot check — leak-prone areas inspected — REPORT /);
+    assert.match(String(created[1]["description"]), /DB CheckOut ref: 1758400000000-ab12cd\.p0\.fi$/);
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });

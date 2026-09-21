@@ -118,10 +118,28 @@ export interface CloseInspectionRequest {
     cleanup?: string;
   };
   /**
+   * What the crew found on the checklist lines they marked ACTION, one per
+   * report that came from a line. Sent inline (without photos) because the
+   * REPORT tasks are their own sends and may land after this: the item's
+   * note goes into its checklist entry and the task description, and a
+   * fixed-on-site item is ticked.
+   */
+  findings?: ChecklistFinding[];
+  /**
    * Problems the crew recorded THIS visit that still need a return trip.
    * Carried here because the outbox can deliver the REPORT tasks after this.
    */
   problemsReported: number;
+}
+
+export interface ChecklistFinding {
+  itemKey: string;
+  fixedOnSite: boolean;
+  location: string;
+  /** The English note for the office. */
+  note: string;
+  /** How many photos the crew took for it (they arrive as their own sends). */
+  photos: number;
 }
 
 /**
@@ -131,6 +149,8 @@ export interface CloseInspectionRequest {
  * purely as documentation of the correction.
  */
 export interface ProblemReport {
+  /** The checklist item (INSPECTION_ITEMS / CLEANUP_ITEMS key) this came from, when it did. */
+  itemKey?: string;
   /** Short location, e.g. "Rear slope — pipe boot". */
   location: string;
   /** Clean English note for the office (voice pipeline output or typed). */
