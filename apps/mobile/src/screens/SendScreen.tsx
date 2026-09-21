@@ -4,7 +4,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { CLEANUP_CHECKLIST, INSPECTION_CHECKLIST } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { closeInspection, getJob, sendReport, uploadJobPhoto } from "../api";
+import {
+  closeInspection,
+  getJob,
+  newClientRef,
+  sendReport,
+  uploadJobPhoto,
+  uploadReportPhoto,
+  worstOutcome,
+  type SendOutcome,
+} from "../api";
 import { BigButton, Card } from "../components";
 import { useLang } from "../i18n";
 import { useVisit } from "../store";
@@ -15,7 +24,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "Send">;
 /** One line of the post-send receipt. */
 interface ReceiptItem {
   label: string;
-  outcome: "sent" | "queued";
+  outcome: SendOutcome;
 }
 
 export default function SendScreen({ navigation, route }: Props) {
@@ -48,19 +57,34 @@ export default function SendScreen({ navigation, route }: Props) {
       const items: ReceiptItem[] = [];
 
       if (state.visitPhotos.length > 0) {
-        const results = [];
-        for (const uri of state.visitPhotos) {
-          results.push(await uploadJobPhoto(jobId, "INSPECTION", uri, undefined, `Foto · Photo${suffix}`));
+        const results: SendOutcome[] = [];
+        for (const [i, uri] of state.visitPhotos.entries()) {
+          results.push(
+            await uploadJobPhoto(jobId, "INSPECTION", uri, undefined, `Foto ${i + 1}/${state.visitPhotos.length} · Photo${suffix}`),
+          );
         }
         items.push({
           label: `${state.visitPhotos.length} ${p({ es: "fotos", en: "photos" })}`,
-          outcome: results.every((r) => r === "sent") ? "sent" : "queued",
+          outcome: worstOutcome(results),
         });
       }
       for (const report of state.reports) {
+        // The report goes first under its own reference; each photo follows
+        // as its own send naming that reference, so a report with many
+        // photos never outgrows one request, and a photo that arrives before
+        // its report simply waits (the server answers 409 until it lands).
+        const ref = newClientRef();
+        const { photosBase64, photoBase64, ...rest } = report;
+        const photos = [...(photosBase64 ?? []), ...(photoBase64 ? [photoBase64] : [])];
+        const results: SendOutcome[] = [await sendReport(jobId, rest, `Problema · Problem: ${report.location}${suffix}`, ref)];
+        for (const [i, uri] of photos.entries()) {
+          results.push(
+            await uploadReportPhoto(jobId, uri, ref, `Foto ${i + 1}/${photos.length} · ${report.location}${suffix}`),
+          );
+        }
         items.push({
           label: `${p({ es: "Problema", en: "Problem" })}: ${report.location}`,
-          outcome: await sendReport(jobId, report, `Problema · Problem${suffix}`),
+          outcome: worstOutcome(results),
         });
       }
       // LAST, and only after the reports: both checklists and the notes land
@@ -96,37 +120,36 @@ export default function SendScreen({ navigation, route }: Props) {
   };
 
   if (receipt) {
-    const sent = receipt.every((i) => i.outcome === "sent");
+    const overall = worstOutcome(receipt.map((i) => i.outcome));
+    const mark = (o: SendOutcome) => (o === "sent" ? "✓" : o === "queued" ? "⏳" : "✗");
+    const tint = (o: SendOutcome) => (o === "sent" ? colors.greenDark : o === "queued" ? "#8A6100" : colors.red);
     return (
       <SafeAreaView style={styles.root} edges={["top"]}>
         <ScrollView contentContainerStyle={styles.resultWrap}>
-          <View style={[styles.heroBadge, sent ? null : styles.heroBadgeQueued]}>
-            <Text style={{ fontSize: 34, color: sent ? colors.greenDark : "#8A6100" }}>
-              {sent ? "✓" : "⏳"}
-            </Text>
+          <View style={[styles.heroBadge, overall === "sent" ? null : overall === "queued" ? styles.heroBadgeQueued : styles.heroBadgeFailed]}>
+            <Text style={{ fontSize: 34, color: tint(overall) }}>{mark(overall)}</Text>
           </View>
           <Text style={styles.heroTitle}>
-            {sent
+            {overall === "sent"
               ? p({ es: "Enviado a JobTread", en: "Sent to JobTread" })
-              : p({ es: "Guardado — aún no llega", en: "Saved — not delivered yet" })}
+              : overall === "queued"
+                ? p({ es: "Guardado — aún no llega", en: "Saved — not delivered yet" })
+                : p({ es: "Algo no se pudo enviar", en: "Something could not be sent" })}
           </Text>
 
           <Card style={styles.receipt}>
             {receipt.map((item, i) => (
               <View key={i} style={styles.receiptRow}>
-                <Text style={{ fontSize: 15 }}>{item.outcome === "sent" ? "✓" : "⏳"}</Text>
+                <Text style={{ fontSize: 15 }}>{mark(item.outcome)}</Text>
                 <Text style={styles.receiptLabel} numberOfLines={1}>
                   {item.label}
                 </Text>
-                <Text
-                  style={[
-                    styles.receiptState,
-                    { color: item.outcome === "sent" ? colors.greenDark : "#8A6100" },
-                  ]}
-                >
+                <Text style={[styles.receiptState, { color: tint(item.outcome) }]}>
                   {item.outcome === "sent"
                     ? p({ es: "enviado", en: "sent" })
-                    : p({ es: "se reintenta", en: "will retry" })}
+                    : item.outcome === "queued"
+                      ? p({ es: "se reintenta", en: "will retry" })
+                      : p({ es: "rechazado", en: "rejected" })}
                 </Text>
               </View>
             ))}
@@ -138,11 +161,11 @@ export default function SendScreen({ navigation, route }: Props) {
               en: "In JobTread: the checklist on the job's “Final inspection” task · problems under Tasks · photos under Files.",
             })}
           </Text>
-          {!sent ? (
+          {overall !== "sent" ? (
             <View style={{ alignSelf: "stretch" }}>
               <BigButton
                 bi={{ es: "Ver «Por enviar»", en: "View “Waiting to send”" }}
-                color={colors.blue}
+                color={overall === "failed" ? colors.red : colors.blue}
                 onPress={() => navigation.navigate("Outbox")}
               />
             </View>
@@ -271,6 +294,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   heroBadgeQueued: { backgroundColor: "#FBF0D9" },
+  heroBadgeFailed: { backgroundColor: "#FDECEA", borderColor: "#EFC7C2" },
   heroTitle: { fontSize: 24, fontWeight: "700", color: colors.ink },
   resultWrap: {
     flexGrow: 1,

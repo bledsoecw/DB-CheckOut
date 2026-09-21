@@ -7,6 +7,8 @@ import {
   closeInspectionTask,
   completeTask,
   createReportTask,
+  findFileByRef,
+  findTaskByRef,
   inspectionNote,
   listAssignedWorkByJob,
   listPipelineJobs,
@@ -681,4 +683,75 @@ test("listPunchTasks reads the real assignedMemberships shape", async () => {
   const membersArgs = ((tasksArgs["nodes"] as Record<string, unknown>)["assignedMemberships"] as Record<string, unknown>)["$"] as Record<string, unknown>;
   assert.equal((tasksArgs["$"] as Record<string, unknown>)["size"], 50);
   assert.equal(membersArgs["size"], 5);
+});
+
+// --------------------------------------------------------------------------
+// Re-sends: the client reference makes reports and photos land once
+// --------------------------------------------------------------------------
+
+test("createReportTask with a client reference writes the reference into the task and skips the lookup-less path", async () => {
+  const { client, queries } = fakePave((q) =>
+    "createTask" in q ? { createTask: { createdTask: { id: "t-new" } } } : { job: { tasks: { nodes: [] } } },
+  );
+  const id = await createReportTask(client, "job1", { location: "Rear slope", englishNote: "Boot cracked" }, "1758400000000-ab12cd");
+  assert.equal(id, "t-new");
+  assert.equal(queries.length, 2, "one lookup, one create");
+  const lookup = ((queries[0]["job"] as Record<string, unknown>)["tasks"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.deepEqual(lookup["where"], [["description"], "like", "%DB CheckOut ref: 1758400000000-ab12cd%"]);
+  const dollar = (queries[1]["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.match(String(dollar["description"]), /DB CheckOut ref: 1758400000000-ab12cd$/);
+});
+
+test("createReportTask returns the existing task when the reference already landed — no second REPORT", async () => {
+  const { client, queries } = fakePave(() => ({ job: { tasks: { nodes: [{ id: "t-existing" }] } } }));
+  const id = await createReportTask(client, "job1", { location: "Rear slope", englishNote: "Boot cracked" }, "1758400000000-ab12cd");
+  assert.equal(id, "t-existing");
+  assert.equal(queries.length, 1);
+  assert.ok(!("createTask" in queries[0]));
+});
+
+test("an unusable client reference is ignored rather than written into JobTread", async () => {
+  const { client, queries } = fakePave(() => ({ createTask: { createdTask: { id: "t" } } }));
+  await createReportTask(client, "job1", { location: "x", englishNote: "y" }, "not a ref; drop table");
+  assert.equal(queries.length, 1, "no lookup for a bad reference");
+  assert.ok(!String((queries[0]["createTask"] as Record<string, unknown>)["$"]).includes("ref"));
+  assert.equal(await findTaskByRef(client, "job1", "bad ref"), null);
+  assert.equal(await findFileByRef(client, "task", "t1", ""), null);
+});
+
+test("uploadPhoto with a client reference skips a photo that already landed and stamps a new one", async () => {
+  let files: Array<{ id: string }> = [{ id: "f-existing" }];
+  const fetchCalls: string[] = [];
+  const { client, queries } = fakePave((q) => {
+    if ("task" in q) return { task: { files: { nodes: files } } };
+    if ("createUploadRequest" in q) {
+      return { createUploadRequest: { createdUploadRequest: { id: "u1", url: "https://up", method: "PUT", headers: {} } } };
+    }
+    return { createFile: { createdFile: { id: "f-new" } } };
+  });
+  const fetchImpl = (async (url: string) => {
+    fetchCalls.push(url);
+    return { ok: true, status: 200 } as Response;
+  }) as unknown as typeof fetch;
+  const photo = { label: "REPORT" as const, data: Buffer.from("img"), contentType: "image/jpeg", taskId: "t1", byName: "Yahir", clientRef: "175-abc" };
+
+  assert.equal(await uploadPhoto(client, "job1", photo, fetchImpl), "f-existing");
+  assert.equal(fetchCalls.length, 0, "no bytes sent for a photo that is already there");
+  assert.equal(queries.length, 1);
+
+  files = [];
+  assert.equal(await uploadPhoto(client, "job1", photo, fetchImpl), "f-new");
+  assert.equal(fetchCalls.length, 1);
+  const created = (queries[queries.length - 1]["createFile"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(created["description"], "Uploaded from DB CheckOut by Yahir · DB CheckOut ref: 175-abc");
+  assert.equal(created["targetType"], "task");
+});
+
+test("completeTask does not write the done note twice on a re-send", async () => {
+  const already = "Work order\n\n✔ Done — two boots — Yahir Gonzalez";
+  const { client, queries } = fakePave((q) => ("task" in q ? { task: { description: already } } : {}));
+  await completeTask(client, "t1", "two boots — Yahir Gonzalez");
+  const dollar = (queries[1]["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(dollar["description"], already);
+  assert.equal(dollar["progress"], 1);
 });

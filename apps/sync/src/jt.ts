@@ -683,17 +683,69 @@ export async function syncPunchListTask(
 }
 
 /**
+ * The app stamps every send with a client reference (its outbox item id).
+ * A write that reached JobTread but whose answer never made it back to the
+ * phone is re-sent with the same reference, so the non-idempotent writes —
+ * a report task, a photo — look the reference up before creating anything.
+ */
+const CLIENT_REF = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** The reference exactly as it is written into JT, or null when unusable. */
+export function clientRefMarker(ref: string | undefined): string | null {
+  return ref && CLIENT_REF.test(ref) ? `DB CheckOut ref: ${ref}` : null;
+}
+
+/** The task on this job created for this client reference, if it already exists. */
+export async function findTaskByRef(pave: PaveClient, jobId: string, ref: string): Promise<string | null> {
+  const marker = clientRefMarker(ref);
+  if (!marker) return null;
+  const res = await pave.query<{ job: { tasks: { nodes: Array<{ id: string }> } } | null }>({
+    job: {
+      $: { id: jobId },
+      tasks: { $: { size: 5, where: [["description"], "like", `%${marker}%`] }, nodes: { id: {} } },
+    },
+  });
+  return res.job?.tasks.nodes[0]?.id ?? null;
+}
+
+/** The file on this task/job uploaded for this client reference, if it already exists. */
+export async function findFileByRef(
+  pave: PaveClient,
+  targetType: "task" | "job",
+  targetId: string,
+  ref: string,
+): Promise<string | null> {
+  const marker = clientRefMarker(ref);
+  if (!marker) return null;
+  const res = await pave.query<Record<string, { files: { nodes: Array<{ id: string }> } } | null>>({
+    [targetType]: {
+      $: { id: targetId },
+      files: { $: { size: 5, where: [["description"], "like", `%${marker}%`] }, nodes: { id: {} } },
+    },
+  });
+  return res[targetType]?.files.nodes[0]?.id ?? null;
+}
+
+/**
  * A crew problem report becomes a to-do task of type Punch List.
  * - Default: UNASSIGNED, for the Service Manager / PM to turn into a work
  *   order on the Production board.
  * - fixedOnSite: created already complete (progress 1) — the crew corrected
  *   it during the visit; the task is the documentation of that correction.
+ * - clientRef: a re-send of a report that already landed returns the
+ *   existing task instead of a second one (see clientRefMarker).
  */
 export async function createReportTask(
   pave: PaveClient,
   jobId: string,
   report: ProblemReport,
+  clientRef?: string,
 ): Promise<string> {
+  const marker = clientRefMarker(clientRef);
+  if (marker && clientRef) {
+    const existing = await findTaskByRef(pave, jobId, clientRef);
+    if (existing) return existing;
+  }
   const fixed = report.fixedOnSite === true;
   const lines = [report.englishNote];
   if (fixed) lines.push("✔ Corrected on site during the visit.");
@@ -701,6 +753,7 @@ export async function createReportTask(
   if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
   if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
   if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
+  if (marker) lines.push(marker);
   const res = await pave.query<{ createTask: { createdTask?: { id: string } } }>({
     createTask: {
       $: {
@@ -735,7 +788,9 @@ export async function completeTask(pave: PaveClient, taskId: string, note?: stri
     task: { $: { id: taskId }, description: {} },
   });
   const done = `✔ Done — ${trimmed}`;
-  const description = res.task?.description ? `${res.task.description}\n\n${done}` : done;
+  const existing = res.task?.description ?? "";
+  // A re-sent completion must not write "Done" twice.
+  const description = existing.includes(done) ? existing : existing ? `${existing}\n\n${done}` : done;
   await pave.query({
     updateTask: {
       $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) },
@@ -752,6 +807,8 @@ export interface PhotoUpload {
   taskId?: string;
   /** Signed-in crew member, stamped into the file name and description. */
   byName: string;
+  /** The app's send reference; a re-send of a photo that already landed is skipped. */
+  clientRef?: string;
 }
 
 /**
@@ -764,6 +821,13 @@ export async function uploadPhoto(
   photo: PhotoUpload,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
+  const targetType = photo.taskId ? "task" : "job";
+  const targetId = photo.taskId ?? jobId;
+  const marker = clientRefMarker(photo.clientRef);
+  if (marker && photo.clientRef) {
+    const existing = await findFileByRef(pave, targetType, targetId, photo.clientRef);
+    if (existing) return existing;
+  }
   const up = await pave.query<{
     createUploadRequest: {
       createdUploadRequest?: {
@@ -792,11 +856,11 @@ export async function uploadPhoto(
   const res = await pave.query<{ createFile: { createdFile?: { id: string } } }>({
     createFile: {
       $: {
-        targetId: photo.taskId ?? jobId,
-        targetType: photo.taskId ? "task" : "job",
+        targetId,
+        targetType,
         name: `${photo.label} ${stamp} — ${photo.byName}`,
         uploadRequestId: request.id,
-        description: `Uploaded from DB CheckOut by ${photo.byName}`,
+        description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` · ${marker}` : ""}`,
       },
       createdFile: { id: {} },
     },

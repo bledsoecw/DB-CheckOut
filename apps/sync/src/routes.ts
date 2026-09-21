@@ -20,10 +20,12 @@ import { PaveError, type PaveClient } from "./pave";
 import { PIPELINE_TASKS, STATUS } from "../../../packages/shared/src/jobtread";
 import type { CloseInspectionRequest, ProblemReport } from "../../../packages/shared/src/types";
 import {
+  clientRefMarker,
   closeInspectionTask,
   completeTask,
   createReportTask,
   findPipelineTask,
+  findTaskByRef,
   getJob,
   listAssignedWorkByJob,
   listPipelineJobs,
@@ -53,6 +55,16 @@ function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
   return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
+
+/**
+ * The app's reference for this send (its outbox item id), so a re-send of
+ * a write that already landed is recognised rather than repeated.
+ */
+function clientRef(req: IncomingMessage): string | undefined {
+  const header = req.headers["x-client-ref"];
+  const value = Array.isArray(header) ? header[0] : header;
+  return value && clientRefMarker(value) ? value : undefined;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -335,17 +347,17 @@ export function createHandler(deps: RouterDeps) {
           if (!report.location || !report.englishNote) {
             return json(res, 400, { error: "location and englishNote are required" });
           }
-          const id = await createReportTask(deps.pave, jobId, {
-            ...report,
-            reportedBy: session.name,
-          });
-          // The report must never be lost to a photo hiccup — best-effort.
+          const ref = clientRef(req);
+          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref);
+          // Photos inlined with the report (older app builds' outboxes; the
+          // app now sends them one per request with `reportRef`). The report
+          // must never be lost to a photo hiccup — best-effort.
           const sources = [
             ...(Array.isArray(report.photosBase64) ? report.photosBase64 : []),
             report.photoBase64,
           ];
           let photosUploaded = 0;
-          for (const source of sources) {
+          for (const [i, source] of sources.entries()) {
             const photo = decodePhoto(source);
             if (!photo) continue;
             try {
@@ -354,6 +366,7 @@ export function createHandler(deps: RouterDeps) {
                 ...photo,
                 taskId: id || undefined,
                 byName: session.name,
+                clientRef: ref ? `${ref}.p${i}` : undefined,
               });
               photosUploaded += 1;
             } catch {
@@ -367,19 +380,31 @@ export function createHandler(deps: RouterDeps) {
           const body = (await readBody(req)) as {
             label?: unknown;
             taskId?: unknown;
+            /** The client reference of the report this photo belongs to. */
+            reportRef?: unknown;
             imageBase64?: unknown;
           };
           const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
           if (!PHOTO_LABELS.has(label)) {
-            return json(res, 400, { error: "label must be BEFORE, AFTER or REPORT" });
+            return json(res, 400, { error: "label must be BEFORE, AFTER, REPORT or INSPECTION" });
           }
           const photo = decodePhoto(body.imageBase64);
           if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });
+          let taskId = typeof body.taskId === "string" && body.taskId ? body.taskId : undefined;
+          if (!taskId && typeof body.reportRef === "string" && clientRefMarker(body.reportRef)) {
+            // The photo belongs to a report the app sent as its own item. The
+            // outbox delivers in order but keeps going past a failure, so the
+            // report can still be on its way: 409 keeps this photo pending
+            // (the app never gives up on a 409) instead of failing it.
+            taskId = (await findTaskByRef(deps.pave, jobId, body.reportRef)) ?? undefined;
+            if (!taskId) return json(res, 409, { error: "The report this photo belongs to has not reached JobTread yet" });
+          }
           const upload: PhotoUpload = {
             label: label as PhotoUpload["label"],
             ...photo,
-            taskId: typeof body.taskId === "string" && body.taskId ? body.taskId : undefined,
+            taskId,
             byName: session.name,
+            clientRef: clientRef(req),
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
           return json(res, 200, { fileId });

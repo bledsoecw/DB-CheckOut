@@ -100,7 +100,12 @@ npx expo export --platform web    # static build (dist/) for Vercel
 With no server reachable it runs in demo mode on sample data; served
 from the same Vercel project as the sync server it uses same-origin
 requests and Google sign-in for the real queue. All writes go through
-a persistent offline outbox — nothing is lost in a dead spot.
+a persistent offline outbox — nothing is lost in a dead spot. Every send
+carries a client reference the server uses to recognise a re-send (a
+report or photo that landed but whose answer never came back is not
+created twice); a rejection the server would repeat is kept as
+"rechazado" with the reason instead of retried forever, and the crew
+can discard it from the outbox screen.
 
 Not built yet (M2): voice capture + ES/EN→English transcription
 (`apps/sync/src/voice.ts` holds the interface), photo upload to JT

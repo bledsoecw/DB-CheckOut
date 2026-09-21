@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { QueueJob } from "@shared/types";
 import { STATUS } from "@shared/jobtread";
 import type { RootStackParamList } from "../../App";
-import { getQueue, outboxCount, subscribeOutbox } from "../api";
+import { getQueue, outboxCount, outboxFailedCount, subscribeOutbox } from "../api";
 import { useAuth } from "../auth";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
@@ -123,11 +123,22 @@ export default function QueueScreen({ navigation }: Props) {
       </View>
 
       {queued > 0 ? (
-        <Pressable style={styles.offline} onPress={() => navigation.navigate("Outbox")}>
+        <Pressable
+          style={[styles.offline, outboxFailedCount() > 0 ? styles.offlineFailed : null]}
+          onPress={() => navigation.navigate("Outbox")}
+        >
           <Text style={styles.offlineTitle}>
-            {queued} {p({ es: "por enviar — toca para ver", en: "waiting to send — tap to view" })}
+            {queued} {p({ es: "por enviar", en: "waiting to send" })}
+            {outboxFailedCount() > 0
+              ? ` · ${outboxFailedCount()} ${p({ es: "rechazados", en: "rejected" })}`
+              : ""}{" "}
+            — {p({ es: "toca para ver", en: "tap to view" })}
           </Text>
-          <Text style={styles.offlineDetail}>{t("offlineDetail")}</Text>
+          <Text style={styles.offlineDetail}>
+            {outboxFailedCount() > 0
+              ? p({ es: "Algo no se pudo enviar — revísalo", en: "Something could not be sent — check it" })
+              : t("offlineDetail")}
+          </Text>
         </Pressable>
       ) : null}
       {offline ? (
@@ -332,6 +343,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
   },
+  offlineFailed: { backgroundColor: "#FDECEA", borderColor: "#EFC7C2" },
   offlineTitle: { fontSize: 13.5, fontWeight: "700", color: colors.amberInk },
   offlineDetail: { fontSize: 11.5, color: "#8A6A2B" },
   noSignal: {

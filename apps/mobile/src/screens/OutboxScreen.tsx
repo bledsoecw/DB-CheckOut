@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../App";
-import { discardOutboxItem, flushOutbox, outboxItems, subscribeOutbox } from "../api";
+import { discardOutboxItem, flushOutbox, outboxItems, subscribeOutbox, type OutboxItem } from "../api";
 import { BigButton, Card, LangPill } from "../components";
 import { useLang } from "../i18n";
 import { colors } from "../theme";
@@ -12,17 +12,29 @@ type Props = NativeStackScreenProps<RootStackParamList, "Outbox">;
 
 /**
  * Everything saved on this phone that has not reached JobTread yet.
- * Pending items retry automatically when signal returns; failed items
- * show the server's reason and can be discarded.
+ * Pending items retry by themselves when signal returns; rejected items
+ * show the server's reason and are never retried. Either can be discarded —
+ * a pending one only after a second tap, because discarding is the one
+ * thing here that loses work.
  */
 export default function OutboxScreen({ navigation }: Props) {
   const { p } = useLang();
   const [, bump] = useState(0);
   const [sending, setSending] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => subscribeOutbox(() => bump((n) => n + 1)), []);
+  useEffect(
+    () => () => {
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    },
+    [],
+  );
 
   const items = outboxItems();
+  const failed = items.filter((item) => item.status === "failed").length;
+  const pending = items.length - failed;
 
   const sendNow = async () => {
     setSending(true);
@@ -31,6 +43,30 @@ export default function OutboxScreen({ navigation }: Props) {
     } finally {
       setSending(false);
     }
+  };
+
+  const discard = (item: OutboxItem) => {
+    if (item.status === "failed" || confirming === item.id) {
+      discardOutboxItem(item.id);
+      setConfirming(null);
+      return;
+    }
+    setConfirming(item.id);
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    confirmTimer.current = setTimeout(() => setConfirming(null), 4000);
+  };
+
+  const meta = (item: OutboxItem): string => {
+    const when = new Date(item.queuedAt).toLocaleString();
+    const tries =
+      item.attempts > 1
+        ? ` · ${item.attempts} ${p({ es: "intentos", en: "attempts" })}`
+        : "";
+    if (item.status === "failed") {
+      return `${when} · ${p({ es: "rechazado — no se reintenta", en: "rejected — will not retry" })}${tries}`;
+    }
+    if (item.error) return `${when} · ${p({ es: "se reintentará", en: "will retry" })}${tries}`;
+    return `${when} · ${p({ es: "esperando señal", en: "waiting for signal" })}${tries}`;
   };
 
   return (
@@ -42,7 +78,11 @@ export default function OutboxScreen({ navigation }: Props) {
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{p({ es: "Por enviar", en: "Waiting to send" })}</Text>
           <Text style={styles.subtitle}>
-            {p({ es: "Guardado en este teléfono", en: "Saved on this phone" })}
+            {items.length === 0
+              ? p({ es: "Guardado en este teléfono", en: "Saved on this phone" })
+              : `${pending} ${p({ es: "pendientes", en: "pending" })}${
+                  failed > 0 ? ` · ${failed} ${p({ es: "rechazados", en: "rejected" })}` : ""
+                }`}
           </Text>
         </View>
         <LangPill />
@@ -57,42 +97,51 @@ export default function OutboxScreen({ navigation }: Props) {
           </Card>
         ) : (
           <>
+            {failed > 0 ? (
+              <Text style={styles.failedHint}>
+                {p({
+                  es: "Lo rechazado no va a llegar aunque se reintente. Revisa el motivo y descártalo; si hace falta, vuelve a hacerlo en el trabajo.",
+                  en: "Rejected items will not go through on retry. Read the reason and discard them; redo them on the job if needed.",
+                })}
+              </Text>
+            ) : null}
             {items.map((item) => (
               <Card key={item.id} style={item.status === "failed" ? styles.failedCard : undefined}>
                 <View style={styles.itemRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.itemLabel}>{item.label}</Text>
-                    <Text style={styles.itemMeta}>
-                      {new Date(item.queuedAt).toLocaleString()}
-                      {item.status === "failed"
-                        ? ` · ${p({ es: "falló", en: "failed" })}`
-                        : item.error
-                          ? ` · ${p({ es: "se reintentará", en: "will retry" })}`
-                          : ` · ${p({ es: "esperando señal", en: "waiting for signal" })}`}
-                    </Text>
+                    <Text style={styles.itemMeta}>{meta(item)}</Text>
                     {item.error ? <Text style={styles.itemError}>{item.error}</Text> : null}
                   </View>
-                  {item.status === "failed" ? (
-                    <Pressable onPress={() => discardOutboxItem(item.id)} hitSlop={8} style={styles.discard}>
-                      <Text style={styles.discardText}>{p({ es: "Descartar", en: "Discard" })}</Text>
-                    </Pressable>
-                  ) : null}
+                  <Pressable
+                    onPress={() => discard(item)}
+                    hitSlop={8}
+                    style={[styles.discard, confirming === item.id ? styles.discardConfirm : null]}
+                  >
+                    <Text style={styles.discardText}>
+                      {confirming === item.id
+                        ? p({ es: "¿Seguro? Toca otra vez", en: "Sure? Tap again" })
+                        : p({ es: "Descartar", en: "Discard" })}
+                    </Text>
+                  </Pressable>
                 </View>
               </Card>
             ))}
-            <BigButton
-              bi={
-                sending
-                  ? { es: "Enviando…", en: "Sending…" }
-                  : { es: "Enviar ahora", en: "Send now" }
-              }
-              disabled={sending}
-              onPress={sendNow}
-            />
+            {pending > 0 ? (
+              <BigButton
+                bi={
+                  sending
+                    ? { es: "Enviando…", en: "Sending…" }
+                    : { es: "Enviar ahora", en: "Send now" }
+                }
+                disabled={sending}
+                onPress={sendNow}
+              />
+            ) : null}
             <Text style={styles.footnote}>
               {p({
-                es: "También se envía solo cuando el teléfono recupera señal.",
-                en: "Also sends automatically when the phone gets signal back.",
+                es: "Lo pendiente también se envía solo cuando el teléfono recupera señal.",
+                en: "Pending items also send by themselves when the phone gets signal back.",
               })}
             </Text>
           </>
@@ -119,6 +168,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 21, fontWeight: "700", color: colors.ink },
   subtitle: { fontSize: 12, color: colors.muted },
   emptyTitle: { fontSize: 15, fontWeight: "700", color: colors.greenDark, textAlign: "center" },
+  failedHint: { fontSize: 12.5, color: colors.red, fontWeight: "600", textAlign: "center" },
   failedCard: { borderColor: "#EFC7C2", backgroundColor: "#FDF4F3" },
   itemRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   itemLabel: { fontSize: 14.5, fontWeight: "700", color: colors.ink },
@@ -129,7 +179,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 9,
+    maxWidth: 130,
   },
-  discardText: { fontSize: 12.5, fontWeight: "700", color: colors.red },
+  discardConfirm: { backgroundColor: colors.red },
+  discardText: { fontSize: 12.5, fontWeight: "700", color: colors.red, textAlign: "center" },
   footnote: { textAlign: "center", fontSize: 11.5, color: "#66788C" },
 });

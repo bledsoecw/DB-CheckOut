@@ -60,6 +60,8 @@ export async function loadAuth(): Promise<AuthMode> {
           queuedAt: item.queuedAt ?? new Date().toISOString(),
           status: item.status === "failed" ? "failed" : "pending",
           error: item.error,
+          attempts: typeof item.attempts === "number" ? item.attempts : 0,
+          lastTriedAt: item.lastTriedAt,
         }));
     } catch {
       outbox = [];
@@ -124,6 +126,7 @@ export async function clearAuth(): Promise<void> {
 const connected = () => session != null;
 
 export interface OutboxItem {
+  /** Also the send's client reference: the server uses it to recognise a re-send. */
   id: string;
   path: string;
   body: unknown;
@@ -131,9 +134,44 @@ export interface OutboxItem {
   label: string;
   queuedAt: string;
   status: "pending" | "failed";
-  /** Server-reported reason when a send failed for good. */
+  /** What the server said last time; failed items keep the reason for good. */
   error?: string;
+  attempts: number;
+  lastTriedAt?: string;
 }
+
+export type SendOutcome = "sent" | "queued" | "failed";
+
+/** The worst of several outcomes — what one receipt line says about a report and its photos. */
+export function worstOutcome(outcomes: SendOutcome[]): SendOutcome {
+  if (outcomes.includes("failed")) return "failed";
+  if (outcomes.includes("queued")) return "queued";
+  return "sent";
+}
+
+/** A fresh send reference (outbox item id). Safe for the server's x-client-ref check. */
+export function newClientRef(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** The server answered with an error; `status` is the HTTP status it used. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
+ * A 4xx the server will answer the same way tomorrow — nothing to retry.
+ * Not 401 (sign in again and it goes), 408/425/429 (later), or 409 (what
+ * this depends on — a report's task for its photo — is not there yet).
+ */
+const RETRYABLE_4XX = new Set([401, 408, 409, 425, 429]);
+const isPermanent = (err: unknown): err is ApiError =>
+  err instanceof ApiError && err.status >= 400 && err.status < 500 && !RETRYABLE_4XX.has(err.status);
 
 /**
  * The outbox lives in memory (authoritative) and mirrors to storage
@@ -171,12 +209,13 @@ export function initAutoFlush(): void {
   });
 }
 
-async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+async function request<T>(method: "GET" | "POST", path: string, body?: unknown, ref?: string): Promise<T> {
   const res = await fetch(`${SERVER_URL}${path}`, {
     method,
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${session?.token ?? ""}`,
+      ...(ref ? { "x-client-ref": ref } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -190,9 +229,9 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown):
     try {
       reason = String(((await res.json()) as { error?: string }).error ?? "");
     } catch {
-      // non-JSON error body
+      // non-JSON error body (Vercel's own 413, a proxy page)
     }
-    throw new Error(reason || `${method} ${path} -> ${res.status}`);
+    throw new ApiError(res.status, reason || `${method} ${path} -> ${res.status}`);
   }
   if (method === "GET" && path === "/queue") lastFreshQueueAt = Date.now();
   return (await res.json()) as T;
@@ -272,74 +311,127 @@ export async function getJob(jobId: string): Promise<JobDetail> {
   return cached(`job.${jobId}`, () => request<JobDetail>("GET", `/jobs/${jobId}`), mockJobDetail(jobId));
 }
 
-/** Queue a write; try to deliver now, keep it (visibly) if the network says no. */
-export async function post(path: string, body: unknown, label = "Pendiente"): Promise<"sent" | "queued"> {
+/**
+ * Send a write now if there is signal, otherwise keep it (visibly) in the
+ * outbox. A rejection the server will repeat (a 4xx) is kept as failed
+ * straight away, with the reason, rather than retried forever. `ref` is the
+ * send's client reference: pass one when other sends refer to this one (a
+ * report's photos name their report), otherwise a fresh one is made.
+ */
+export async function post(path: string, body: unknown, label = "Pendiente", ref?: string): Promise<SendOutcome> {
   if (demoMode) return "sent";
-  let reason: string | undefined;
-  if (connected()) {
-    try {
-      await request("POST", path, body);
-      void flushOutbox();
-      return "sent";
-    } catch (err) {
-      // Kept on the item so the outbox can say WHY it hasn't gone — a
-      // server rejection is a very different story from a dead spot.
-      reason = err instanceof TypeError ? undefined : err instanceof Error ? err.message : String(err);
-    }
-  }
-  outbox.push({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  const item: OutboxItem = {
+    id: ref ?? newClientRef(),
     path,
     body,
     label,
     queuedAt: new Date().toISOString(),
     status: "pending",
-    ...(reason ? { error: reason } : {}),
-  });
+    attempts: 0,
+  };
+  if (connected()) {
+    try {
+      await request("POST", path, body, item.id);
+      void flushOutbox();
+      return "sent";
+    } catch (err) {
+      noteAttempt(item, err);
+    }
+  }
+  outbox.push(item);
   notifyOutbox();
-  return "queued";
+  return item.status === "failed" ? "failed" : "queued";
 }
 
 export function outboxCount(): number {
   return outbox.length;
 }
 
-/** A 4xx (other than auth/rate-limit) will never succeed on retry. */
-const PERMANENT = (status: number) => status >= 400 && status < 500 && ![401, 408, 425, 429].includes(status);
+export function outboxFailedCount(): number {
+  return outbox.filter((item) => item.status === "failed").length;
+}
 
-export async function flushOutbox(): Promise<number> {
+/** Records one attempt's result on the item; true when the item is done (sent or failed for good). */
+function noteAttempt(item: OutboxItem, err: unknown): void {
+  item.attempts += 1;
+  item.lastTriedAt = new Date().toISOString();
+  if (isPermanent(err)) {
+    item.status = "failed";
+    item.error = err.message;
+  } else if (!(err instanceof TypeError)) {
+    // Still retryable (5xx, 409, a timeout) — keep what the server said.
+    // A dead spot (TypeError) says nothing worth showing over the last reason.
+    item.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
+/**
+ * One flush at a time. Every trigger — a screen load, signal returning,
+ * the app resurfacing, a send succeeding — used to start its own pass over
+ * the same items, and two passes in flight posted the same item twice
+ * before the first removed it. Now a trigger during a flush just asks for
+ * one more pass when this one ends.
+ */
+let flushing: Promise<number> | null = null;
+let flushAgain = false;
+
+export function flushOutbox(): Promise<number> {
+  if (flushing) {
+    flushAgain = true;
+    return flushing;
+  }
+  flushing = flushUntilQuiet().finally(() => {
+    flushing = null;
+    if (flushAgain) void flushOutbox();
+  });
+  return flushing;
+}
+
+async function flushUntilQuiet(): Promise<number> {
+  let sent = 0;
+  do {
+    flushAgain = false;
+    sent += await flushOnce();
+  } while (flushAgain);
+  return sent;
+}
+
+async function flushOnce(): Promise<number> {
   if (!connected() || outbox.length === 0) return 0;
   let sent = 0;
   let changed = false;
   for (const item of [...outbox]) {
     if (item.status === "failed") continue;
+    // The session died mid-flush (401): the rest waits for the next sign-in.
+    if (!connected()) break;
+    // Discarded from the outbox screen while an earlier item was sending.
+    if (!outbox.includes(item)) continue;
+    changed = true;
     try {
-      await request("POST", item.path, item.body);
+      await request("POST", item.path, item.body, item.id);
       outbox = outbox.filter((o) => o.id !== item.id);
       sent += 1;
-      changed = true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const status = Number(/-> (\d{3})$/.exec(message)?.[1] ?? 0);
-      if (status && PERMANENT(status)) {
-        item.status = "failed";
-        item.error = message;
-        changed = true;
-      } else if (!(err instanceof TypeError) && item.error !== message) {
-        // Still retryable, but record what the server said this attempt.
-        item.error = message;
-        changed = true;
-      }
-      // network errors / 5xx stay pending for the next flush
+      noteAttempt(item, err);
     }
   }
+  // One storage write per pass, not one per item — the outbox carries photos.
   if (changed) notifyOutbox();
   return sent;
 }
 
 // Typed helpers used by screens. `label` names the item in the outbox.
-export const sendReport = (jobId: string, report: ProblemReport, label?: string) =>
-  post(`/jobs/${jobId}/reports`, report, label ?? "Reporte · Report");
+export const sendReport = (jobId: string, report: ProblemReport, label?: string, ref?: string) =>
+  post(`/jobs/${jobId}/reports`, report, label ?? "Reporte · Report", ref);
+/**
+ * One report photo, its own send: a report with many photos in one request
+ * ran into the function's body limit and failed for good. `reportRef` is
+ * the report's send reference — the server attaches the photo to that
+ * report's task, and answers 409 (kept, retried) while the report itself
+ * is still on its way.
+ */
+export const uploadReportPhoto = (jobId: string, imageBase64: string, reportRef: string, outboxLabel?: string) =>
+  post(`/jobs/${jobId}/photos`, { label: "REPORT", imageBase64, reportRef }, outboxLabel ?? "Foto · Photo");
 /**
  * Ends the visit: both checklists and the notes go onto the job's scheduled
  * "Final inspection" task in JobTread (its checklist and its description),

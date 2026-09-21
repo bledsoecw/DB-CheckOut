@@ -596,7 +596,38 @@ ${note}` : note;
   });
   return "updated";
 }
-async function createReportTask(pave, jobId, report) {
+var CLIENT_REF = /^[A-Za-z0-9._-]{1,64}$/;
+function clientRefMarker(ref) {
+  return ref && CLIENT_REF.test(ref) ? `DB CheckOut ref: ${ref}` : null;
+}
+async function findTaskByRef(pave, jobId, ref) {
+  const marker = clientRefMarker(ref);
+  if (!marker) return null;
+  const res = await pave.query({
+    job: {
+      $: { id: jobId },
+      tasks: { $: { size: 5, where: [["description"], "like", `%${marker}%`] }, nodes: { id: {} } }
+    }
+  });
+  return res.job?.tasks.nodes[0]?.id ?? null;
+}
+async function findFileByRef(pave, targetType, targetId, ref) {
+  const marker = clientRefMarker(ref);
+  if (!marker) return null;
+  const res = await pave.query({
+    [targetType]: {
+      $: { id: targetId },
+      files: { $: { size: 5, where: [["description"], "like", `%${marker}%`] }, nodes: { id: {} } }
+    }
+  });
+  return res[targetType]?.files.nodes[0]?.id ?? null;
+}
+async function createReportTask(pave, jobId, report, clientRef2) {
+  const marker = clientRefMarker(clientRef2);
+  if (marker && clientRef2) {
+    const existing = await findTaskByRef(pave, jobId, clientRef2);
+    if (existing) return existing;
+  }
   const fixed = report.fixedOnSite === true;
   const lines = [report.englishNote];
   if (fixed) lines.push("\u2714 Corrected on site during the visit.");
@@ -604,6 +635,7 @@ async function createReportTask(pave, jobId, report) {
   if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
   if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
   if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
+  if (marker) lines.push(marker);
   const res = await pave.query({
     createTask: {
       $: {
@@ -632,7 +664,8 @@ async function completeTask(pave, taskId, note) {
     task: { $: { id: taskId }, description: {} }
   });
   const done = `\u2714 Done \u2014 ${trimmed}`;
-  const description = res.task?.description ? `${res.task.description}
+  const existing = res.task?.description ?? "";
+  const description = existing.includes(done) ? existing : existing ? `${existing}
 
 ${done}` : done;
   await pave.query({
@@ -642,6 +675,13 @@ ${done}` : done;
   });
 }
 async function uploadPhoto(pave, jobId, photo, fetchImpl = fetch) {
+  const targetType = photo.taskId ? "task" : "job";
+  const targetId = photo.taskId ?? jobId;
+  const marker = clientRefMarker(photo.clientRef);
+  if (marker && photo.clientRef) {
+    const existing = await findFileByRef(pave, targetType, targetId, photo.clientRef);
+    if (existing) return existing;
+  }
   const up = await pave.query({
     createUploadRequest: {
       $: { organizationId: ORGANIZATION_ID, size: photo.data.length, type: photo.contentType },
@@ -660,11 +700,11 @@ async function uploadPhoto(pave, jobId, photo, fetchImpl = fetch) {
   const res = await pave.query({
     createFile: {
       $: {
-        targetId: photo.taskId ?? jobId,
-        targetType: photo.taskId ? "task" : "job",
+        targetId,
+        targetType,
         name: `${photo.label} ${stamp} \u2014 ${photo.byName}`,
         uploadRequestId: request.id,
-        description: `Uploaded from DB CheckOut by ${photo.byName}`
+        description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` \xB7 ${marker}` : ""}`
       },
       createdFile: { id: {} }
     }
@@ -872,6 +912,11 @@ function bearerToken(req) {
   if (typeof header !== "string") return "";
   return header.startsWith("Bearer ") ? header.slice(7) : "";
 }
+function clientRef(req) {
+  const header = req.headers["x-client-ref"];
+  const value = Array.isArray(header) ? header[0] : header;
+  return value && clientRefMarker(value) ? value : void 0;
+}
 function json(res, status, body) {
   const text = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json" });
@@ -1068,16 +1113,14 @@ function createHandler(deps) {
           if (!report.location || !report.englishNote) {
             return json(res, 400, { error: "location and englishNote are required" });
           }
-          const id = await createReportTask(deps.pave, jobId, {
-            ...report,
-            reportedBy: session.name
-          });
+          const ref = clientRef(req);
+          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref);
           const sources = [
             ...Array.isArray(report.photosBase64) ? report.photosBase64 : [],
             report.photoBase64
           ];
           let photosUploaded = 0;
-          for (const source of sources) {
+          for (const [i, source] of sources.entries()) {
             const photo = decodePhoto(source);
             if (!photo) continue;
             try {
@@ -1085,7 +1128,8 @@ function createHandler(deps) {
                 label: "REPORT",
                 ...photo,
                 taskId: id || void 0,
-                byName: session.name
+                byName: session.name,
+                clientRef: ref ? `${ref}.p${i}` : void 0
               });
               photosUploaded += 1;
             } catch {
@@ -1097,15 +1141,21 @@ function createHandler(deps) {
           const body = await readBody(req);
           const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
           if (!PHOTO_LABELS.has(label)) {
-            return json(res, 400, { error: "label must be BEFORE, AFTER or REPORT" });
+            return json(res, 400, { error: "label must be BEFORE, AFTER, REPORT or INSPECTION" });
           }
           const photo = decodePhoto(body.imageBase64);
           if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });
+          let taskId = typeof body.taskId === "string" && body.taskId ? body.taskId : void 0;
+          if (!taskId && typeof body.reportRef === "string" && clientRefMarker(body.reportRef)) {
+            taskId = await findTaskByRef(deps.pave, jobId, body.reportRef) ?? void 0;
+            if (!taskId) return json(res, 409, { error: "The report this photo belongs to has not reached JobTread yet" });
+          }
           const upload = {
             label,
             ...photo,
-            taskId: typeof body.taskId === "string" && body.taskId ? body.taskId : void 0,
-            byName: session.name
+            taskId,
+            byName: session.name,
+            clientRef: clientRef(req)
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
           return json(res, 200, { fileId });
