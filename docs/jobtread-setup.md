@@ -99,19 +99,93 @@ project manager — with coordination from the Roofing PM. The board
 surfaces we label "PM" serve both roles; on service jobs the job's PM
 field is normally Dave.
 
+## The pipeline task template — `22PeHi4zyTkx`
+
+**"Roofing Schedule - Phase I"** is copied onto every roofing job
+(`copyTaskTemplateToTarget`). Its six tasks ARE the pipeline, and
+completing two of them is what moves the job's Status.
+
+| # | Task | Task type | Role |
+| --- | --- | --- | --- |
+| 1 | Order materials | Pre-Production `22PDM6m8Vdqw` | planning bar |
+| 2 | Roof install | Pre-Production `22PDM6m8Vdqw` | planning bar |
+| 3 | Final inspection | **Inspection `22PNJDrm6TsA`** | carries the 8 checklist items as **subtasks**; the crew app ticks them and completes it |
+| 4 | Punch list | General `22PBAjfWNQrT` | phase marker |
+| 5 | PM punch review | General `22PBAjfWNQrT` | PM's own check-off (no status of its own) |
+| 6 | Final check-off | General `22PBAjfWNQrT` | **sales rep** has spoken to the customer; completing it closes the job |
+
+**Every task carries a type on purpose, and two of those choices are
+load-bearing:**
+
+- **"Punch list" is General, never Punch List.** `listPunchTasks` filters
+  on task type alone, so a permanently-open phase task typed Punch List
+  would count as an unfinished punch item on every job and the Punch
+  Review flip would never fire again, anywhere.
+- **"Order materials" and "Roof install" are Pre-Production, not Install
+  or Roofing.** The DB Production Board's task sweep accepts Install,
+  Roofing **and untyped** tasks and then resolves a crew from the
+  assignees — so an untyped "Roof install" with a crew on it renders on
+  the board as a phantom crew visit. Pre-Production is invisible to it.
+
+**JobTread does not set `taskTemplate` on the copies** (verified live on
+job 25-0001): a copied task has no back-reference to the template. The
+task TYPE plus the name is the only durable marker there is — which is
+why `findPipelineTask` matches on type first and name second, and why
+renaming one of these tasks in JT breaks its link to the automation.
+
+**Subtasks are `{ name, isComplete }` — two states, not three.** The
+form's `OK` / `N/A` / `ACTION` collapses to ticked / unticked: OK and N/A
+tick, ACTION does not. Nothing is lost, because an ACTION is what created
+the `REPORT:` punch task, which is where that finding actually lives.
+`subtasks` REPLACES on update (like `dependsOnTasks`), so the full list
+goes every write — which is what makes closing the inspection idempotent.
+
+`updateTask` defaults **`updateDependentTasks: true`**: JobTread cascades
+a date change onto everything downstream by its own rules. These six are
+a dependency chain, so every task write the sync server makes passes
+`false` (`TASK_WRITE_GUARDS` in `apps/sync/src/jt.ts`).
+
 ## Status conventions (job custom field `22PBAjfWVVv9` "Status")
 
 | Status value | Meaning for DB CheckOut |
 | --- | --- |
 | `Final Inspection` | Job enters the crew app queue — service/QC crew (or a sales rep on far jobs) inspects & cleans up |
-| `Punch List` | Inspection reviewed; repairs assigned & in progress |
-| `PM Review` (was `Punch Review` until 2026-09-16) | All punch items done — **set automatically by the sync server when the last punch task closes with its after photo**; PM reviews photos & notes |
-| `Job Completed` | PM approved the punch work in PM Review (or clean pass with no punch items) |
-| stays `Final Inspection` | Hold — correction required before advancing |
+| `Punch List` | **Set automatically when the crew completes "Final inspection" and the visit found open problems**; repairs assigned & in progress |
+| `PM Review` (was `Punch Review` until 2026-09-16) | Set automatically either when the last punch task closes with its after photo, **or when a clean inspection completes with nothing to repair**; the PM reviews photos & notes and ticks "PM punch review" |
+| `Job Completed` | **Set automatically when the sales rep ticks "Final check-off"** — they have spoken to the customer and all is well |
+| stays `Final Inspection` | Hold — correction required before advancing, or the job never got the template |
+
+```
+Final Inspection ──(crew completes "Final inspection")──┬─ problems? ──> Punch List
+                                                        └─ clean?    ──> PM Review
+Punch List ──────(last punch task closes)──────────────────────────────> PM Review
+PM Review ───────(PM ticks "PM punch review", then the sales rep speaks
+                  to the customer and ticks "Final check-off")─────────> Job Completed
+```
+
+The PM's own tick is a human gate with **no status of its own** — the job
+waits at `PM Review` through both check-offs, and only the sales rep's
+closes it. That is deliberate: `Job Completed` fires the final 10% payment
+milestone, so a person talks to the customer before any of this touches
+money.
 
 The pipeline is strictly linear (no status is ever re-entered), so
-automations can safely key off status transitions. A rejected repair
-moves the job back from `PM Review` to `Punch List`.
+automations can safely key off status transitions — and that is also what
+makes every rule idempotent: each is guarded on the status it moves OUT
+of, so a duplicate delivery from the app's offline outbox is a no-op. A
+rejected repair moves the job back from `PM Review` to `Punch List`.
+
+**The routing does not depend on write ordering.** The app's outbox
+(`flushOutbox`) continues past a failing item rather than stopping, so a
+`REPORT:` task can reach JobTread *after* the close that is meant to
+notice it. `POST /jobs/:id/close-inspection` therefore carries the visit's
+own `problemsReported` count, and the decision takes the larger of that
+and the open punch tasks actually on the job.
+
+The inspection FORM is still submitted alongside this. It stays the
+dated, role-gated, reviewable record — and the 40% payment milestone below
+is defined against it. The subtasks are what the PM sees on the Gantt; the
+form is the evidence.
 
 ## Payment milestones (CONFIRMED — agreed with Shawn, roofing jobs)
 

@@ -170,7 +170,14 @@ test("completeTask without a note only sets progress", async () => {
   await completeTask(client, "t1");
   assert.equal(queries.length, 1);
   const dollar = (queries[0]["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
-  assert.deepEqual(dollar, { id: "t1", progress: 1 });
+  // updateDependentTasks MUST be false: Pave defaults it to true and would
+  // cascade dates onto the rest of the pipeline chain.
+  assert.deepEqual(dollar, {
+    id: "t1",
+    updateDependentTasks: false,
+    notify: false,
+    progress: 1,
+  });
 });
 
 test("completeTask with a note appends the correction to the task description", async () => {

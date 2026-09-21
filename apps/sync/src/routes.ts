@@ -20,21 +20,25 @@ import { PaveError, type PaveClient } from "./pave";
 import {
   CLEANUP_FORM,
   INSPECTION_FORM,
+  PIPELINE_TASKS,
   STATUS,
 } from "../../../packages/shared/src/jobtread";
 import type { ChecklistSubmission, ProblemReport } from "../../../packages/shared/src/types";
 import {
+  closeInspectionTask,
   completeTask,
   createReportTask,
+  findPipelineTask,
   getJob,
   listAssignedWorkByJob,
   listPipelineJobs,
+  listPipelineTasks,
   listSoldScope,
   submitForm,
   uploadPhoto,
   type PhotoUpload,
 } from "./jt";
-import { applyPmReviewFlip } from "./pmReview";
+import { applyPipeline } from "./pipeline";
 import { summarizeScope, transcribeNote, translateToSpanish, TRANSLATE_LIMITS } from "./translate";
 
 export interface RouterDeps {
@@ -183,10 +187,10 @@ export function createHandler(deps: RouterDeps) {
           // Best-effort: a failed check must answer 200, or JobTread retries
           // the delivery and a JT hiccup turns into a 5xx retry storm.
           try {
-            flipped = await applyPmReviewFlip(deps.pave, jobId);
+            flipped = await applyPipeline(deps.pave, jobId);
           } catch (err) {
             console.warn(
-              `PM Review flip skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+              `pipeline check skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
         }
@@ -283,6 +287,32 @@ export function createHandler(deps: RouterDeps) {
           const id = await submitForm(deps.pave, form.id, jobId, checklistValues(sub));
           return json(res, 200, { submissionId: id });
         }
+        // The crew has finished the visit: tick the checklist onto the job's
+        // "Final inspection" task, complete it, and let the pipeline decide
+        // where the job goes. Called LAST in the send, after the problem
+        // reports — and it carries its own problem count anyway, because the
+        // outbox can deliver those after this (see PipelineInput).
+        if (parts[2] === "close-inspection") {
+          const body = (await readBody(req)) as {
+            answers?: Record<string, string>;
+            problemsReported?: unknown;
+          };
+          const problemsReported =
+            typeof body.problemsReported === "number" && body.problemsReported > 0
+              ? Math.floor(body.problemsReported)
+              : 0;
+          const milestones = await listPipelineTasks(deps.pave, jobId);
+          const task = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+          // No task means the job never got the template — nothing to
+          // complete, and the pipeline will leave the status alone. The PM
+          // advances it from the board exactly as they did before.
+          if (task) {
+            await closeInspectionTask(deps.pave, task.id, body.answers ?? {}, session.name);
+          }
+          const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
+          return json(res, 200, { completedTaskId: task?.id ?? null, flipped });
+        }
+
         if (parts[2] === "reports") {
           const report = (await readBody(req)) as ProblemReport;
           if (!report.location || !report.englishNote) {
@@ -344,7 +374,7 @@ export function createHandler(deps: RouterDeps) {
         const body = (await readBody(req)) as { jobId?: string; note?: string };
         const note = body.note?.trim() ? `${body.note.trim()} — ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
-        const flipped = body.jobId ? await applyPmReviewFlip(deps.pave, body.jobId) : null;
+        const flipped = body.jobId ? await applyPipeline(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }
 

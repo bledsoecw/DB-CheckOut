@@ -344,6 +344,25 @@ export const submitCleanup = (jobId: string, sub: ChecklistSubmission, label?: s
   post(`/jobs/${jobId}/cleanup`, sub, label ?? "Limpieza · Cleanup");
 export const sendReport = (jobId: string, report: ProblemReport, label?: string) =>
   post(`/jobs/${jobId}/reports`, report, label ?? "Reporte · Report");
+/**
+ * Ends the visit: ticks the checklist onto the job's "Final inspection" task
+ * in JobTread, completes it, and lets the server move the job on.
+ *
+ * Sent LAST, after the problem reports — and it carries `problemsReported`
+ * so the routing is right even when it isn't: `flushOutbox` continues past a
+ * failing item, so a queued report can reach the server after this does.
+ */
+export const closeInspection = (
+  jobId: string,
+  sub: ChecklistSubmission,
+  problemsReported: number,
+  label?: string,
+) =>
+  post(
+    `/jobs/${jobId}/close-inspection`,
+    { answers: sub.answers, problemsReported },
+    label ?? "Cerrar inspección · Close inspection",
+  );
 export const completePunchTask = (taskId: string, jobId: string, note?: string, label?: string) =>
   post(
     `/tasks/${taskId}/complete`,

@@ -5,7 +5,9 @@
 
 import type { PaveClient } from "./pave";
 import {
+  ANSWER,
   CUSTOM_FIELDS,
+  INSPECTION_ITEMS,
   ORGANIZATION_ID,
   SERVICE_PROJECT_TYPES,
   STATUS,
@@ -508,6 +510,123 @@ export async function submitForm(
 }
 
 /**
+ * Every task write the sync server makes carries these.
+ *
+ * `updateDependentTasks` DEFAULTS TO TRUE in Pave: JobTread cascades a date
+ * change onto everything downstream by its own rules. The pipeline tasks are
+ * a dependency chain, so without this, completing "Final inspection" would
+ * silently re-date the punch list, the PM review and the final check-off by
+ * logic this server did not compute and cannot show anyone.
+ *
+ * `notify` is off because these are bookkeeping writes — the crew already
+ * knows what they just did, and the PM gets the status change.
+ */
+const TASK_WRITE_GUARDS = { updateDependentTasks: false, notify: false } as const;
+
+/** The pipeline milestone tasks copied onto a job, as the decision needs them. */
+export interface PipelineTask {
+  id: string;
+  name: string;
+  /** 0..1; JT leaves it null until someone touches the task. */
+  progress: number;
+  taskTypeId: string | null;
+}
+
+/**
+ * The job's pipeline milestones. Lean on purpose — this runs on every
+ * org-wide webhook event, so it reads only what the decision needs.
+ */
+export async function listPipelineTasks(pave: PaveClient, jobId: string): Promise<PipelineTask[]> {
+  // Its own narrow shape rather than RawTask: this query deliberately does
+  // not select description/endDate, and the type should say so.
+  interface RawPipelineTask {
+    id: string;
+    name: string;
+    progress: number | null;
+    taskType: { id: string } | null;
+  }
+  const res = await pave.query<{
+    job: { tasks: { nodes: RawPipelineTask[] } } | null;
+  }>({
+    job: {
+      $: { id: jobId },
+      tasks: {
+        $: { size: 50 },
+        nodes: { id: {}, name: {}, progress: {}, taskType: { id: {} } },
+      },
+    },
+  });
+  return (res.job?.tasks.nodes ?? []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    progress: t.progress ?? 0,
+    taskTypeId: t.taskType?.id ?? null,
+  }));
+}
+
+const sameName = (a: string, b: string): boolean =>
+  a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * Find one pipeline milestone among a job's tasks.
+ *
+ * Type first, name second: a PM will rename a task on the Gantt long before
+ * they retype one, but "General" is shared by three of the six milestones so
+ * the name is what separates them. Returns undefined freely — a job that
+ * never got the template simply has no milestone to complete, and the caller
+ * treats that as "nothing to do" rather than an error.
+ */
+export function findPipelineTask(
+  tasks: PipelineTask[],
+  spec: { name: string; typeId: string },
+): PipelineTask | undefined {
+  const typed = tasks.filter((t) => t.taskTypeId === spec.typeId);
+  if (typed.length === 1) return typed[0];
+  return typed.find((t) => sameName(t.name, spec.name)) ?? tasks.find((t) => sameName(t.name, spec.name));
+}
+
+/**
+ * Close the inspection: tick the subtasks the crew answered and mark the
+ * task done, in ONE write.
+ *
+ * `subtasks` REPLACES on update (same as dependsOnTasks), so the full list
+ * goes every time — which is what makes this idempotent if the outbox
+ * delivers the same close twice.
+ *
+ * The collapse from three answers to two states is deliberate and lossy:
+ * a subtask is only `{ name, isComplete }`, so OK and N/A both tick and
+ * ACTION does not. Nothing is lost overall — an ACTION is what created the
+ * `REPORT:` punch task, which is where that finding actually lives.
+ */
+export async function closeInspectionTask(
+  pave: PaveClient,
+  taskId: string,
+  answers: Record<string, string>,
+  byName: string,
+): Promise<void> {
+  const subtasks = INSPECTION_ITEMS.map((item) => ({
+    name: item.subtask,
+    isComplete: answers[item.fieldId] === ANSWER.ok || answers[item.fieldId] === ANSWER.na,
+  }));
+  const res = await pave.query<{ task: { description: string | null } | null }>({
+    task: { $: { id: taskId }, description: {} },
+  });
+  const done = `✔ Inspected by ${byName} — via DB CheckOut`;
+  const description = res.task?.description ? `${res.task.description}\n\n${done}` : done;
+  await pave.query({
+    updateTask: {
+      $: {
+        id: taskId,
+        ...TASK_WRITE_GUARDS,
+        progress: 1,
+        subtasks,
+        description: description.slice(0, 4096),
+      },
+    },
+  });
+}
+
+/**
  * A crew problem report becomes a to-do task of type Punch List.
  * - Default: UNASSIGNED, for the Service Manager / PM to turn into a work
  *   order on the Production board.
@@ -553,7 +672,7 @@ export async function createReportTask(
 export async function completeTask(pave: PaveClient, taskId: string, note?: string): Promise<void> {
   const trimmed = note?.trim();
   if (!trimmed) {
-    await pave.query({ updateTask: { $: { id: taskId, progress: 1 } } });
+    await pave.query({ updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1 } } });
     return;
   }
   const res = await pave.query<{ task: { description: string | null } | null }>({
@@ -562,7 +681,9 @@ export async function completeTask(pave: PaveClient, taskId: string, note?: stri
   const done = `✔ Done — ${trimmed}`;
   const description = res.task?.description ? `${res.task.description}\n\n${done}` : done;
   await pave.query({
-    updateTask: { $: { id: taskId, progress: 1, description: description.slice(0, 4096) } },
+    updateTask: {
+      $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) },
+    },
   });
 }
 

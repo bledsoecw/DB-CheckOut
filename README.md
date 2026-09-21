@@ -20,11 +20,24 @@ repair work — wired into JobTread and the DB Production board.
 4. Everything syncs back to JobTread: checklists as form submissions,
    problem reports with photos and English notes. The PM reviews and
    assigns repairs on the Production board.
-5. The **punch crew** sees assigned repairs in the same app: where to
+5. Finishing the visit completes the job's **"Final inspection"** task —
+   the eight checks ride on it as subtasks, so the app ticks the same
+   boxes the PM sees on the Gantt. That completion is what moves the job:
+   to **Punch List** if the crew found anything, otherwise straight to
+   **PM Review**.
+6. The **punch crew** sees assigned repairs in the same app: where to
    go, what to do, what to bring, before/after photos, and a big
    "Terminado" button. When the last repair closes, the job moves to
-   **PM Review** automatically; the PM reviews the photos and notes,
-   then sets **Job Completed**.
+   **PM Review** automatically.
+7. The PM reviews the photos and notes and ticks **"PM punch review"**.
+   The job then waits for the **sales rep**, who speaks to the customer
+   and ticks **"Final check-off"** — that is what sets **Job Completed**,
+   so a person has talked to the homeowner before the final payment
+   milestone fires.
+
+The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
+template, copied onto every job. `docs/jobtread-setup.md` is the contract:
+the task types on it are load-bearing, not decoration.
 
 ## Code
 
@@ -38,8 +51,9 @@ docs/              jobtread-setup.md is the JT build contract
 **Sync server** (`apps/sync`) — the bridge between the app and JobTread:
 queue of pipeline jobs (Final Inspection / Punch List / PM Review),
 form submissions, problem reports → unassigned Punch List tasks, task
-completion with the automatic **PM Review** status flip, and a
-webhook receiver. Run it:
+completion, the closeout pipeline (`src/pipeline.ts` — which milestone
+completing moves the job to which status), and a webhook receiver. Run
+it:
 
 ```
 cp apps/sync/.env.example apps/sync/.env   # add JT_GRANT_KEY + auth vars
