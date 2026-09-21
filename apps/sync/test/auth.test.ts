@@ -150,7 +150,8 @@ test("reports are stamped with the signed-in name, not the client's claim", asyn
   );
   await handle(call.req, call.res);
   assert.equal(call.out.status, 200);
-  const dollar = (queries[0]["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  const created = queries.find((q) => "createTask" in q)!;
+  const dollar = (created["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
   assert.match(String(dollar["description"]), /Reported by: Yahir Gonzalez/);
   assert.doesNotMatch(String(dollar["description"]), /Spoofed/);
 });

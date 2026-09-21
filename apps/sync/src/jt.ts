@@ -68,6 +68,8 @@ interface RawTask {
   progress: number | null;
   endDate: string | null;
   taskType: { id: string } | null;
+  /** To-do (true) or scheduled task (false). Punch items are to-dos. */
+  isToDo?: boolean | null;
   /** Present only on org-wide task queries, where the job is the point. */
   job?: { id: string } | null;
   assignedMemberships?: {
@@ -247,6 +249,14 @@ export async function listPipelineJobs(pave: PaveClient): Promise<QueueJob[]> {
   return out.sort((a, b) => a.number.localeCompare(b.number));
 }
 
+/** The job as the queue sees it (type, project types, status) — one query. */
+export async function getJobBasics(pave: PaveClient, jobId: string): Promise<QueueJob | null> {
+  const res = await pave.query<{ job: RawJob | null }>({
+    job: { $: { id: jobId }, ...JOB_SELECTION },
+  });
+  return res.job ? toQueueJob(res.job) : null;
+}
+
 /** Just the job's pipeline Status value — the cheap read for webhook checks. */
 export async function getJobStatusValue(pave: PaveClient, jobId: string): Promise<string> {
   const res = await pave.query<{ job: RawJob | null }>({
@@ -296,6 +306,7 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
           description: {},
           progress: {},
           endDate: {},
+          isToDo: {},
           taskType: { id: {} },
           // 50 x 10 with the user fields is over Pave's declared-size budget
           // ("Request Entity Too Large", verified live 2026-09-21 — it took
@@ -310,8 +321,11 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
     },
   });
   const nodes = res.job?.tasks.nodes ?? [];
+  // Punch items are the Punch List-typed TO-DOs. The template's scheduled
+  // "Punch list" task carries the same type since 2026-09-21 and must not
+  // count as an open punch item on every job.
   return nodes
-    .filter((t) => t.taskType?.id === TASK_TYPES.punchList)
+    .filter((t) => t.taskType?.id === TASK_TYPES.punchList && t.isToDo === true)
     .map((t) => {
       const assignees: Assignee[] = (t.assignedMemberships?.nodes ?? []).map((m) => ({
         membershipId: m.id,
@@ -419,7 +433,8 @@ export async function listAssignedWorkByJob(
                 and: [
                   {
                     or: [
-                      [["taskType", "id"], "=", TASK_TYPES.punchList],
+                      // Punch items are to-dos; the scheduled "Punch list" phase task shares the type.
+                      { and: [[["taskType", "id"], "=", TASK_TYPES.punchList], [["isToDo"], "=", true]] },
                       [["taskType", "id"], "=", TASK_TYPES.inspection],
                     ],
                   },
@@ -602,29 +617,14 @@ const oneLine = (text: string, max: number): string => {
 };
 
 /**
- * What a checklist entry says about its findings, appended to the item's
- * name — a JT checklist entry is only a name and a tick, so the name is the
- * one place a note can sit right on the item.
- */
-function findingSuffix(findings: ChecklistFinding[]): string {
-  if (findings.length === 0) return "";
-  const parts = findings.map((f) => {
-    const note = oneLine(f.note, 160);
-    return f.fixedOnSite ? `✔ FIXED ON SITE${note ? ` — ${note}` : ""}` : `⚠ REPORT${note ? ` — ${note}` : ""}`;
-  });
-  return ` · ${parts.join(" | ")}`;
-}
-
-/**
  * The checklist as JobTread stores it: eight inspection items, then the five
- * cleanup items.
+ * cleanup items — the template's names, untouched. Notes never go on the
+ * entry: they are task MESSAGES that name the line (see postFindingComment).
  *
  * Ticked: OK, N/A, an ACTION the crew corrected on the spot (nothing is
  * left to do), and anything JT already shows ticked (a reported item whose
  * punch work has since closed — a replayed close must not untick it).
- * A reported ACTION stays unticked until its punch task closes; that is
- * what keeps the task's progress honest on the Gantt, and the finding's
- * note rides on the entry's name either way.
+ * A reported ACTION stays unticked until its punch task closes.
  */
 export function checklistSubtasks(visit: VisitChecklists, current: Subtask[] = []): Subtask[] {
   const answered = { ...visit.cleanup, ...visit.inspection };
@@ -632,34 +632,128 @@ export function checklistSubtasks(visit: VisitChecklists, current: Subtask[] = [
   return CHECKLIST_ITEMS.map((item) => {
     const findings = findingsFor(item.key);
     const answer = answered[item.key];
-    const already = current.find((s) => s.name.startsWith(item.subtask))?.isComplete === true;
+    const already = current.find((s) => s.name === item.subtask)?.isComplete === true;
     const ticked =
       answer === ANSWER.ok ||
       answer === ANSWER.na ||
       (answer === ANSWER.action && findings.length > 0 && findings.every((f) => f.fixedOnSite)) ||
       already;
-    return { name: `${item.subtask}${findingSuffix(findings)}`, isComplete: ticked };
+    return { name: item.subtask, isComplete: ticked };
   });
 }
 
-/** What the visit adds to the task's description: who inspected, the notes, the findings in full. */
-export function inspectionNote(visit: VisitChecklists, byName: string): string {
+/** The one line the task description gets: who inspected. It is also the "closed" marker. */
+export function inspectionNote(_visit: VisitChecklists, byName: string): string {
+  return `${INSPECTED_STAMP}${byName} — ${CHECKLIST_STAMP}`;
+}
+
+/** The crew's free-text notes as one task message, or null when there are none. */
+export function visitNotesMessage(visit: VisitChecklists, byName: string): string | null {
   const notes = visit.notes ?? {};
-  const lines = [`${INSPECTED_STAMP}${byName} — ${CHECKLIST_STAMP}`];
+  const lines: string[] = [];
   if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
   if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
   if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
-  const findings = (visit.findings ?? []).filter((f) => checklistItemByKey(f.itemKey));
-  if (findings.length > 0) {
-    lines.push("Findings:");
-    for (const f of findings) {
-      const item = checklistItemByKey(f.itemKey)!;
-      const state = f.fixedOnSite ? "FIXED ON SITE" : "REPORT — punch item";
-      const photos = f.photos > 0 ? ` (${f.photos} photo${f.photos === 1 ? "" : "s"})` : "";
-      lines.push(`- ${item.subtask}: ${state}${photos}${f.note.trim() ? ` — ${f.note.trim()}` : ""}`);
-    }
-  }
+  if (lines.length === 0) return null;
+  lines.push(`— ${byName} via DB CheckOut`);
   return lines.join("\n");
+}
+
+// --------------------------------------------------------------------------
+// Task messages: where the notes and the photos live
+// --------------------------------------------------------------------------
+
+const COMMENT_VISIBILITY = {
+  isVisibleToInternalRoles: true,
+  isVisibleToCustomerRoles: false,
+  isVisibleToVendorRoles: false,
+} as const;
+
+/** The message on this task created for this client reference, if it already exists. */
+export async function findCommentByRef(pave: PaveClient, taskId: string, ref: string): Promise<string | null> {
+  const marker = clientRefMarker(ref);
+  if (!marker) return null;
+  const res = await pave.query<{ task: { comments: { nodes: Array<{ id: string }> } } | null }>({
+    task: {
+      $: { id: taskId },
+      comments: { $: { size: 5, where: [["message"], "like", `%${marker}%`] }, nodes: { id: {} } },
+    },
+  });
+  return res.task?.comments?.nodes?.[0]?.id ?? null;
+}
+
+/**
+ * Post a message on a task. With a client reference, a re-send finds the
+ * message it already posted instead of posting twice. Internal-only:
+ * customers and vendors never see crew notes.
+ */
+export async function postTaskMessage(
+  pave: PaveClient,
+  taskId: string,
+  message: string,
+  clientRef?: string,
+): Promise<string> {
+  const marker = clientRefMarker(clientRef);
+  if (marker && clientRef) {
+    const existing = await findCommentByRef(pave, taskId, clientRef);
+    if (existing) return existing;
+  }
+  const res = await pave.query<{ createComment: { createdComment?: { id: string } } }>({
+    createComment: {
+      $: {
+        targetType: "task",
+        targetId: taskId,
+        message: marker ? `${message}\n\n${marker}` : message,
+        ...COMMENT_VISIBILITY,
+      },
+      createdComment: { id: {} },
+    },
+  });
+  return res.createComment.createdComment?.id ?? "";
+}
+
+/**
+ * What the crew found on a checklist line, as a message on the "Final
+ * inspection" task: the line first, so the PM reads which item it is about,
+ * then the finding, the note, and the rest of the report.
+ */
+export function findingMessage(report: ProblemReport, byName: string): string {
+  const item = checklistItemByKey(report.itemKey);
+  const fixed = report.fixedOnSite === true;
+  const lines = [item ? item.subtask : `Problem report — ${report.location}`];
+  const note = report.englishNote.trim();
+  lines.push(fixed ? `✔ FIXED ON SITE${note ? ` — ${note}` : ""}` : `⚠ REPORT (punch item)${note ? ` — ${note}` : ""}`);
+  if (item && report.location.trim() && report.location.trim() !== item.subtask) lines.push(`Where: ${report.location.trim()}`);
+  if (fixed && report.materialsNote?.trim()) lines.push(`Materials & time: ${report.materialsNote.trim()}`);
+  if (report.heardText?.trim()) lines.push(`Crew said (verbatim): "${report.heardText.trim()}"`);
+  if (report.originalCrew?.trim()) lines.push(`Original work by: ${report.originalCrew.trim()}`);
+  lines.push(`Reported by ${byName} via DB CheckOut`);
+  return lines.join("\n");
+}
+
+/**
+ * Link a task's file to a message on that task (no second upload). JT
+ * REPLACES a message's file list on update, so the current list is read
+ * and written back with the new file; a file already on the message is
+ * left alone.
+ */
+export async function attachFileToComment(pave: PaveClient, commentId: string, fileId: string): Promise<"attached" | "already"> {
+  const res = await pave.query<{
+    comment: { files: { nodes: Array<{ id: string; file: { id: string } | null }> } } | null;
+  }>({
+    comment: { $: { id: commentId }, files: { $: { size: 10 }, nodes: { id: {}, file: { id: {} } } } },
+  });
+  const current = res.comment?.files.nodes ?? [];
+  if (current.some((f) => f.file?.id === fileId)) return "already";
+  await pave.query({
+    updateComment: {
+      $: {
+        id: commentId,
+        files: [...current.map((f) => ({ _type: "commentFile", id: f.id })), { _type: "file", id: fileId }],
+      },
+    },
+  });
+  return "attached";
 }
 
 /**
@@ -679,6 +773,7 @@ export async function closeInspectionTask(
   taskId: string,
   visit: VisitChecklists,
   byName: string,
+  clientRef?: string,
 ): Promise<void> {
   const res = await pave.query<{
     task: { description: string | null; subtasks: Array<{ name?: string | null; isComplete?: boolean | null }> | null } | null;
@@ -704,6 +799,9 @@ export async function closeInspectionTask(
       },
     },
   });
+  // The crew's free-text notes are a message on the task, not its description.
+  const message = visitNotesMessage(visit, byName);
+  if (message) await postTaskMessage(pave, taskId, message, clientRef ? `${clientRef}.notes` : undefined);
 }
 
 /**
@@ -772,12 +870,7 @@ export async function syncPunchListTask(
     return "updated";
   }
 
-  // The entry carries the report's note (the first line of the to-do's
-  // description), so the PM reads the finding without opening the to-do.
-  const desired: Subtask[] = punchTasks.map((t) => {
-    const note = oneLine((t.description ?? "").split("\n")[0] ?? "", 140);
-    return { name: note ? `${t.name} — ${note}` : t.name, isComplete: t.progress >= 1 };
-  });
+  const desired: Subtask[] = punchTasks.map((t) => ({ name: t.name, isComplete: t.progress >= 1 }));
   const allDone = desired.every((s) => s.isComplete);
   const same =
     task.subtasks.length === desired.length &&
@@ -854,6 +947,7 @@ export async function createReportTask(
   jobId: string,
   report: ProblemReport,
   clientRef?: string,
+  assignedMembershipIds: readonly string[] = [],
 ): Promise<string> {
   const marker = clientRefMarker(clientRef);
   if (marker && clientRef) {
@@ -882,6 +976,7 @@ export async function createReportTask(
         name: `${fixed ? "FIXED ON SITE" : "REPORT"}: ${report.location}`,
         description: lines.join("\n\n").slice(0, 4096),
         ...(fixed ? { progress: 1 } : {}),
+        ...(assignedMembershipIds.length > 0 ? { assignedMembershipIds: [...assignedMembershipIds] } : {}),
       },
       createdTask: { id: {} },
     },

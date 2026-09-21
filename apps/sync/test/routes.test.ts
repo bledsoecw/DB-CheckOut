@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseVisit } from "../src/routes";
-import { ANSWER, CLEANUP_ITEMS, INSPECTION_ITEMS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import { ANSWER, CLEANUP_ITEMS, CUSTOM_FIELDS, INSPECTION_ITEMS, PUNCH_CREW, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 test("parseVisit reads the app's close-inspection body: both checklists and the notes", () => {
   const visit = parseVisit({
@@ -100,19 +100,83 @@ function routerDeps(responder: (q: PaveQuery) => unknown, queries: PaveQuery[]):
 
 const PIXEL = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
 
-test("POST /jobs/:id/reports carries the x-client-ref into the task so a re-send is recognised", async () => {
+function jobResponder(jobType: string, withInspectionTask: boolean) {
+  return (q: PaveQuery): unknown => {
+    if ("createTask" in q) return { createTask: { createdTask: { id: "t9" } } };
+    if ("createComment" in q) return { createComment: { createdComment: { id: "c9" } } };
+    if ("task" in q) return { task: { comments: { nodes: [] } } };
+    if ("job" in q) {
+      const jobQ = q["job"] as Record<string, unknown>;
+      if ("tasks" in jobQ) {
+        const wantsPipeline = JSON.stringify(jobQ).includes("subtasks");
+        return {
+          job: {
+            tasks: {
+              nodes:
+                wantsPipeline && withInspectionTask
+                  ? [{ id: "fi", name: "Final inspection", progress: null, taskType: { id: TASK_TYPES.inspection }, description: null, subtasks: [] }]
+                  : [],
+            },
+          },
+        };
+      }
+      return {
+        job: {
+          id: "job1",
+          number: "26-0001",
+          name: "260001 Test_Roof",
+          customFieldValues: { nodes: [{ value: jobType, customField: { id: CUSTOM_FIELDS.jobType } }] },
+        },
+      };
+    }
+    return {};
+  };
+}
+
+test("POST /jobs/:id/reports: the to-do carries the reference, goes to the punch crew on a roofing job, and the finding is a message on the inspection task", async () => {
   const queries: PaveQuery[] = [];
-  const handle = createHandler(
-    routerDeps((q) => ("createTask" in q ? { createTask: { createdTask: { id: "t9" } } } : { job: { tasks: { nodes: [] } } }), queries),
+  const handle = createHandler(routerDeps(jobResponder("Roofing", true), queries));
+  const call = fakeHttp(
+    "POST",
+    "/jobs/job1/reports",
+    { "x-client-ref": "1758400000000-ab12cd" },
+    { itemKey: INSPECTION_ITEMS[7].key, location: "Attic", englishNote: "Boot cracked" },
   );
-  const call = fakeHttp("POST", "/jobs/job1/reports", { "x-client-ref": "1758400000000-ab12cd" }, { location: "Rear slope", englishNote: "Boot cracked" });
   await handle(call.req, call.res);
   assert.equal(call.out.status, 200);
-  assert.equal(JSON.parse(call.out.body).taskId, "t9");
-  const created = queries.find((q) => "createTask" in q)!;
-  const description = String(((created["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>)["description"]);
-  assert.match(description, /Reported by: Yahir Gonzalez/);
-  assert.match(description, /DB CheckOut ref: 1758400000000-ab12cd$/);
+  assert.deepEqual(JSON.parse(call.out.body), { taskId: "t9", commentId: "c9", photosUploaded: 0, photoUploaded: false });
+  const created = (queries.find((q) => "createTask" in q)!["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.match(String(created["description"]), /Reported by: Yahir Gonzalez/);
+  assert.match(String(created["description"]), /DB CheckOut item: 8/);
+  assert.match(String(created["description"]), /DB CheckOut ref: 1758400000000-ab12cd$/);
+  assert.deepEqual(created["assignedMembershipIds"], PUNCH_CREW.map((m) => m.membershipId));
+  const message = (queries.find((q) => "createComment" in q)!["createComment"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(message["targetId"], "fi");
+  assert.ok(
+    String(message["message"]).startsWith(`${INSPECTION_ITEMS[7].subtask}\n⚠ REPORT (punch item) — Boot cracked\nWhere: Attic`),
+    "the message leads with the checklist line, then the finding",
+  );
+  assert.match(String(message["message"]), /DB CheckOut ref: 1758400000000-ab12cd$/);
+});
+
+test("POST /jobs/:id/reports leaves a construction job's report for the PM, and a FIXED ON SITE record unassigned", async () => {
+  const construction: PaveQuery[] = [];
+  await createHandler(routerDeps(jobResponder("Construction", false), construction))(
+    ...(() => {
+      const c = fakeHttp("POST", "/jobs/job1/reports", {}, { location: "Window", englishNote: "Scratched" });
+      return [c.req, c.res] as const;
+    })(),
+  );
+  const made = (construction.find((q) => "createTask" in q)!["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(made["assignedMembershipIds"], undefined);
+  assert.ok(!construction.some((q) => "createComment" in q), "no inspection task on the job: no message");
+
+  const fixed: PaveQuery[] = [];
+  const c2 = fakeHttp("POST", "/jobs/job1/reports", {}, { location: "Plants", englishNote: "Reshaped", fixedOnSite: true });
+  await createHandler(routerDeps(jobResponder("Roofing", true), fixed))(c2.req, c2.res);
+  const madeFixed = (fixed.find((q) => "createTask" in q)!["createTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(madeFixed["assignedMembershipIds"], undefined);
+  assert.equal(madeFixed["progress"], 1);
 });
 
 test("POST /jobs/:id/photos with a reportRef waits (409) until the report's task exists, then attaches to it", async () => {
@@ -163,7 +227,7 @@ test("the retired checklist form endpoints answer 410", async () => {
   }
 });
 
-test("a report photo is attached to its punch to-do and to the Final inspection task, named after the checklist line", async () => {
+test("a report photo is uploaded once, to its punch to-do, and linked to the finding's message on the inspection task", async () => {
   const queries: PaveQuery[] = [];
   const handle = createHandler(
     routerDeps((q) => {
@@ -173,11 +237,16 @@ test("a report photo is attached to its punch to-do and to the Final inspection 
           ? { job: { tasks: { nodes: [{ id: "fi", name: "Final inspection", progress: 0.9, taskType: { id: TASK_TYPES.inspection }, description: null, subtasks: [] }] } } }
           : { job: { tasks: { nodes: [{ id: "t9" }] } } };
       }
-      if ("task" in q) return { task: { files: { nodes: [] } } };
+      if ("task" in q) {
+        const asksComments = JSON.stringify(q).includes("comments");
+        return asksComments ? { task: { comments: { nodes: [{ id: "c9" }] } } } : { task: { files: { nodes: [] } } };
+      }
+      if ("comment" in q) return { comment: { files: { nodes: [] } } };
       if ("createUploadRequest" in q) {
         return { createUploadRequest: { createdUploadRequest: { id: "u1", url: "https://up.example", method: "PUT", headers: {} } } };
       }
-      return { createFile: { createdFile: { id: `f${queries.filter((x) => "createFile" in x).length}` } } };
+      if ("createFile" in q) return { createFile: { createdFile: { id: "f1" } } };
+      return {};
     }, queries),
   );
   const realFetch = globalThis.fetch;
@@ -191,12 +260,14 @@ test("a report photo is attached to its punch to-do and to the Final inspection 
     );
     await handle(call.req, call.res);
     assert.equal(call.out.status, 200);
-    const body = JSON.parse(call.out.body) as { fileId: string; inspectionFileId: string | null };
-    assert.ok(body.fileId && body.inspectionFileId, "two files: the to-do's and the inspection task's");
+    assert.deepEqual(JSON.parse(call.out.body), { fileId: "f1", commentId: "c9" });
     const created = queries.filter((q) => "createFile" in q).map((q) => (q["createFile"] as Record<string, unknown>)["$"] as Record<string, unknown>);
-    assert.deepEqual(created.map((c) => c["targetId"]), ["t9", "fi"]);
+    assert.equal(created.length, 1, "one upload");
+    assert.equal(created[0]["targetId"], "t9");
     assert.match(String(created[0]["name"]), /^8\. Attic \/ interior spot check — leak-prone areas inspected — REPORT /);
-    assert.match(String(created[1]["description"]), /DB CheckOut ref: 1758400000000-ab12cd\.p0\.fi$/);
+    const linked = (queries.find((q) => "updateComment" in q)!["updateComment"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+    assert.equal(linked["id"], "c9");
+    assert.deepEqual(linked["files"], [{ _type: "file", id: "f1" }]);
   } finally {
     globalThis.fetch = realFetch;
   }

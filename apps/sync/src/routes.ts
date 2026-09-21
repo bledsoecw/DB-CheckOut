@@ -17,17 +17,22 @@ import {
   type SessionUser,
 } from "./auth";
 import { PaveError, type PaveClient } from "./pave";
-import { PIPELINE_TASKS, STATUS } from "../../../packages/shared/src/jobtread";
+import { isRoofingJob, PIPELINE_TASKS, PUNCH_CREW, STATUS } from "../../../packages/shared/src/jobtread";
 import type { CloseInspectionRequest, ProblemReport } from "../../../packages/shared/src/types";
 import {
+  attachFileToComment,
   checklistItemTitle,
   clientRefMarker,
   closeInspectionTask,
   completeTask,
   createReportTask,
+  findCommentByRef,
+  findingMessage,
   findPipelineTask,
   findTaskByRef,
   getJob,
+  getJobBasics,
+  postTaskMessage,
   listAssignedWorkByJob,
   listPipelineJobs,
   listPipelineTasks,
@@ -359,7 +364,7 @@ export function createHandler(deps: RouterDeps) {
           // complete, and the pipeline will leave the status alone. The PM
           // advances it from the board exactly as they did before.
           if (task) {
-            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name);
+            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name, clientRef(req));
           }
           const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
           return json(res, 200, { completedTaskId: task?.id ?? null, flipped });
@@ -371,7 +376,30 @@ export function createHandler(deps: RouterDeps) {
             return json(res, 400, { error: "location and englishNote are required" });
           }
           const ref = clientRef(req);
-          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref);
+          // A REPORT on a roofing job goes straight to the service crew; a
+          // correction already made (FIXED ON SITE) is documentation, nobody's.
+          let assignTo: readonly string[] = [];
+          if (report.fixedOnSite !== true) {
+            try {
+              const basics = await getJobBasics(deps.pave, jobId);
+              if (basics && isRoofingJob(basics)) assignTo = PUNCH_CREW.map((m) => m.membershipId);
+            } catch {
+              // unknown job type: leave it for the PM to assign
+            }
+          }
+          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref, assignTo);
+          // The finding is a MESSAGE on the "Final inspection" task naming the
+          // checklist line it is about; its photos get linked to that message
+          // as they arrive. Best-effort: the to-do is the record.
+          let commentId: string | null = null;
+          try {
+            const inspection = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection);
+            if (inspection) {
+              commentId = await postTaskMessage(deps.pave, inspection.id, findingMessage(report, session.name), ref);
+            }
+          } catch (err) {
+            console.warn(`finding message not posted for ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+          }
           // Photos inlined with the report (older app builds' outboxes; the
           // app now sends them one per request with `reportRef`). The report
           // must never be lost to a photo hiccup — best-effort.
@@ -396,7 +424,7 @@ export function createHandler(deps: RouterDeps) {
               // keep going — the remaining photos still get their chance
             }
           }
-          return json(res, 200, { taskId: id, photosUploaded, photoUploaded: photosUploaded > 0 });
+          return json(res, 200, { taskId: id, commentId, photosUploaded, photoUploaded: photosUploaded > 0 });
         }
 
         if (parts[2] === "photos") {
@@ -431,42 +459,37 @@ export function createHandler(deps: RouterDeps) {
           const where = typeof body.location === "string" && body.location.trim() ? body.location.trim() : undefined;
           const title = itemTitle ? `${itemTitle} — ${label}` : where ? `${oneLineTitle(where)} — ${label}` : undefined;
 
-          // Inspection photos and the report's photos both belong with the
-          // inspection: a visit photo lands on the "Final inspection" task
-          // instead of the bare job, and a report photo is attached there
-          // too, next to the checklist line it documents — as well as on the
-          // punch to-do, where the crew and the PM work it.
+          // A visit photo lands on the "Final inspection" task instead of the
+          // bare job. A report photo lands on the punch to-do and is then
+          // LINKED to the finding's message on the "Final inspection" task —
+          // one upload, shown in both places.
           let inspectionTaskId: string | undefined;
           if (label === "INSPECTION" || label === "REPORT") {
             try {
               inspectionTaskId = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection)?.id;
             } catch {
-              // no template on the job, or JT hiccup — the primary upload below still happens
+              // no template on the job, or JT hiccup — the upload below still happens
             }
           }
-          const primaryTaskId = taskId ?? (label === "INSPECTION" ? inspectionTaskId : undefined);
           const upload: PhotoUpload = {
             label: label as PhotoUpload["label"],
             ...photo,
-            taskId: primaryTaskId,
+            taskId: taskId ?? (label === "INSPECTION" ? inspectionTaskId : undefined),
             byName: session.name,
             clientRef: ref,
             title,
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
-          let inspectionFileId: string | null = null;
-          if (label === "REPORT" && inspectionTaskId && inspectionTaskId !== primaryTaskId) {
+          let commentId: string | null = null;
+          if (label === "REPORT" && inspectionTaskId && typeof body.reportRef === "string" && fileId) {
             try {
-              inspectionFileId = await uploadPhoto(deps.pave, jobId, {
-                ...upload,
-                taskId: inspectionTaskId,
-                clientRef: ref ? `${ref}.fi` : undefined,
-              });
-            } catch {
-              // best-effort: the photo is on the punch to-do already
+              commentId = await findCommentByRef(deps.pave, inspectionTaskId, body.reportRef);
+              if (commentId) await attachFileToComment(deps.pave, commentId, fileId);
+            } catch (err) {
+              console.warn(`photo not linked to the finding message on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
-          return json(res, 200, { fileId, inspectionFileId });
+          return json(res, 200, { fileId, commentId });
         }
       }
 

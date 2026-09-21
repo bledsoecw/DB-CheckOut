@@ -28,15 +28,24 @@ sync server writes, in one `updateTask`:
 - `progress: 1`.
 
 Answers collapse to the subtask's two states. `OK` and `N/A` tick. An
-`ACTION` the crew **fixed on site** ticks too (nothing is left to do) and
-its entry reads `… · ✔ FIXED ON SITE — <note>`. An `ACTION` that became a
-`REPORT:` punch task stays unticked with `… · ⚠ REPORT — <note>` on the
-entry, and is ticked by the sync server when that punch task closes (the
-task carries `DB CheckOut item: 8` to say which line it came from). The
-same findings are listed in full in the task description, and the
-report's photos are attached to the "Final inspection" task as well as to
-the punch to-do, named after the line (`8. Attic … — REPORT …`). Visit
-photos attach to the "Final inspection" task instead of the bare job.
+`ACTION` the crew **fixed on site** ticks too (nothing is left to do). An
+`ACTION` that became a `REPORT:` punch task stays unticked and is ticked
+by the sync server when that punch task closes (the to-do carries
+`DB CheckOut item: 8` to say which line it came from). The entries keep
+the template's names, untouched.
+
+**Notes and photos are task MESSAGES, not description.** Each finding is
+posted as a message on the "Final inspection" task that starts with the
+checklist line it is about (`8. Attic / interior spot check …`), then
+`⚠ REPORT (punch item) — <note>` or `✔ FIXED ON SITE — <note>`, where it
+is, materials/time, what the crew said verbatim, who reported it. The
+report's photos are uploaded once, to the punch to-do, and then linked to
+that message (a message's file list is rewritten with the file — JT
+replaces the list on update). The crew's free-text inspection/attic/
+cleanup notes are one more message on the task. Messages are internal
+only (not visible to customer or vendor roles). Visit photos attach to
+the "Final inspection" task instead of the bare job. The task description
+only ever gets the `✔ Inspected by <name> — via DB CheckOut` stamp.
 
 **JobTread derives a checklist task's progress from its ticks** (ticked /
 total, whatever `progress` is written), so a reported line keeps "Final
@@ -108,8 +117,12 @@ Task naming conventions (per Shawn's Service & QC Team Responsibilities
 doc — "correct it rather than simply report it"):
 
 - `REPORT: <location>` — crew found a problem that needs a return trip.
-  Created **unassigned**, progress 0; the Service Manager / PM edits it
-  into a work order and assigns it on the Production board.
+  Progress 0. On a **roofing job** (Job Type `Roofing`, or any `R-`
+  Project Type) it is created **assigned to the punch crew** — Alberto
+  Gonzalez `22PdPUpWzpHy` and Yahir Gonzalez `22PdPTwMdkzj`, the staff
+  memberships (`PUNCH_CREW` in `packages/shared/src/jobtread.ts`); on a
+  construction job it is created unassigned for the PM. The Service
+  Manager / PM edits it into a work order on the Production board.
 - `FIXED ON SITE: <location>` — crew corrected it during the visit.
   Created already **complete** (progress 1); it exists purely as
   documentation (what was found, materials & time, who did the original
@@ -134,17 +147,17 @@ completing two of them is what moves the job's Status.
 | 1 | Order materials | Pre-Production `22PDM6m8Vdqw` | planning bar |
 | 2 | Roof install | Pre-Production `22PDM6m8Vdqw` | planning bar |
 | 3 | Final inspection | **Inspection `22PNJDrm6TsA`** | carries the 8 checklist items as **subtasks**; the crew app ticks them and completes it |
-| 4 | Punch list | General `22PBAjfWNQrT` | phase marker; **its checklist mirrors the job's punch to-dos** (`REPORT: <where> — <note>`, ticked when the to-do closes), it completes with the last one, and a clean inspection marks it "not required" in the notes |
+| 4 | Punch list | **Punch List `22PLePTbJVrQ`** (since 2026-09-21; scheduled, not a to-do) | phase marker; **its checklist mirrors the job's punch to-dos** (`REPORT: <where>`, ticked when the to-do closes), it completes with the last one, and a clean inspection marks it "not required" in the notes |
 | 5 | PM punch review | General `22PBAjfWNQrT` | PM's own check-off (no status of its own) |
 | 6 | Final check-off | General `22PBAjfWNQrT` | **sales rep** has spoken to the customer; completing it closes the job |
 
 **Every task carries a type on purpose, and two of those choices are
 load-bearing:**
 
-- **"Punch list" is General, never Punch List.** `listPunchTasks` filters
-  on task type alone, so a permanently-open phase task typed Punch List
-  would count as an unfinished punch item on every job and the Punch
-  Review flip would never fire again, anywhere.
+- **"Punch list" is typed Punch List but is a SCHEDULED task, never a
+  to-do.** Punch items are the Punch List-typed **to-dos** the app creates;
+  `listPunchTasks` and the assigned-work scan filter on type AND `isToDo`,
+  so the phase task never counts as an unfinished punch item.
 - **"Order materials" and "Roof install" are Pre-Production, not Install
   or Roofing.** The DB Production Board's task sweep accepts Install,
   Roofing **and untyped** tasks and then resolves a crew from the

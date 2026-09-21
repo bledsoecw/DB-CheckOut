@@ -145,7 +145,7 @@ test("the milestones are found by name", () => {
   const tasks = [
     pipelineTask("Order materials", TASK_TYPES.preProduction),
     pipelineTask("Final inspection", TASK_TYPES.inspection),
-    pipelineTask("Punch list", TASK_TYPES.general),
+    pipelineTask("Punch list", TASK_TYPES.punchList),
     pipelineTask("Final check-off", TASK_TYPES.general),
   ];
   assert.equal(findPipelineTask(tasks, PIPELINE_TASKS.finalInspection)?.name, "Final inspection");
@@ -246,7 +246,7 @@ function fakeJobPave(job: FakeJob): { client: PaveClient; writes: PaveQuery[] } 
         return {
           job: {
             tasks: {
-              nodes: job.punch.map((t) => ({ ...t, description: t.description ?? null, endDate: null, taskType: { id: TASK_TYPES.punchList }, assignedMemberships: { nodes: [] } })),
+              nodes: job.punch.map((t) => ({ ...t, description: t.description ?? null, endDate: null, isToDo: true, taskType: { id: TASK_TYPES.punchList }, assignedMemberships: { nodes: [] } })),
             },
           },
         } as T;
@@ -261,7 +261,7 @@ function fakeJobPave(job: FakeJob): { client: PaveClient; writes: PaveQuery[] } 
 
 const templateOn = (finalInspectionProgress: number | null, punchListSubtasks: Array<{ name: string; isComplete: boolean }> = []) => [
   { id: "fi", name: "Final inspection", progress: finalInspectionProgress, typeId: TASK_TYPES.inspection, subtasks: [] },
-  { id: "pl", name: "Punch list", progress: null, typeId: TASK_TYPES.general, subtasks: punchListSubtasks },
+  { id: "pl", name: "Punch list", progress: null, typeId: TASK_TYPES.punchList, subtasks: punchListSubtasks },
   { id: "co", name: "Final check-off", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
 ];
 
@@ -364,7 +364,7 @@ test("applyPipeline ticks the inspection line when its punch item closes", async
         description: "✔ Inspected by Carl Bledsoe — via DB CheckOut",
         subtasks: [{ name: "8. Attic / interior spot check — leak-prone areas inspected · ⚠ REPORT — Leak", isComplete: false }],
       },
-      ...templateOn(0, [{ name: "REPORT: Attic — Leak", isComplete: false }]).slice(1),
+      ...templateOn(0, [{ name: "REPORT: Attic", isComplete: false }]).slice(1),
     ],
   });
   assert.equal(await applyPipeline(client, "job1"), STATUS.pmReview);

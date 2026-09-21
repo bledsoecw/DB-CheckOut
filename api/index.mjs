@@ -233,10 +233,17 @@ var PIPELINE_TASKS = {
   /** Crew ticks the checklist here; completing it ends the inspection. */
   finalInspection: { name: "Final inspection", typeId: TASK_TYPES.inspection },
   /** Its checklist mirrors the job's punch to-dos; it completes when the last one closes. */
-  punchList: { name: "Punch list", typeId: TASK_TYPES.general },
+  punchList: { name: "Punch list", typeId: TASK_TYPES.punchList },
   /** Sales rep has spoken to the customer; completing it closes the job. */
   finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general }
 };
+var PUNCH_CREW = [
+  { name: "Alberto Gonzalez", membershipId: "22PdPUpWzpHy" },
+  { name: "Yahir Gonzalez", membershipId: "22PdPTwMdkzj" }
+];
+function isRoofingJob(job) {
+  return job.jobType === "Roofing" || job.projectTypes.some((t) => t.startsWith("R-"));
+}
 
 // apps/sync/src/jt.ts
 function cfv(job, fieldId) {
@@ -358,6 +365,12 @@ async function listPipelineJobs(pave) {
   }
   return out.sort((a, b) => a.number.localeCompare(b.number));
 }
+async function getJobBasics(pave, jobId) {
+  const res = await pave.query({
+    job: { $: { id: jobId }, ...JOB_SELECTION }
+  });
+  return res.job ? toQueueJob(res.job) : null;
+}
 async function getJobStatusValue(pave, jobId) {
   const res = await pave.query({
     job: { $: { id: jobId }, ...JOB_SELECTION }
@@ -395,6 +408,7 @@ async function listPunchTasks(pave, jobId) {
           description: {},
           progress: {},
           endDate: {},
+          isToDo: {},
           taskType: { id: {} },
           // 50 x 10 with the user fields is over Pave's declared-size budget
           // ("Request Entity Too Large", verified live 2026-09-21 — it took
@@ -409,7 +423,7 @@ async function listPunchTasks(pave, jobId) {
     }
   });
   const nodes = res.job?.tasks.nodes ?? [];
-  return nodes.filter((t) => t.taskType?.id === TASK_TYPES.punchList).map((t) => {
+  return nodes.filter((t) => t.taskType?.id === TASK_TYPES.punchList && t.isToDo === true).map((t) => {
     const assignees = (t.assignedMemberships?.nodes ?? []).map((m) => ({
       membershipId: m.id,
       name: m.user?.name ?? "",
@@ -463,7 +477,8 @@ async function listAssignedWorkByJob(pave, viewer) {
                 and: [
                   {
                     or: [
-                      [["taskType", "id"], "=", TASK_TYPES.punchList],
+                      // Punch items are to-dos; the scheduled "Punch list" phase task shares the type.
+                      { and: [[["taskType", "id"], "=", TASK_TYPES.punchList], [["isToDo"], "=", true]] },
                       [["taskType", "id"], "=", TASK_TYPES.inspection]
                     ]
                   },
@@ -550,44 +565,97 @@ var oneLine = (text, max) => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
 };
-function findingSuffix(findings) {
-  if (findings.length === 0) return "";
-  const parts = findings.map((f) => {
-    const note = oneLine(f.note, 160);
-    return f.fixedOnSite ? `\u2714 FIXED ON SITE${note ? ` \u2014 ${note}` : ""}` : `\u26A0 REPORT${note ? ` \u2014 ${note}` : ""}`;
-  });
-  return ` \xB7 ${parts.join(" | ")}`;
-}
 function checklistSubtasks(visit, current = []) {
   const answered = { ...visit.cleanup, ...visit.inspection };
   const findingsFor = (key) => (visit.findings ?? []).filter((f) => f.itemKey === key);
   return CHECKLIST_ITEMS.map((item) => {
     const findings = findingsFor(item.key);
     const answer = answered[item.key];
-    const already = current.find((s) => s.name.startsWith(item.subtask))?.isComplete === true;
+    const already = current.find((s) => s.name === item.subtask)?.isComplete === true;
     const ticked = answer === ANSWER.ok || answer === ANSWER.na || answer === ANSWER.action && findings.length > 0 && findings.every((f) => f.fixedOnSite) || already;
-    return { name: `${item.subtask}${findingSuffix(findings)}`, isComplete: ticked };
+    return { name: item.subtask, isComplete: ticked };
   });
 }
-function inspectionNote(visit, byName) {
+function inspectionNote(_visit, byName) {
+  return `${INSPECTED_STAMP}${byName} \u2014 ${CHECKLIST_STAMP}`;
+}
+function visitNotesMessage(visit, byName) {
   const notes = visit.notes ?? {};
-  const lines = [`${INSPECTED_STAMP}${byName} \u2014 ${CHECKLIST_STAMP}`];
+  const lines = [];
   if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
   if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
   if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
-  const findings = (visit.findings ?? []).filter((f) => checklistItemByKey(f.itemKey));
-  if (findings.length > 0) {
-    lines.push("Findings:");
-    for (const f of findings) {
-      const item = checklistItemByKey(f.itemKey);
-      const state = f.fixedOnSite ? "FIXED ON SITE" : "REPORT \u2014 punch item";
-      const photos = f.photos > 0 ? ` (${f.photos} photo${f.photos === 1 ? "" : "s"})` : "";
-      lines.push(`- ${item.subtask}: ${state}${photos}${f.note.trim() ? ` \u2014 ${f.note.trim()}` : ""}`);
-    }
-  }
+  if (lines.length === 0) return null;
+  lines.push(`\u2014 ${byName} via DB CheckOut`);
   return lines.join("\n");
 }
-async function closeInspectionTask(pave, taskId, visit, byName) {
+var COMMENT_VISIBILITY = {
+  isVisibleToInternalRoles: true,
+  isVisibleToCustomerRoles: false,
+  isVisibleToVendorRoles: false
+};
+async function findCommentByRef(pave, taskId, ref) {
+  const marker = clientRefMarker(ref);
+  if (!marker) return null;
+  const res = await pave.query({
+    task: {
+      $: { id: taskId },
+      comments: { $: { size: 5, where: [["message"], "like", `%${marker}%`] }, nodes: { id: {} } }
+    }
+  });
+  return res.task?.comments?.nodes?.[0]?.id ?? null;
+}
+async function postTaskMessage(pave, taskId, message, clientRef2) {
+  const marker = clientRefMarker(clientRef2);
+  if (marker && clientRef2) {
+    const existing = await findCommentByRef(pave, taskId, clientRef2);
+    if (existing) return existing;
+  }
+  const res = await pave.query({
+    createComment: {
+      $: {
+        targetType: "task",
+        targetId: taskId,
+        message: marker ? `${message}
+
+${marker}` : message,
+        ...COMMENT_VISIBILITY
+      },
+      createdComment: { id: {} }
+    }
+  });
+  return res.createComment.createdComment?.id ?? "";
+}
+function findingMessage(report, byName) {
+  const item = checklistItemByKey(report.itemKey);
+  const fixed = report.fixedOnSite === true;
+  const lines = [item ? item.subtask : `Problem report \u2014 ${report.location}`];
+  const note = report.englishNote.trim();
+  lines.push(fixed ? `\u2714 FIXED ON SITE${note ? ` \u2014 ${note}` : ""}` : `\u26A0 REPORT (punch item)${note ? ` \u2014 ${note}` : ""}`);
+  if (item && report.location.trim() && report.location.trim() !== item.subtask) lines.push(`Where: ${report.location.trim()}`);
+  if (fixed && report.materialsNote?.trim()) lines.push(`Materials & time: ${report.materialsNote.trim()}`);
+  if (report.heardText?.trim()) lines.push(`Crew said (verbatim): "${report.heardText.trim()}"`);
+  if (report.originalCrew?.trim()) lines.push(`Original work by: ${report.originalCrew.trim()}`);
+  lines.push(`Reported by ${byName} via DB CheckOut`);
+  return lines.join("\n");
+}
+async function attachFileToComment(pave, commentId, fileId) {
+  const res = await pave.query({
+    comment: { $: { id: commentId }, files: { $: { size: 10 }, nodes: { id: {}, file: { id: {} } } } }
+  });
+  const current = res.comment?.files.nodes ?? [];
+  if (current.some((f) => f.file?.id === fileId)) return "already";
+  await pave.query({
+    updateComment: {
+      $: {
+        id: commentId,
+        files: [...current.map((f) => ({ _type: "commentFile", id: f.id })), { _type: "file", id: fileId }]
+      }
+    }
+  });
+  return "attached";
+}
+async function closeInspectionTask(pave, taskId, visit, byName, clientRef2) {
   const res = await pave.query({
     task: { $: { id: taskId }, description: {}, subtasks: { name: {}, isComplete: {} } }
   });
@@ -612,6 +680,8 @@ ${note}` : note;
       }
     }
   });
+  const message = visitNotesMessage(visit, byName);
+  if (message) await postTaskMessage(pave, taskId, message, clientRef2 ? `${clientRef2}.notes` : void 0);
 }
 async function syncInspectionChecklist(pave, task, punchTasks) {
   if (!task || task.subtasks.length === 0) return "none";
@@ -649,10 +719,7 @@ ${note}` : note;
     });
     return "updated";
   }
-  const desired = punchTasks.map((t) => {
-    const note = oneLine((t.description ?? "").split("\n")[0] ?? "", 140);
-    return { name: note ? `${t.name} \u2014 ${note}` : t.name, isComplete: t.progress >= 1 };
-  });
+  const desired = punchTasks.map((t) => ({ name: t.name, isComplete: t.progress >= 1 }));
   const allDone = desired.every((s) => s.isComplete);
   const same = task.subtasks.length === desired.length && task.subtasks.every((s, i) => s.name === desired[i].name && s.isComplete === desired[i].isComplete);
   if (same && (complete || !allDone)) return "unchanged";
@@ -694,7 +761,7 @@ async function findFileByRef(pave, targetType, targetId, ref) {
   });
   return res[targetType]?.files.nodes[0]?.id ?? null;
 }
-async function createReportTask(pave, jobId, report, clientRef2) {
+async function createReportTask(pave, jobId, report, clientRef2, assignedMembershipIds = []) {
   const marker = clientRefMarker(clientRef2);
   if (marker && clientRef2) {
     const existing = await findTaskByRef(pave, jobId, clientRef2);
@@ -722,7 +789,8 @@ DB CheckOut item: ${item.code}`);
         isToDo: true,
         name: `${fixed ? "FIXED ON SITE" : "REPORT"}: ${report.location}`,
         description: lines.join("\n\n").slice(0, 4096),
-        ...fixed ? { progress: 1 } : {}
+        ...fixed ? { progress: 1 } : {},
+        ...assignedMembershipIds.length > 0 ? { assignedMembershipIds: [...assignedMembershipIds] } : {}
       },
       createdTask: { id: {} }
     }
@@ -1196,7 +1264,7 @@ function createHandler(deps) {
           const milestones = await listPipelineTasks(deps.pave, jobId);
           const task = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
           if (task) {
-            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name);
+            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name, clientRef(req));
           }
           const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
           return json(res, 200, { completedTaskId: task?.id ?? null, flipped });
@@ -1207,7 +1275,24 @@ function createHandler(deps) {
             return json(res, 400, { error: "location and englishNote are required" });
           }
           const ref = clientRef(req);
-          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref);
+          let assignTo = [];
+          if (report.fixedOnSite !== true) {
+            try {
+              const basics = await getJobBasics(deps.pave, jobId);
+              if (basics && isRoofingJob(basics)) assignTo = PUNCH_CREW.map((m) => m.membershipId);
+            } catch {
+            }
+          }
+          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref, assignTo);
+          let commentId = null;
+          try {
+            const inspection = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection);
+            if (inspection) {
+              commentId = await postTaskMessage(deps.pave, inspection.id, findingMessage(report, session.name), ref);
+            }
+          } catch (err) {
+            console.warn(`finding message not posted for ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+          }
           const sources = [
             ...Array.isArray(report.photosBase64) ? report.photosBase64 : [],
             report.photoBase64
@@ -1228,7 +1313,7 @@ function createHandler(deps) {
             } catch {
             }
           }
-          return json(res, 200, { taskId: id, photosUploaded, photoUploaded: photosUploaded > 0 });
+          return json(res, 200, { taskId: id, commentId, photosUploaded, photoUploaded: photosUploaded > 0 });
         }
         if (parts[2] === "photos") {
           const body = await readBody(req);
@@ -1254,28 +1339,25 @@ function createHandler(deps) {
             } catch {
             }
           }
-          const primaryTaskId = taskId ?? (label === "INSPECTION" ? inspectionTaskId : void 0);
           const upload = {
             label,
             ...photo,
-            taskId: primaryTaskId,
+            taskId: taskId ?? (label === "INSPECTION" ? inspectionTaskId : void 0),
             byName: session.name,
             clientRef: ref,
             title
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
-          let inspectionFileId = null;
-          if (label === "REPORT" && inspectionTaskId && inspectionTaskId !== primaryTaskId) {
+          let commentId = null;
+          if (label === "REPORT" && inspectionTaskId && typeof body.reportRef === "string" && fileId) {
             try {
-              inspectionFileId = await uploadPhoto(deps.pave, jobId, {
-                ...upload,
-                taskId: inspectionTaskId,
-                clientRef: ref ? `${ref}.fi` : void 0
-              });
-            } catch {
+              commentId = await findCommentByRef(deps.pave, inspectionTaskId, body.reportRef);
+              if (commentId) await attachFileToComment(deps.pave, commentId, fileId);
+            } catch (err) {
+              console.warn(`photo not linked to the finding message on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
-          return json(res, 200, { fileId, inspectionFileId });
+          return json(res, 200, { fileId, commentId });
         }
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {

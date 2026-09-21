@@ -151,10 +151,10 @@ export const TASK_TYPES = {
  * Every task carries a type on purpose, and two of those choices are
  * load-bearing:
  *
- * - "Punch list" is typed **General, never Punch List**. `listPunchTasks`
- *   filters on task type alone, so a permanently-open phase task typed
- *   Punch List would count as an unfinished punch item on every job and the
- *   PM Review flip would never fire again, anywhere.
+ * - "Punch list" is typed **Punch List** (since 2026-09-21) but it is a
+ *   SCHEDULED task, never a to-do. Punch items are the Punch List-typed
+ *   TO-DOs the app creates; `listPunchTasks` filters on type AND `isToDo`,
+ *   so the phase task never counts as an unfinished punch item.
  * - "Order materials" and "Roof install" are typed **Pre-Production, not
  *   Install or Roofing**. The DB Production Board's task sweep accepts
  *   Install, Roofing AND untyped tasks and then resolves a crew from the
@@ -181,12 +181,32 @@ export const PIPELINE_TASKS = {
   /** Crew ticks the checklist here; completing it ends the inspection. */
   finalInspection: { name: "Final inspection", typeId: TASK_TYPES.inspection },
   /** Its checklist mirrors the job's punch to-dos; it completes when the last one closes. */
-  punchList: { name: "Punch list", typeId: TASK_TYPES.general },
+  punchList: { name: "Punch list", typeId: TASK_TYPES.punchList },
   /** Sales rep has spoken to the customer; completing it closes the job. */
   finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general },
 } as const;
 
 export type PipelineTaskKey = keyof typeof PIPELINE_TASKS;
+
+// ---------------------------------------------------------------------------
+// The punch crew
+// ---------------------------------------------------------------------------
+
+/**
+ * Who a REPORT: to-do is assigned to as it is created, on roofing jobs: the
+ * service crew's JobTread STAFF memberships (company-domain accounts — not
+ * the vendor entry "Alberto/Jorge Gonzalez", which the app cannot match to
+ * a signed-in person).
+ */
+export const PUNCH_CREW = [
+  { name: "Alberto Gonzalez", membershipId: "22PdPUpWzpHy" },
+  { name: "Yahir Gonzalez", membershipId: "22PdPTwMdkzj" },
+] as const;
+
+/** Roofing work: Job Type Roofing, or any R- Project Type (service calls included). */
+export function isRoofingJob(job: { jobType: string | null; projectTypes: readonly string[] }): boolean {
+  return job.jobType === "Roofing" || job.projectTypes.some((t) => t.startsWith("R-"));
+}
 
 // ---------------------------------------------------------------------------
 // Roles
