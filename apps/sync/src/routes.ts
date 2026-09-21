@@ -230,6 +230,12 @@ export function createHandler(deps: RouterDeps) {
         }
         const body = (await readBody(req)) as Record<string, unknown>;
         const jobId = extractJobId(body);
+        // One line per delivery: what JT sent and what we made of it. The
+        // payload shape is not documented anywhere we can read, and a wrong
+        // guess here is a silent no-op forever.
+        console.log(
+          `jobtread webhook keys=${Object.keys(body).join(",")} jobId=${jobId ?? "-"} body=${JSON.stringify(body).slice(0, 700)}`,
+        );
         let flipped: string | null = null;
         if (jobId) {
           // Best-effort: a failed check must answer 200, or JobTread retries

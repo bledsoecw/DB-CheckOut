@@ -1116,6 +1116,9 @@ function createHandler(deps) {
         }
         const body = await readBody(req);
         const jobId = extractJobId(body);
+        console.log(
+          `jobtread webhook keys=${Object.keys(body).join(",")} jobId=${jobId ?? "-"} body=${JSON.stringify(body).slice(0, 700)}`
+        );
         let flipped = null;
         if (jobId) {
           try {
