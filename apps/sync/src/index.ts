@@ -15,6 +15,7 @@ const handler = createHandler({
   workspaceDomain: env.workspaceDomain,
   allowedEmails: env.allowedEmails,
   webhookSecret: env.webhookSecret,
+  crewAppSecret: env.crewAppSecret,
 });
 
 const server = createServer((req, res) => {

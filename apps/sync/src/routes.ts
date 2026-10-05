@@ -42,7 +42,7 @@ import {
   type VisitChecklists,
 } from "./jt";
 import { applyPipeline } from "./pipeline";
-import { summarizeScope, transcribeNote, translateToSpanish, TRANSLATE_LIMITS } from "./translate";
+import { summarizeScope, transcribeNote, translateTexts, TRANSLATE_LIMITS } from "./translate";
 
 export interface RouterDeps {
   pave: PaveClient;
@@ -53,6 +53,15 @@ export interface RouterDeps {
   workspaceDomain: string;
   allowedEmails: string[];
   webhookSecret: string;
+  /**
+   * The shared secret DB Crew's Apps Script sends. With it, the request acts
+   * for the person named in X-Acting-Email / X-Acting-Name — the Apps Script
+   * has already verified that person's Google token and gates them by role,
+   * the way the Production Board trusts the same deployment on its own
+   * /api/crew routes. Empty disables the door: a bearer that is not a session
+   * token is then simply unauthorized.
+   */
+  crewAppSecret: string;
   /** Injectable for tests; defaults to the real Google JWKS verification. */
   verifyGoogle?: (credential: string, clientId: string) => Promise<Record<string, unknown>>;
 }
@@ -67,6 +76,39 @@ function bearerToken(req: IncomingMessage): string {
  * The app's reference for this send (its outbox item id), so a re-send of
  * a write that already landed is recognised rather than repeated.
  */
+const headerValue = (req: IncomingMessage, name: string): string => {
+  const header = req.headers[name];
+  const value = Array.isArray(header) ? header[0] : header;
+  return typeof value === "string" ? value.trim() : "";
+};
+
+/**
+ * Who this request acts for. Either the app's own session token, or — when
+ * the bearer is the Crew App's shared secret — the person that deployment
+ * names in its headers. The named person still has to pass the same domain /
+ * allow-list gate a sign-in does, so the secret can never act for an
+ * outsider; and a wrong secret is never a hint, it reads exactly like no
+ * token at all.
+ */
+export function actingUser(req: IncomingMessage, deps: Pick<RouterDeps, "sessionSecret" | "crewAppSecret" | "workspaceDomain" | "allowedEmails">): SessionUser | null {
+  const bearer = bearerToken(req);
+  if (!bearer) return null;
+  if (deps.crewAppSecret && bearer === deps.crewAppSecret) {
+    const email = headerValue(req, "x-acting-email").toLowerCase();
+    if (!email) return null;
+    try {
+      return assertAllowedIdentity(
+        { email, email_verified: true, name: headerValue(req, "x-acting-name") || undefined },
+        deps.workspaceDomain,
+        deps.allowedEmails,
+      );
+    } catch {
+      return null;
+    }
+  }
+  return deps.sessionSecret ? verifySession(deps.sessionSecret, bearer) : null;
+}
+
 function clientRef(req: IncomingMessage): string | undefined {
   const header = req.headers["x-client-ref"];
   const value = Array.isArray(header) ? header[0] : header;
@@ -199,6 +241,7 @@ export function createHandler(deps: RouterDeps) {
           signIn: Boolean(deps.googleClientId && deps.sessionSecret),
           gemini: Boolean(deps.geminiApiKey),
           webhook: Boolean(deps.webhookSecret),
+          crewApp: Boolean(deps.crewAppSecret),
         });
       }
 
@@ -254,10 +297,9 @@ export function createHandler(deps: RouterDeps) {
         return json(res, 200, { ok: true, flipped });
       }
 
-      // Everything below requires a signed-in session.
-      const session: SessionUser | null = deps.sessionSecret
-        ? verifySession(deps.sessionSecret, bearerToken(req))
-        : null;
+      // Everything below requires a signed-in session — the app's own, or
+      // DB Crew acting for its signed-in person (see actingUser).
+      const session: SessionUser | null = actingUser(req, deps);
       if (!session) return json(res, 401, { error: "Unauthorized" });
 
       // Dictated field note -> verbatim transcription + clean English note.
@@ -269,10 +311,14 @@ export function createHandler(deps: RouterDeps) {
         return json(res, 200, await transcribeNote(audio, deps));
       }
 
-      // ES translation of JobTread text (scope lines, punch work orders).
+      // Translation: JobTread text into Spanish for the crew (the default),
+      // or a crew member's Spanish note into English for the office (`to: "en"`,
+      // which is how DB Crew's Close Out makes the English note a dictated
+      // report carries).
       if (req.method === "POST" && url.pathname === "/translate") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Translation is not configured" });
-        const body = (await readBody(req)) as { texts?: unknown };
+        const body = (await readBody(req)) as { texts?: unknown; to?: unknown };
+        const to = body.to === "en" ? "en" : "es";
         const texts = Array.isArray(body.texts)
           ? body.texts.filter((t): t is string => typeof t === "string" && t.length > 0)
           : [];
@@ -283,7 +329,7 @@ export function createHandler(deps: RouterDeps) {
         ) {
           return json(res, 400, { error: "texts must be 1-100 strings, each under 4000 chars" });
         }
-        const translations = await translateToSpanish(texts, deps);
+        const translations = await translateTexts(texts, to, deps);
         return json(res, 200, { translations });
       }
 

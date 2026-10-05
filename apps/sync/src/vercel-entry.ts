@@ -39,6 +39,7 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
         workspaceDomain: env.workspaceDomain,
         allowedEmails: env.allowedEmails,
         webhookSecret: env.webhookSecret,
+        crewAppSecret: env.crewAppSecret,
       });
     }
     await handler(req, res);

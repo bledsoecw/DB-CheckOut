@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { transcribeNote, translateToSpanish } from "../src/translate";
+import { transcribeNote, translateTexts, translateToSpanish } from "../src/translate";
 import { decodeAudio } from "../src/routes";
 
 const env = { geminiApiKey: "k", geminiModel: "gemini-test" };
@@ -140,4 +140,22 @@ test("decodeAudio normalizes loose browser labels and rejects with reasons", () 
   assert.match(reject(""), /data URI string/);
   assert.match(reject(`data:audio/mp4;base64,${"A".repeat(5_600_001)}`), /too long/);
   assert.match(reject("data:audio/mp4;base64,"), /empty/);
+});
+
+test("translateTexts keeps the two directions apart in its cache", async () => {
+  const env = { geminiApiKey: "k", geminiModel: "m" };
+  let prompts: string[] = [];
+  const fakeFetch = (async (_url: unknown, init?: { body?: string }) => {
+    const sent = JSON.parse(String(init?.body ?? "{}")) as { contents?: Array<{ parts?: Array<{ text?: string }> }> };
+    const text = sent.contents?.[0]?.parts?.[0]?.text ?? "";
+    prompts.push(text);
+    const arr = JSON.parse(text.slice(text.indexOf("\n\n") + 2)) as string[];
+    const out = arr.map((t) => (text.includes("Spanish, English or a mix") ? `EN(${t})` : `ES(${t})`));
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(out) }] } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+  assert.deepEqual(await translateTexts(["la bota está rota"], "en", env, fakeFetch), ["EN(la bota está rota)"]);
+  assert.deepEqual(await translateTexts(["la bota está rota"], "es", env, fakeFetch), ["ES(la bota está rota)"]);
+  prompts = [];
+  assert.deepEqual(await translateTexts(["la bota está rota"], "en", env, fakeFetch), ["EN(la bota está rota)"]);
+  assert.equal(prompts.length, 0, "the English answer was cached");
 });

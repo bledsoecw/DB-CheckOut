@@ -80,6 +80,20 @@ paste values only in Vercel's dashboard, never in the repo) → Deploy.
 The JobTread webhook URL is then
 `https://<project>.vercel.app/webhooks/jobtread/<WEBHOOK_SECRET>`.
 
+**The crew's face is DB Crew now (Oct 2026).** The inspection, cleanup,
+report and repair screens were redrawn inside DB Crew
+(`bledsoecw/db-crew-app`, the former DB Time Clock), so the service crew has
+one app, and this repo is the SERVER behind that tab. The Expo app under
+`apps/mobile` still builds and still works, but it is no longer what gets
+installed on a phone. DB Crew's Apps Script calls this server for the
+signed-in person with a shared secret: set `CREW_APP_SECRET` in Vercel (same
+value as that script's `CLOSEOUT_SECRET` property) and every protected route
+accepts `Authorization: Bearer <that secret>` plus `X-Acting-Email` /
+`X-Acting-Name`, the person being gated by the same domain / allow-list rule a
+sign-in passes. Unset, the door does not exist. `GET /health` reports it as
+`crewApp`. `POST /translate` also takes `to: "en"` now, which is how a note
+dictated in Spanish on that app becomes the English the office reads.
+
 **Sign-in** is Google Workspace: the gate screen shows a Sign in with
 Google button (accounts on the company domain, plus any addresses in
 `GOOGLE_ALLOWED_EMAILS`). The server verifies the Google ID token and

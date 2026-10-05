@@ -97,6 +97,7 @@ function deps(queries: PaveQuery[]): RouterDeps {
     workspaceDomain: "deitemeyerbrothers.com",
     allowedEmails: [],
     webhookSecret: "hook-secret",
+    crewAppSecret: "",
   };
 }
 

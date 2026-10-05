@@ -12,13 +12,25 @@ const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 export const TRANSLATE_LIMITS = { maxTexts: 100, maxTextLength: 4000 } as const;
 
-const PROMPT =
-  "Translate each string in the JSON array from English to Latin American Spanish " +
-  "for a roofing/construction field crew. Keep brand names, product names, model " +
-  "numbers, measurements and numbers unchanged. Keep it natural and concise. " +
-  "Return ONLY a JSON array of the translated strings, same length, same order.";
+export type TranslateTo = "es" | "en";
 
-const cache = new Map<string, string>();
+const PROMPTS: Record<TranslateTo, string> = {
+  es:
+    "Translate each string in the JSON array from English to Latin American Spanish " +
+    "for a roofing/construction field crew. Keep brand names, product names, model " +
+    "numbers, measurements and numbers unchanged. Keep it natural and concise. " +
+    "Return ONLY a JSON array of the translated strings, same length, same order.",
+  // The other direction: a note a crew member dictated or typed in Spanish
+  // (or a mix), made into the clean English the office reads. Same rules.
+  en:
+    "Each string in the JSON array is a field note from a roofing/construction crew " +
+    "member, in Spanish, English or a mix. Rewrite each as clear, concise English for " +
+    "the office. Keep brand names, product names, model numbers, measurements and " +
+    "numbers unchanged. A string already in English is returned cleaned up, not changed " +
+    "in meaning. Return ONLY a JSON array of the strings, same length, same order.",
+};
+
+const caches: Record<TranslateTo, Map<string, string>> = { es: new Map(), en: new Map() };
 
 interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
@@ -138,8 +150,9 @@ async function geminiTranslate(
   texts: string[],
   env: Pick<Env, "geminiApiKey" | "geminiModel">,
   fetchImpl: typeof fetch,
+  to: TranslateTo = "es",
 ): Promise<string[]> {
-  const raw = await geminiGenerate(`${PROMPT}\n\n${JSON.stringify(texts)}`, env, fetchImpl);
+  const raw = await geminiGenerate(`${PROMPTS[to]}\n\n${JSON.stringify(texts)}`, env, fetchImpl);
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed) || parsed.length !== texts.length) {
     throw new Error("Gemini returned a mismatched translation array");
@@ -206,10 +219,21 @@ export async function translateToSpanish(
   env: Pick<Env, "geminiApiKey" | "geminiModel">,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string[]> {
+  return translateTexts(texts, "es", env, fetchImpl);
+}
+
+/** Either direction; cached per direction, so a note never comes back as itself. */
+export async function translateTexts(
+  texts: string[],
+  to: TranslateTo,
+  env: Pick<Env, "geminiApiKey" | "geminiModel">,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string[]> {
   if (!env.geminiApiKey) throw new Error("Translation is not configured");
+  const cache = caches[to];
   const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
   if (missing.length > 0) {
-    const translated = await geminiTranslate(missing, env, fetchImpl);
+    const translated = await geminiTranslate(missing, env, fetchImpl, to);
     missing.forEach((t, i) => cache.set(t, translated[i]));
   }
   return texts.map((t) => cache.get(t) ?? t);

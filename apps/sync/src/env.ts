@@ -10,6 +10,11 @@ export interface Env {
   allowedEmails: string[];
   /** Validates the JobTread webhook URL path. Webhook is disabled until set. */
   webhookSecret: string;
+  /**
+   * Lets DB Crew's Apps Script act for a signed-in person: a bearer token
+   * equal to this, plus X-Acting-Email / X-Acting-Name. Off until set.
+   */
+  crewAppSecret: string;
   /** Public base URL of this deployment, used to self-register the webhook. */
   publicUrl: string;
   /** Gemini API key for ES translation of JT text. Disabled until set. */
@@ -33,6 +38,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
+    crewAppSecret: source.CREW_APP_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     geminiApiKey: source.GEMINI_API_KEY ?? "",
     geminiModel: source.GEMINI_MODEL ?? "gemini-flash-lite-latest",

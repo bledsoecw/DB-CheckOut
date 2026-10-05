@@ -95,8 +95,47 @@ function routerDeps(responder: (q: PaveQuery) => unknown, queries: PaveQuery[]):
     workspaceDomain: "deitemeyerbrothers.com",
     allowedEmails: [],
     webhookSecret: "",
+    crewAppSecret: "",
   };
 }
+
+// --------------------------------------------------------------------------
+// DB Crew acting for its signed-in person
+// --------------------------------------------------------------------------
+
+test("the Crew App's shared secret acts for the person it names, on the same gate a sign-in passes", async () => {
+  const queries: PaveQuery[] = [];
+  const deps = { ...routerDeps(() => ({ customField: { customFieldValues: { nodes: [], nextPage: null } } }), queries), crewAppSecret: "crew-secret" };
+  const handle = createHandler(deps);
+
+  const asCrew = (email: string, name = "Alberto Gonzalez") =>
+    fakeHttp("GET", "/queue", { authorization: "Bearer crew-secret", "x-acting-email": email, "x-acting-name": name });
+
+  let h = asCrew("alberto@deitemeyerbrothers.com");
+  await handle(h.req, h.res);
+  assert.equal(h.out.status, 200, "a domain account acts through the door");
+
+  h = asCrew("stranger@gmail.com");
+  await handle(h.req, h.res);
+  assert.equal(h.out.status, 401, "the secret cannot act for an outsider");
+
+  h = fakeHttp("GET", "/queue", { authorization: "Bearer crew-secret" });
+  await handle(h.req, h.res);
+  assert.equal(h.out.status, 401, "the secret alone names nobody");
+
+  h = fakeHttp("GET", "/queue", { authorization: "Bearer wrong-secret", "x-acting-email": "alberto@deitemeyerbrothers.com" });
+  await handle(h.req, h.res);
+  assert.equal(h.out.status, 401, "a wrong secret reads like no token");
+
+  const off = createHandler({ ...deps, crewAppSecret: "" });
+  h = asCrew("alberto@deitemeyerbrothers.com");
+  await off(h.req, h.res);
+  assert.equal(h.out.status, 401, "unset, the door does not exist");
+
+  h = fakeHttp("GET", "/queue");
+  await handle(h.req, h.res);
+  assert.equal(h.out.status, 200, "the app's own session still works beside it");
+});
 
 const PIXEL = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
 

@@ -13,6 +13,7 @@ function loadEnv(source = process.env) {
     workspaceDomain: (source.GOOGLE_WORKSPACE_DOMAIN ?? "deitemeyerbrothers.com").toLowerCase(),
     allowedEmails: (source.GOOGLE_ALLOWED_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
+    crewAppSecret: source.CREW_APP_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     geminiApiKey: source.GEMINI_API_KEY ?? "",
     geminiModel: source.GEMINI_MODEL ?? "gemini-flash-lite-latest",
@@ -928,8 +929,13 @@ async function applyPipeline(pave, jobId, opts = {}) {
 // apps/sync/src/translate.ts
 var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var TRANSLATE_LIMITS = { maxTexts: 100, maxTextLength: 4e3 };
-var PROMPT = "Translate each string in the JSON array from English to Latin American Spanish for a roofing/construction field crew. Keep brand names, product names, model numbers, measurements and numbers unchanged. Keep it natural and concise. Return ONLY a JSON array of the translated strings, same length, same order.";
-var cache = /* @__PURE__ */ new Map();
+var PROMPTS = {
+  es: "Translate each string in the JSON array from English to Latin American Spanish for a roofing/construction field crew. Keep brand names, product names, model numbers, measurements and numbers unchanged. Keep it natural and concise. Return ONLY a JSON array of the translated strings, same length, same order.",
+  // The other direction: a note a crew member dictated or typed in Spanish
+  // (or a mix), made into the clean English the office reads. Same rules.
+  en: "Each string in the JSON array is a field note from a roofing/construction crew member, in Spanish, English or a mix. Rewrite each as clear, concise English for the office. Keep brand names, product names, model numbers, measurements and numbers unchanged. A string already in English is returned cleaned up, not changed in meaning. Return ONLY a JSON array of the strings, same length, same order."
+};
+var caches = { es: /* @__PURE__ */ new Map(), en: /* @__PURE__ */ new Map() };
 var discoveredModel = null;
 async function discoverModel(apiKey, fetchImpl) {
   const res = await fetchImpl(`${GEMINI_URL}?pageSize=200`, {
@@ -1004,8 +1010,8 @@ async function geminiGenerate(prompt, env, fetchImpl, audio) {
   const body = await res.json();
   return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 }
-async function geminiTranslate(texts, env, fetchImpl) {
-  const raw = await geminiGenerate(`${PROMPT}
+async function geminiTranslate(texts, env, fetchImpl, to = "es") {
+  const raw = await geminiGenerate(`${PROMPTS[to]}
 
 ${JSON.stringify(texts)}`, env, fetchImpl);
   const parsed = JSON.parse(raw);
@@ -1044,11 +1050,12 @@ async function transcribeNote(audio, env, fetchImpl = fetch) {
     en: parsed.en
   };
 }
-async function translateToSpanish(texts, env, fetchImpl = fetch) {
+async function translateTexts(texts, to, env, fetchImpl = fetch) {
   if (!env.geminiApiKey) throw new Error("Translation is not configured");
+  const cache = caches[to];
   const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
   if (missing.length > 0) {
-    const translated = await geminiTranslate(missing, env, fetchImpl);
+    const translated = await geminiTranslate(missing, env, fetchImpl, to);
     missing.forEach((t, i) => cache.set(t, translated[i]));
   }
   return texts.map((t) => cache.get(t) ?? t);
@@ -1059,6 +1066,29 @@ function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
   return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
+var headerValue = (req, name) => {
+  const header = req.headers[name];
+  const value = Array.isArray(header) ? header[0] : header;
+  return typeof value === "string" ? value.trim() : "";
+};
+function actingUser(req, deps) {
+  const bearer = bearerToken(req);
+  if (!bearer) return null;
+  if (deps.crewAppSecret && bearer === deps.crewAppSecret) {
+    const email = headerValue(req, "x-acting-email").toLowerCase();
+    if (!email) return null;
+    try {
+      return assertAllowedIdentity(
+        { email, email_verified: true, name: headerValue(req, "x-acting-name") || void 0 },
+        deps.workspaceDomain,
+        deps.allowedEmails
+      );
+    } catch {
+      return null;
+    }
+  }
+  return deps.sessionSecret ? verifySession(deps.sessionSecret, bearer) : null;
 }
 function clientRef(req) {
   const header = req.headers["x-client-ref"];
@@ -1154,7 +1184,8 @@ function createHandler(deps) {
           ok: true,
           signIn: Boolean(deps.googleClientId && deps.sessionSecret),
           gemini: Boolean(deps.geminiApiKey),
-          webhook: Boolean(deps.webhookSecret)
+          webhook: Boolean(deps.webhookSecret),
+          crewApp: Boolean(deps.crewAppSecret)
         });
       }
       if (req.method === "GET" && url.pathname === "/auth/config") {
@@ -1197,7 +1228,7 @@ function createHandler(deps) {
         }
         return json(res, 200, { ok: true, flipped });
       }
-      const session = deps.sessionSecret ? verifySession(deps.sessionSecret, bearerToken(req)) : null;
+      const session = actingUser(req, deps);
       if (!session) return json(res, 401, { error: "Unauthorized" });
       if (req.method === "POST" && url.pathname === "/transcribe") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Transcription is not configured" });
@@ -1209,11 +1240,12 @@ function createHandler(deps) {
       if (req.method === "POST" && url.pathname === "/translate") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Translation is not configured" });
         const body = await readBody(req);
+        const to = body.to === "en" ? "en" : "es";
         const texts = Array.isArray(body.texts) ? body.texts.filter((t) => typeof t === "string" && t.length > 0) : [];
         if (texts.length === 0 || texts.length > TRANSLATE_LIMITS.maxTexts || texts.some((t) => t.length > TRANSLATE_LIMITS.maxTextLength)) {
           return json(res, 400, { error: "texts must be 1-100 strings, each under 4000 chars" });
         }
-        const translations = await translateToSpanish(texts, deps);
+        const translations = await translateTexts(texts, to, deps);
         return json(res, 200, { translations });
       }
       if (req.method === "GET" && url.pathname === "/queue") {
@@ -1440,7 +1472,8 @@ async function entry(req, res) {
         googleClientId: env.googleClientId,
         workspaceDomain: env.workspaceDomain,
         allowedEmails: env.allowedEmails,
-        webhookSecret: env.webhookSecret
+        webhookSecret: env.webhookSecret,
+        crewAppSecret: env.crewAppSecret
       });
     }
     await handler(req, res);
