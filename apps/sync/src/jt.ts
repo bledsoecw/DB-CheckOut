@@ -396,6 +396,17 @@ export interface AssignedWork {
 }
 
 /**
+ * The org-wide scan's shape. Pave caps a query by its DECLARED size — the
+ * page times every nested page — and rejects anything at 500 or over with
+ * "Request Entity Too Large" (measured 2026-10-06: 49 x 10 fails, 40 x 10
+ * passes, 50 x 5 passes). 40 x 10 keeps ten assignees per task, and ten
+ * pages keep the same 400-task reach the old 8 x 50 had.
+ */
+export const ASSIGNED_SCAN_PAGE_SIZE = 40;
+export const ASSIGNED_SCAN_ASSIGNEES = 10;
+export const ASSIGNED_SCAN_PAGES = 10;
+
+/**
  * Every open punch/inspection task in the org that names the viewer,
  * grouped by job id. One org-wide query (paginated) instead of one query
  * per queue job, so the queue's Assigned tab costs a handful of requests
@@ -413,7 +424,7 @@ export async function listAssignedWorkByJob(
   if (!viewer) return work;
   try {
     let page: string | null = null;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < ASSIGNED_SCAN_PAGES; i++) {
       const res: {
         organization: { tasks: { nextPage: string | null; nodes: RawTask[] } } | null;
       } = await pave.query({
@@ -421,8 +432,9 @@ export async function listAssignedWorkByJob(
           $: { id: ORGANIZATION_ID },
           tasks: {
             $: {
-              // 50 x 10 nested memberships = 500 declared, verified live.
-              size: 50,
+              // 50 x 10 = 500 declared used to pass; Pave rejects it now, and
+              // the catch below read that as "nothing assigned" for everyone.
+              size: ASSIGNED_SCAN_PAGE_SIZE,
               ...(page ? { page } : {}),
               // Newest first: the org carries hundreds of old open
               // Inspection-typed sales visits, and this scan stops after a
@@ -448,7 +460,7 @@ export async function listAssignedWorkByJob(
               taskType: { id: {} },
               job: { id: {} },
               assignedMemberships: {
-                $: { size: 10 },
+                $: { size: ASSIGNED_SCAN_ASSIGNEES },
                 nodes: { id: {}, user: { name: {}, emailAddress: {} } },
               },
             },
@@ -472,9 +484,13 @@ export async function listAssignedWorkByJob(
       if (!tasks?.nextPage) break;
       page = tasks.nextPage;
     }
-  } catch {
+  } catch (err) {
     // Partial (or empty) is fine — worst case the Assigned tab under-counts
-    // until the next refresh; All still shows everything.
+    // until the next refresh; All still shows everything. But say so in the
+    // log: a rejected query here read as "0 assigned" with no trace anywhere.
+    console.warn(
+      `assigned-work scan stopped early: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   return work;
 }

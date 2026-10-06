@@ -455,19 +455,23 @@ function viewerMatches(assignees, viewer) {
     (a) => email.length > 0 && norm(a.email) === email || name.length > 0 && norm(a.name) === name
   );
 }
+var ASSIGNED_SCAN_PAGE_SIZE = 40;
+var ASSIGNED_SCAN_ASSIGNEES = 10;
+var ASSIGNED_SCAN_PAGES = 10;
 async function listAssignedWorkByJob(pave, viewer) {
   const work = /* @__PURE__ */ new Map();
   if (!viewer) return work;
   try {
     let page = null;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < ASSIGNED_SCAN_PAGES; i++) {
       const res = await pave.query({
         organization: {
           $: { id: ORGANIZATION_ID },
           tasks: {
             $: {
-              // 50 x 10 nested memberships = 500 declared, verified live.
-              size: 50,
+              // 50 x 10 = 500 declared used to pass; Pave rejects it now, and
+              // the catch below read that as "nothing assigned" for everyone.
+              size: ASSIGNED_SCAN_PAGE_SIZE,
               ...page ? { page } : {},
               // Newest first: the org carries hundreds of old open
               // Inspection-typed sales visits, and this scan stops after a
@@ -493,7 +497,7 @@ async function listAssignedWorkByJob(pave, viewer) {
               taskType: { id: {} },
               job: { id: {} },
               assignedMemberships: {
-                $: { size: 10 },
+                $: { size: ASSIGNED_SCAN_ASSIGNEES },
                 nodes: { id: {}, user: { name: {}, emailAddress: {} } }
               }
             }
@@ -517,7 +521,10 @@ async function listAssignedWorkByJob(pave, viewer) {
       if (!tasks?.nextPage) break;
       page = tasks.nextPage;
     }
-  } catch {
+  } catch (err) {
+    console.warn(
+      `assigned-work scan stopped early: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
   return work;
 }

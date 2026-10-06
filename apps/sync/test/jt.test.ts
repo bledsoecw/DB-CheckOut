@@ -17,6 +17,9 @@ import {
   findTaskByRef,
   inspectionNote,
   listAssignedWorkByJob,
+  ASSIGNED_SCAN_ASSIGNEES,
+  ASSIGNED_SCAN_PAGE_SIZE,
+  ASSIGNED_SCAN_PAGES,
   listPipelineJobs,
   listPipelineTasks,
   listPunchTasks,
@@ -788,6 +791,44 @@ test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count s
       [["progress"], "!=", 1],
     ],
   });
+});
+
+test("listAssignedWorkByJob stays under Pave's declared-size cap", async () => {
+  // Pave rejects a query whose declared size (page x nested pages) reaches
+  // 500 with "Request Entity Too Large" — 49 x 10 fails, 40 x 10 passes
+  // (2026-10-06). The old 50 x 10 was refused on every call, and the catch
+  // read that as "nothing assigned" for everybody.
+  const { client, queries } = fakePave(() => ({ organization: { tasks: { nextPage: null, nodes: [] } } }));
+  await listAssignedWorkByJob(client, ALBERTO);
+  const tasks = (queries[0]["organization"] as Record<string, unknown>)["tasks"] as Record<string, unknown>;
+  const page = (tasks["$"] as Record<string, number>)["size"];
+  const nested = (((tasks["nodes"] as Record<string, unknown>)["assignedMemberships"] as Record<string, unknown>)["$"] as Record<string, number>)["size"];
+  assert.equal(page, ASSIGNED_SCAN_PAGE_SIZE);
+  assert.equal(nested, ASSIGNED_SCAN_ASSIGNEES);
+  assert.ok(page * nested < 500, `declared size ${page * nested} must stay under 500`);
+  // Same reach as before the page shrank: 10 x 40 = 400 tasks.
+  assert.ok(ASSIGNED_SCAN_PAGES * page >= 400);
+});
+
+test("listAssignedWorkByJob keeps what it gathered when a page is refused, and says so", async () => {
+  let call = 0;
+  const { client } = fakePave(() => {
+    call += 1;
+    if (call === 2) throw new Error("Request Entity Too Large");
+    return { organization: { tasks: { nextPage: "p2", nodes: [orgTask("t1", "jobA", TASK_TYPES.inspection, [ALBERTO])] } } };
+  });
+  const warned: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warned.push(args.map(String).join(" ")); };
+  let work: Map<string, unknown>;
+  try {
+    work = await listAssignedWorkByJob(client, ALBERTO);
+  } finally {
+    console.warn = origWarn;
+  }
+  assert.deepEqual(work.get("jobA"), { any: true, punchOpen: 0 });
+  // The refusal is no longer silent.
+  assert.ok(warned.some((w) => w.includes("Request Entity Too Large")), warned.join("\n"));
 });
 
 test("listAssignedWorkByJob follows pagination and matches subs by name", async () => {
