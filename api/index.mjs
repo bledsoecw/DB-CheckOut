@@ -824,7 +824,9 @@ function punchListSummary(args) {
   lines.push(
     "",
     args.photosLinked ? "The problem photos are linked here." : "No problem photos have reached JobTread yet.",
-    "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out."
+    // The board is where a visit is booked: it writes the crew's own task,
+    // which puts the job on their phones' day (Carl, 13 Oct 2026).
+    "Book the punch crew on the Production Board: the job is under Needs scheduling \u2014 Schedule \u203A, the day, the crew. The repairs are already on their phones in Close Out."
   );
   return lines.join("\n").slice(0, 3900);
 }

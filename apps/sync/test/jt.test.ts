@@ -1214,7 +1214,7 @@ test("punchListSummary: every repair to schedule, its note, who it is for, then 
       "Inspector notes: Customer home, walked it with her.",
       "",
       "The problem photos are linked here.",
-      "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out.",
+      "Book the punch crew on the Production Board: the job is under Needs scheduling — Schedule ›, the day, the crew. The repairs are already on their phones in Close Out.",
     ].join("\n"),
   );
   assert.match(punchListSummary({ inspector: null, open: [], reported: 1, messages: [], photosLinked: 0 }), /found 1 thing to repair\n\n1 more reported on the phone is still on the way[\s\S]*No problem photos have reached JobTread yet/);
