@@ -209,6 +209,15 @@ export const PUNCH_CREW = [
   { name: "Yahir Gonzalez", membershipId: "22PdPTwMdkzj" },
 ] as const;
 
+/**
+ * Who is tagged on the PM review summary — the message that says a job has
+ * reached PM Review — so JobTread notifies him he has a review (Carl,
+ * 13 Oct 2026). His internal STAFF membership, verified live 2026-10-13
+ * (role: Roofing Production Manager). A tag is an `assignee` on the comment,
+ * written flat: `{ membershipId }`.
+ */
+export const PM_REVIEWER = { name: "Dave Elick", membershipId: "22PLtDsn6f4P" } as const;
+
 /** Roofing work: Job Type Roofing, or any R- Project Type (service calls included). */
 export function isRoofingJob(job: { jobType: string | null; projectTypes: readonly string[] }): boolean {
   return job.jobType === "Roofing" || job.projectTypes.some((t) => t.startsWith("R-"));

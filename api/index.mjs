@@ -248,6 +248,7 @@ var PUNCH_CREW = [
   { name: "Alberto Gonzalez", membershipId: "22PdPUpWzpHy" },
   { name: "Yahir Gonzalez", membershipId: "22PdPTwMdkzj" }
 ];
+var PM_REVIEWER = { name: "Dave Elick", membershipId: "22PLtDsn6f4P" };
 function isRoofingJob(job) {
   return job.jobType === "Roofing" || job.projectTypes.some((t) => t.startsWith("R-"));
 }
@@ -624,7 +625,7 @@ async function findCommentByRef(pave, taskId, ref) {
   });
   return res.task?.comments?.nodes?.[0]?.id ?? null;
 }
-async function postTaskMessage(pave, taskId, message, clientRef2) {
+async function postTaskMessage(pave, taskId, message, clientRef2, tagged = []) {
   const marker = clientRefMarker(clientRef2);
   if (marker && clientRef2) {
     const existing = await findCommentByRef(pave, taskId, clientRef2);
@@ -638,7 +639,8 @@ async function postTaskMessage(pave, taskId, message, clientRef2) {
         message: marker ? `${message}
 
 ${marker}` : message,
-        ...COMMENT_VISIBILITY
+        ...COMMENT_VISIBILITY,
+        ...tagged.length ? { assignees: tagged.map((membershipId) => ({ membershipId })) } : {}
       },
       createdComment: { id: {} }
     }
@@ -723,12 +725,15 @@ function pmReviewSummary(done, photosLinked) {
   return [head, ...lines, "", photos, "Check the work, then tick PM punch review."].join("\n").slice(0, 3900);
 }
 function summaryRef(done) {
+  return `pmr-${fnv(done.map((t) => t.id).sort().join(","))}`;
+}
+function fnv(text) {
   let h = 2166136261;
-  for (const ch of done.map((t) => t.id).sort().join(",")) {
+  for (const ch of text) {
     h ^= ch.charCodeAt(0);
     h = Math.imul(h, 16777619) >>> 0;
   }
-  return `pmr-${h.toString(16).padStart(8, "0")}`;
+  return h.toString(16).padStart(8, "0");
 }
 async function postPmReviewSummary(pave, punchTasks, reviewTask) {
   if (!reviewTask) return null;
@@ -740,9 +745,73 @@ async function postPmReviewSummary(pave, punchTasks, reviewTask) {
     const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
     if (after) afters.push(after);
   }
-  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done));
+  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done), [PM_REVIEWER.membershipId]);
   if (!commentId) return null;
   for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
+  return commentId;
+}
+function reviewTarget(milestones) {
+  return findPipelineTask(milestones, PIPELINE_TASKS.pmPunchReview) ?? findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+}
+function inspectorOf(description) {
+  const stamps = (description ?? "").split("\n").map((l) => l.trim()).filter((l) => l.startsWith(INSPECTED_STAMP));
+  if (!stamps.length) return null;
+  const rest = stamps[stamps.length - 1].slice(INSPECTED_STAMP.length);
+  const end = rest.indexOf(` \u2014 ${CHECKLIST_STAMP}`);
+  return (end >= 0 ? rest.slice(0, end) : rest).trim() || null;
+}
+async function listTaskMessages(pave, taskId) {
+  const res = await pave.query({
+    task: {
+      $: { id: taskId },
+      comments: { $: { size: 20, sortBy: [{ field: "createdAt", order: "desc" }] }, nodes: { message: {} } }
+    }
+  });
+  return (res.task?.comments.nodes ?? []).map((c) => c.message ?? "");
+}
+function messageBody(message) {
+  return message.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("DB CheckOut ref:") && !/^— .+ via DB CheckOut$/.test(l) && !/^Reported by .+ via DB CheckOut$/.test(l));
+}
+var NOTE_PREFIXES = ["Inspector notes:", "Attic access limitation", "Cleanup notes:"];
+function inspectionReviewSummary(args) {
+  const lines = ["\u{1F50D} READY FOR PM REVIEW \u2014 final inspection passed, no repairs needed"];
+  if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
+  const open = args.checklist.filter((s) => !s.isComplete);
+  if (args.checklist.length) {
+    lines.push(
+      open.length === 0 ? `All ${args.checklist.length} checks passed` : `${args.checklist.length - open.length} of ${args.checklist.length} checks passed \u2014 left open: ${open.map((s) => s.name).join("; ")}`
+    );
+  }
+  const oldestFirst = [...args.messages].reverse();
+  const fixed = oldestFirst.map(messageBody).filter((b) => b.some((l) => l.startsWith("\u2714 FIXED ON SITE"))).map((b) => {
+    const said = b.find((l) => l.startsWith("\u2714 FIXED ON SITE")) ?? "";
+    const note = said.replace(/^✔ FIXED ON SITE( — )?/, "");
+    const where = b.find((l) => l.startsWith("Where: "));
+    return `- ${b[0]}${note ? ` \u2014 ${note}` : ""}${where ? ` (${where.slice(7)})` : ""}`;
+  });
+  if (fixed.length) lines.push("", "Fixed on site:", ...fixed);
+  const notes = args.messages.find((m) => NOTE_PREFIXES.some((p) => m.trim().startsWith(p)));
+  if (notes) lines.push("", "Crew notes:", ...messageBody(notes));
+  lines.push(
+    "",
+    args.photosLinked ? "The visit photos are linked here." : "No visit photos came with the inspection.",
+    "Check the work, then tick PM punch review."
+  );
+  return lines.join("\n").slice(0, 3900);
+}
+async function postInspectionReviewSummary(pave, inspectionTask, reviewTask) {
+  if (!inspectionTask || !reviewTask) return null;
+  const [messages, files] = await Promise.all([listTaskMessages(pave, inspectionTask.id), listTaskFiles(pave, inspectionTask.id)]);
+  const photos = files.filter((f) => f.name.toUpperCase().startsWith("INSPECTION")).slice(0, SUMMARY_PHOTOS_MAX).map((f) => f.id);
+  const message = inspectionReviewSummary({
+    inspector: inspectorOf(inspectionTask.description),
+    checklist: inspectionTask.subtasks,
+    messages,
+    photosLinked: photos.length
+  });
+  const commentId = await postTaskMessage(pave, reviewTask.id, message, `pmi-${fnv(inspectionTask.id)}`, [PM_REVIEWER.membershipId]);
+  if (!commentId) return null;
+  for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
   return commentId;
 }
 async function closeInspectionTask(pave, taskId, visit, byName, clientRef2) {
@@ -1051,9 +1120,12 @@ async function applyPipeline(pave, jobId, opts = {}) {
   }
   if (!next) return null;
   await setJobStatus(pave, jobId, next);
-  if (currentStatus === STATUS.punchList && next === STATUS.pmReview) {
+  if (next === STATUS.pmReview) {
     try {
-      await postPmReviewSummary(pave, punchTasks, findPipelineTask(milestones, PIPELINE_TASKS.pmPunchReview));
+      const review = reviewTarget(milestones);
+      if (currentStatus === STATUS.punchList) await postPmReviewSummary(pave, punchTasks, review);
+      else if (currentStatus === STATUS.finalInspection)
+        await postInspectionReviewSummary(pave, findPipelineTask(milestones, PIPELINE_TASKS.finalInspection), review);
     } catch (err) {
       console.warn(`PM review summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
     }

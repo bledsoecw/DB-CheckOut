@@ -39,10 +39,15 @@ repair work — wired into JobTread and the DB Production board.
    sit only at the bottom of the to-do's description, where nobody found
    it).
 7. The PM reviews the photos and notes and ticks **"PM punch review"**.
-   The repair that moves the job to PM Review posts **one summary on that
-   task**: every finished repair, its note, who did it, with each repair's
-   after photo linked (up to ten; every repair's own message has the rest).
-   Messages, never the job's activity feed — Carl's rule for crew notes.
+   Whatever moves the job to PM Review posts **one summary on that task**
+   with **Dave Elick tagged**, so JobTread notifies him he has a review
+   (`PM_REVIEWER`): after the last repair, every finished repair, its note,
+   who did it, each after photo linked (up to ten; every repair's own
+   message has the rest); after a clean final inspection, who inspected, how
+   the checklist came out, what was fixed on site, the crew's notes, the
+   visit photos linked. A template with no "PM punch review" task (the
+   construction schedule) gets it on "Final inspection" instead. Messages,
+   never the job's activity feed — Carl's rule for crew notes.
    The job then waits for the **sales rep**, who speaks to the customer
    and ticks **"Final check-off"** — that is what sets **Job Completed**,
    so a person has talked to the homeowner before the final payment

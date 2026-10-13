@@ -11,6 +11,8 @@ import {
   checklistItemByKey,
   CUSTOM_FIELDS,
   ORGANIZATION_ID,
+  PIPELINE_TASKS,
+  PM_REVIEWER,
   SERVICE_PROJECT_TYPES,
   STATUS,
   TASK_TYPES,
@@ -715,6 +717,8 @@ export async function postTaskMessage(
   taskId: string,
   message: string,
   clientRef?: string,
+  /** Memberships tagged on the message; JobTread notifies each. */
+  tagged: readonly string[] = [],
 ): Promise<string> {
   const marker = clientRefMarker(clientRef);
   if (marker && clientRef) {
@@ -728,6 +732,7 @@ export async function postTaskMessage(
         targetId: taskId,
         message: marker ? `${message}\n\n${marker}` : message,
         ...COMMENT_VISIBILITY,
+        ...(tagged.length ? { assignees: tagged.map((membershipId) => ({ membershipId })) } : {}),
       },
       createdComment: { id: {} },
     },
@@ -888,15 +893,23 @@ export function pmReviewSummary(done: PunchTask[], photosLinked: number): string
  * round — a different set — gets its own.
  */
 export function summaryRef(done: PunchTask[]): string {
+  return `pmr-${fnv(done.map((t) => t.id).sort().join(","))}`;
+}
+
+/** FNV-1a, 8 hex characters — a short, stable client reference out of ids. */
+function fnv(text: string): string {
   let h = 0x811c9dc5;
-  for (const ch of done.map((t) => t.id).sort().join(",")) {
+  for (const ch of text) {
     h ^= ch.charCodeAt(0);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  return `pmr-${h.toString(16).padStart(8, "0")}`;
+  return h.toString(16).padStart(8, "0");
 }
 
-/** Post the summary on "PM punch review" and link each repair's after photo. No milestone, no summary. */
+/**
+ * Post the summary on the review task (see reviewTarget) and link each
+ * repair's after photo, tagging the PM reviewer so JobTread notifies him.
+ */
 export async function postPmReviewSummary(
   pave: PaveClient,
   punchTasks: PunchTask[],
@@ -911,9 +924,122 @@ export async function postPmReviewSummary(
     const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
     if (after) afters.push(after);
   }
-  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done));
+  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done), [PM_REVIEWER.membershipId]);
   if (!commentId) return null;
   for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
+  return commentId;
+}
+
+/**
+ * Where a review summary goes: the template's "PM punch review" task, which
+ * is what the PM ticks; on a template without one (the construction
+ * schedule has none) the "Final inspection" task, so the PM is still told.
+ */
+export function reviewTarget(milestones: PipelineTask[]): PipelineTask | undefined {
+  return findPipelineTask(milestones, PIPELINE_TASKS.pmPunchReview) ?? findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+}
+
+// --------------------------------------------------------------------------
+// A clean final inspection, the other way the app reaches PM Review
+// --------------------------------------------------------------------------
+
+/** "Yahir Gonzalez" off the "✔ Inspected by … — via DB CheckOut" stamp; null without one. */
+export function inspectorOf(description: string | null): string | null {
+  const stamps = (description ?? "").split("\n").map((l) => l.trim()).filter((l) => l.startsWith(INSPECTED_STAMP));
+  if (!stamps.length) return null;
+  const rest = stamps[stamps.length - 1].slice(INSPECTED_STAMP.length);
+  const end = rest.indexOf(` — ${CHECKLIST_STAMP}`);
+  return (end >= 0 ? rest.slice(0, end) : rest).trim() || null;
+}
+
+/** A task's messages, newest first (verified live 2026-10-13: comments take sortBy createdAt). */
+export async function listTaskMessages(pave: PaveClient, taskId: string): Promise<string[]> {
+  const res = await pave.query<{ task: { comments: { nodes: Array<{ message: string | null }> } } | null }>({
+    task: {
+      $: { id: taskId },
+      comments: { $: { size: 20, sortBy: [{ field: "createdAt", order: "desc" }] }, nodes: { message: {} } },
+    },
+  });
+  return (res.task?.comments.nodes ?? []).map((c) => c.message ?? "");
+}
+
+/** A message's own lines: no "— X via DB CheckOut" byline, no reference marker, no blanks. */
+function messageBody(message: string): string[] {
+  return message
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("DB CheckOut ref:") && !/^— .+ via DB CheckOut$/.test(l) && !/^Reported by .+ via DB CheckOut$/.test(l));
+}
+
+const NOTE_PREFIXES = ["Inspector notes:", "Attic access limitation", "Cleanup notes:"];
+
+/**
+ * The PM's summary of a clean final inspection: who inspected, how the
+ * checklist came out (naming any line left open), what the crew corrected on
+ * the spot, and the crew's notes — all of it already on the "Final
+ * inspection" task, gathered into the one message the PM is tagged on.
+ */
+export function inspectionReviewSummary(args: {
+  inspector: string | null;
+  checklist: Subtask[];
+  messages: string[];
+  photosLinked: number;
+}): string {
+  const lines = ["🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed"];
+  if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
+  const open = args.checklist.filter((s) => !s.isComplete);
+  if (args.checklist.length) {
+    lines.push(
+      open.length === 0
+        ? `All ${args.checklist.length} checks passed`
+        : `${args.checklist.length - open.length} of ${args.checklist.length} checks passed — left open: ${open.map((s) => s.name).join("; ")}`,
+    );
+  }
+  // Newest first from JobTread; the oldest reads first here.
+  const oldestFirst = [...args.messages].reverse();
+  const fixed = oldestFirst
+    .map(messageBody)
+    .filter((b) => b.some((l) => l.startsWith("✔ FIXED ON SITE")))
+    .map((b) => {
+      const said = b.find((l) => l.startsWith("✔ FIXED ON SITE")) ?? "";
+      const note = said.replace(/^✔ FIXED ON SITE( — )?/, "");
+      const where = b.find((l) => l.startsWith("Where: "));
+      return `- ${b[0]}${note ? ` — ${note}` : ""}${where ? ` (${where.slice(7)})` : ""}`;
+    });
+  if (fixed.length) lines.push("", "Fixed on site:", ...fixed);
+  const notes = args.messages.find((m) => NOTE_PREFIXES.some((p) => m.trim().startsWith(p)));
+  if (notes) lines.push("", "Crew notes:", ...messageBody(notes));
+  lines.push(
+    "",
+    args.photosLinked ? "The visit photos are linked here." : "No visit photos came with the inspection.",
+    "Check the work, then tick PM punch review.",
+  );
+  return lines.join("\n").slice(0, 3900);
+}
+
+/**
+ * Post the clean-inspection summary on the review task, with the visit's
+ * photos linked and the PM reviewer tagged. A job passes Final Inspection ->
+ * PM Review once, so the reference is the inspection task's own id: the
+ * completion and the webhook that can both see the flip post it once.
+ */
+export async function postInspectionReviewSummary(
+  pave: PaveClient,
+  inspectionTask: PipelineTask | undefined,
+  reviewTask: PipelineTask | undefined,
+): Promise<string | null> {
+  if (!inspectionTask || !reviewTask) return null;
+  const [messages, files] = await Promise.all([listTaskMessages(pave, inspectionTask.id), listTaskFiles(pave, inspectionTask.id)]);
+  const photos = files.filter((f) => f.name.toUpperCase().startsWith("INSPECTION")).slice(0, SUMMARY_PHOTOS_MAX).map((f) => f.id);
+  const message = inspectionReviewSummary({
+    inspector: inspectorOf(inspectionTask.description),
+    checklist: inspectionTask.subtasks,
+    messages,
+    photosLinked: photos.length,
+  });
+  const commentId = await postTaskMessage(pave, reviewTask.id, message, `pmi-${fnv(inspectionTask.id)}`, [PM_REVIEWER.membershipId]);
+  if (!commentId) return null;
+  for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
   return commentId;
 }
 

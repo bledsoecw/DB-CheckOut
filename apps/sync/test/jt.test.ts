@@ -37,6 +37,8 @@ import {
   pmReviewSummary,
   summaryRef,
   clientRefMarker,
+  inspectorOf,
+  inspectionReviewSummary,
   type PipelineTask,
 } from "../src/jt";
 import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
@@ -1139,4 +1141,55 @@ test("postRepairDone re-sent finds the message it posted instead of posting twic
   await postRepairDone(client, "pt1", "Fixed", "Carl Bledsoe", "crt7");
   assert.equal(queries.filter((q) => "createComment" in q).length, 0);
   assert.equal(queries.filter((q) => "updateComment" in q).length, 0, "the photo already on it is left alone");
+});
+
+test("the per-repair message tags nobody — only the review summary notifies the PM", async () => {
+  const { client, queries } = fakePave((q) => {
+    const task = q["task"] as Record<string, unknown> | undefined;
+    if (task && "comments" in task) return { task: { comments: { nodes: [] } } };
+    if (task && "files" in task) return { task: { files: { nodes: [] } } };
+    if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
+    return {};
+  });
+  await postRepairDone(client, "pt1", "Fixed", "Carl Bledsoe", "crt7");
+  const created = (queries.find((q) => "createComment" in q)!["createComment"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal("assignees" in created, false);
+});
+
+test("inspectorOf reads who closed the inspection", () => {
+  assert.equal(inspectorOf("Walk the finished job.\n\n✔ Inspected by Yahir Gonzalez — via DB CheckOut"), "Yahir Gonzalez");
+  assert.equal(inspectorOf("Walk the finished job."), null);
+  assert.equal(inspectorOf(null), null);
+});
+
+test("inspectionReviewSummary reads 26-0246's real shapes: the checks, what was fixed on site, the crew's notes", () => {
+  const checklist = [
+    { name: "1. Shingle field flat — no exposed fasteners or unaddressed damage", isComplete: true },
+    { name: "8. Attic / interior spot check — leak-prone areas inspected", isComplete: false },
+    { name: "Cleanup 1. Driveway, walks & landscaping clean — magnet sweep completed", isComplete: true },
+  ];
+  // Newest first, as JobTread returns them (verified on 26-0246, 2026-10-13).
+  const messages = [
+    "Cleanup notes: No gutters currently on house, more photos per Alberto’s phone on DB Cam.\n— Yahir Gonzalez via DB CheckOut\n\nDB CheckOut ref: cot7.notes",
+    "Cleanup 1. Driveway, walks & landscaping clean — magnet sweep completed\n✔ FIXED ON SITE — Nails along the driveway\nWhere: Front\nReported by Yahir Gonzalez via DB CheckOut\n\nDB CheckOut ref: rt14",
+  ];
+  assert.equal(
+    inspectionReviewSummary({ inspector: "Yahir Gonzalez", checklist, messages, photosLinked: 1 }),
+    [
+      "🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed",
+      "Inspected by Yahir Gonzalez",
+      "2 of 3 checks passed — left open: 8. Attic / interior spot check — leak-prone areas inspected",
+      "",
+      "Fixed on site:",
+      "- Cleanup 1. Driveway, walks & landscaping clean — magnet sweep completed — Nails along the driveway (Front)",
+      "",
+      "Crew notes:",
+      "Cleanup notes: No gutters currently on house, more photos per Alberto’s phone on DB Cam.",
+      "",
+      "The visit photos are linked here.",
+      "Check the work, then tick PM punch review.",
+    ].join("\n"),
+  );
+  const bare = inspectionReviewSummary({ inspector: null, checklist: [], messages: [], photosLinked: 0 });
+  assert.equal(bare, "🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed\n\nNo visit photos came with the inspection.\nCheck the work, then tick PM punch review.");
 });

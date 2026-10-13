@@ -63,8 +63,26 @@ linked, at most ten. Its reference is a hash of the finished to-dos' ids
 (`summaryRef`), so the completion and JobTread's webhook — which can both
 see the same flip — post one summary between them, while a later punch
 round, a different set, gets its own. Both are best-effort: neither can
-fail the completion or undo the status move. A clean inspection going
-straight to PM Review posts no summary — nothing was repaired.
+fail the completion or undo the status move.
+
+**A clean final inspection gets a summary too, and every summary tags the
+PM reviewer** (Carl, 13 Oct 2026: *"something similar for all situations
+coming from the DB Crew app that moves the job to PM Review … I want Dave
+Elick tagged so he gets the notification"*). The app reaches PM Review two
+ways and both now post one message on "PM punch review": the repair summary
+above, and — when an inspection closes clean, Final Inspection → PM Review
+— `inspectionReviewSummary`: who inspected (off the `✔ Inspected by` stamp),
+"All 13 checks passed" or which lines were left open, every `✔ FIXED ON
+SITE` finding from the inspection task's messages, the crew's notes message,
+and the task's INSPECTION photos linked. Its reference is the inspection
+task's id (`pmi-…`) — a job passes that rung once. Both carry
+`assignees: [{ membershipId }]` for `PM_REVIEWER` (Dave Elick,
+`22PLtDsn6f4P`, verified live), which is how JobTread notifies him; the
+per-repair messages tag nobody. `reviewTarget` falls back to the "Final
+inspection" task on a template with no "PM punch review" (the construction
+schedule has none), so the tag still reaches him. An inspection that finds
+problems goes to Punch List and posts nothing — the review comes after the
+repairs.
 
 **JobTread derives a checklist task's progress from its ticks** (ticked /
 total, whatever `progress` is written), so a reported line keeps "Final

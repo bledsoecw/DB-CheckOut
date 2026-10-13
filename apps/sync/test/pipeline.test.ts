@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { applyPipeline, nextPipelineStatus, openProblemCount, type PipelineInput } from "../src/pipeline";
 import { findPipelineTask, type PipelineTask } from "../src/jt";
 import type { PaveClient, PaveQuery } from "../src/pave";
-import { CUSTOM_FIELDS, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import { CUSTOM_FIELDS, PIPELINE_TASKS, PM_REVIEWER, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 import type { PunchTask } from "../../../packages/shared/src/types";
 
 function punch(progress: number): PunchTask {
@@ -432,16 +432,51 @@ test("the last repair closing posts one summary on PM punch review, with each af
   assert.deepEqual(seen.linked, [[{ _type: "file", id: "a1" }], [{ _type: "file", id: "a2" }]], "the after photos, not the before");
 });
 
-test("a clean inspection going to PM Review posts no repair summary", async () => {
-  const fake = fakeJobPave({ status: STATUS.finalInspection, punch: [], milestones: [...templateOn(1), { id: "pmr", name: "PM punch review", progress: null, typeId: TASK_TYPES.general, subtasks: [] }] });
-  const base = fake.client.query.bind(fake.client);
-  fake.client.query = async <T,>(q: PaveQuery): Promise<T> => ("task" in q && !("files" in (q["task"] as object)) && !("comments" in (q["task"] as object)) ? ({ task: { description: null } } as T) : base<T>(q));
-  const seen = withMessages(fake, {});
+test("a clean final inspection posts its own summary on PM punch review, Dave tagged, the visit photos linked", async () => {
+  const fake = fakeJobPave({
+    status: STATUS.finalInspection,
+    punch: [],
+    milestones: [
+      { id: "fi", name: "Final inspection", progress: 1, typeId: TASK_TYPES.inspection, description: "Walk the job.\n\n✔ Inspected by Yahir Gonzalez — via DB CheckOut", subtasks: [{ name: "1. Shingle field flat", isComplete: true }, { name: "Cleanup 1. Driveway clean", isComplete: true }] },
+      { id: "pl", name: "Punch list", progress: null, typeId: TASK_TYPES.punchList, subtasks: [] },
+      { id: "co", name: "Final check-off", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
+      { id: "pmr", name: "PM punch review", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
+    ],
+  });
+  // The not-required note on the Punch list task reads its description first.
+  const seen = withMessages(fake, {
+    fi: [
+      { id: "v1", name: "INSPECTION 2026-10-06 12:51 — Yahir Gonzalez", description: "x" },
+      { id: "r9", name: "Cleanup 1. Driveway clean — REPORT 2026-10-06 12:40 — Yahir", description: "x" },
+    ],
+  });
+  const viaMessages = fake.client.query.bind(fake.client);
+  fake.client.query = async <T,>(q: PaveQuery): Promise<T> => {
+    const task = q["task"] as Record<string, unknown> | undefined;
+    if (task && !("files" in task) && !("comments" in task)) return { task: { description: null } } as T;
+    return viaMessages<T>(q);
+  };
   assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
-  assert.equal(seen.posted.length, 0);
+  assert.equal(seen.posted.length, 1);
+  assert.equal(seen.posted[0]["targetId"], "pmr");
+  assert.deepEqual(seen.posted[0]["assignees"], [{ membershipId: PM_REVIEWER.membershipId }], "Dave is tagged, so JobTread notifies him");
+  assert.match(String(seen.posted[0]["message"]), /^🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed\nInspected by Yahir Gonzalez\nAll 2 checks passed\n/);
+  assert.match(String(seen.posted[0]["message"]), /DB CheckOut ref: pmi-[0-9a-f]{8}$/);
+  assert.deepEqual(seen.linked, [[{ _type: "file", id: "v1" }]], "the visit photos, not a report photo");
 });
 
-test("a job whose template has no PM punch review task still moves, with no summary", async () => {
+test("the repair summary tags Dave too", async () => {
+  const fake = fakeJobPave({
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "REPORT: Gutter", progress: 1 }],
+    milestones: withReview([{ name: "REPORT: Gutter", isComplete: false }]),
+  });
+  const seen = withMessages(fake, {});
+  assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
+  assert.deepEqual(seen.posted[0]["assignees"], [{ membershipId: PM_REVIEWER.membershipId }]);
+});
+
+test("a template with no PM punch review task (construction) gets the summary on Final inspection instead", async () => {
   const fake = fakeJobPave({
     status: STATUS.punchList,
     punch: [{ id: "r1", name: "REPORT: Gutter", progress: 1 }],
@@ -449,6 +484,18 @@ test("a job whose template has no PM punch review task still moves, with no summ
   });
   const seen = withMessages(fake, {});
   assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
+  assert.equal(seen.posted.length, 1);
+  assert.equal(seen.posted[0]["targetId"], "fi");
+});
+
+test("an inspection that finds problems goes to Punch List and posts no review summary", async () => {
+  const fake = fakeJobPave({
+    status: STATUS.finalInspection,
+    punch: [{ id: "r1", name: "REPORT: Rear slope — pipe boot", progress: null }],
+    milestones: withReview([]),
+  });
+  const seen = withMessages(fake, {});
+  assert.equal(await applyPipeline(fake.client, "job1", { problemsReported: 1 }), STATUS.punchList);
   assert.equal(seen.posted.length, 0);
 });
 
