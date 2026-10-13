@@ -409,6 +409,10 @@ async function listPunchTasks(pave, jobId) {
           description: {},
           progress: {},
           endDate: {},
+          // When the repair was asked for: DB Crew refuses an AFTER photo
+          // picked from the phone that was taken before it (T2.9). One scalar;
+          // the 50 x 5 shape below still passes (verified live 2026-10-13).
+          createdAt: {},
           isToDo: {},
           taskType: { id: {} },
           // 50 x 10 with the user fields is over Pave's declared-size budget
@@ -436,6 +440,7 @@ async function listPunchTasks(pave, jobId) {
       description: t.description,
       progress: t.progress ?? 0,
       endDate: t.endDate,
+      createdAt: t.createdAt ?? null,
       assignees,
       assigneeNames: assignees.map((a) => a.name).filter((n) => n.length > 0),
       // Filled in by getJob, which is the layer that knows who is asking.
@@ -825,6 +830,45 @@ ${done}` : done;
     }
   });
 }
+function officeTime(iso) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(iso));
+}
+function officeStamp(iso) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date(iso));
+  const v = (t) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${v("year")}-${v("month")}-${v("day")} ${v("hour")}:${v("minute")}`;
+}
+function photoFileWords(photo, marker, now = /* @__PURE__ */ new Date()) {
+  const head = photo.title ?? photo.label;
+  if (!photo.fromPhone) {
+    const stamp = now.toISOString().slice(0, 16).replace("T", " ");
+    return {
+      name: `${head} ${stamp} \u2014 ${photo.byName}`,
+      description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` \xB7 ${marker}` : ""}`
+    };
+  }
+  const taken = photo.takenAt ? ` (from phone, taken ${officeStamp(photo.takenAt)})` : " (from phone, time unknown)";
+  const said = photo.takenAt ? `picked from the phone's photos, taken ${officeTime(photo.takenAt)}` : "picked from the phone's photos, time taken unknown";
+  return {
+    name: `${head}${taken} \u2014 ${photo.byName}`,
+    description: `Uploaded from DB CheckOut by ${photo.byName} \xB7 ${said}${marker ? ` \xB7 ${marker}` : ""}`
+  };
+}
 async function uploadPhoto(pave, jobId, photo, fetchImpl = fetch) {
   const targetType = photo.taskId ? "task" : "job";
   const targetId = photo.taskId ?? jobId;
@@ -847,15 +891,15 @@ async function uploadPhoto(pave, jobId, photo, fetchImpl = fetch) {
     body: new Uint8Array(photo.data)
   });
   if (!sent.ok) throw new Error(`Photo upload failed: ${sent.status}`);
-  const stamp = (/* @__PURE__ */ new Date()).toISOString().slice(0, 16).replace("T", " ");
+  const words = photoFileWords(photo, marker);
   const res = await pave.query({
     createFile: {
       $: {
         targetId,
         targetType,
-        name: `${photo.title ?? photo.label} ${stamp} \u2014 ${photo.byName}`,
+        name: words.name,
         uploadRequestId: request.id,
-        description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` \xB7 ${marker}` : ""}`
+        description: words.description
       },
       createdFile: { id: {} }
     }
@@ -1159,6 +1203,13 @@ function decodeAudio(audioBase64) {
   return { mimeType, base64: dataUri[2] };
 }
 var MAX_PHOTO_BYTES = 4e6;
+function photoOrigin(body, now = /* @__PURE__ */ new Date()) {
+  const fromPhone = body.source === "phone";
+  if (!fromPhone || typeof body.takenAt !== "string" || !body.takenAt) return { fromPhone };
+  const t = new Date(body.takenAt).getTime();
+  if (!Number.isFinite(t) || t < Date.UTC(2e3, 0, 1) || t > now.getTime() + 864e5) return { fromPhone };
+  return { fromPhone, takenAt: new Date(t).toISOString() };
+}
 var oneLineTitle = (text) => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > 60 ? `${flat.slice(0, 59)}\u2026` : flat;
@@ -1384,7 +1435,8 @@ function createHandler(deps) {
             taskId: taskId ?? (label === "INSPECTION" ? inspectionTaskId : void 0),
             byName: session.name,
             clientRef: ref,
-            title
+            title,
+            ...photoOrigin(body)
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
           let commentId = null;

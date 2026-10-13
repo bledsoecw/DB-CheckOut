@@ -169,6 +169,19 @@ Key design decisions:
   a cold open with no signal still opens the app.
 - **Photo gates** — cleanup proof photos and AFTER photos on repairs
   are required before items can close.
+- **Photos from the phone's own gallery** (DB Crew T2.9, Carl 13 Oct
+  2026) — a photo picked from the phone rather than taken in the app is
+  posted with `source: "phone"` and `takenAt`, the time read from the photo
+  itself. Its JobTread file is named by that time and its description says
+  *picked from the phone's photos, taken Oct 12, 2026, 2:10 PM* (office
+  time), or *time taken unknown* when the photo carried none — so a PM can
+  tell a live shot from a picked one. A time that will not parse, or lies
+  outside 2000 to a day ahead, is dropped, never refused (`photoOrigin` in
+  `routes.ts`). Punch tasks carry `createdAt` in the job detail: DB Crew
+  refuses an AFTER photo from the phone that was taken before the repair
+  was asked for, or that carries no time, because it cannot show the fix.
+  That rule is the app's — the client says where a photo came from, so the
+  server records it and does not pretend to police it.
 - **Reports can be dismissed** — the PM can mark a report
   no-action-needed with a reason (e.g. pre-existing damage); the photo
   and note stay on the JT job as documentation, and closeout unlocks

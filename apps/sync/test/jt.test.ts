@@ -29,6 +29,7 @@ import {
   toQueueJob,
   toScopeLines,
   uploadPhoto,
+  photoFileWords,
   type PipelineTask,
 } from "../src/jt";
 import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
@@ -625,6 +626,45 @@ test("uploadPhoto requests an upload, sends the bytes, attaches the file to the 
   assert.match(String(createDollar["name"]), /^AFTER .*Yahir Gonzalez$/);
 });
 
+test("photoFileWords: a camera shot keeps the upload stamp; a phone photo says when it was taken", () => {
+  const now = new Date("2026-10-13T18:40:00Z");
+  const camera = photoFileWords({ label: "AFTER", byName: "Yahir Gonzalez" }, "DB CheckOut ref: 1-ab.p0", now);
+  assert.deepEqual(camera, {
+    name: "AFTER 2026-10-13 18:40 — Yahir Gonzalez",
+    description: "Uploaded from DB CheckOut by Yahir Gonzalez · DB CheckOut ref: 1-ab.p0",
+  });
+  // 18:10Z on 12 Oct is 2:10 PM in Ohio (EDT): named and said in the office's clock.
+  const phone = photoFileWords({ label: "AFTER", byName: "Yahir Gonzalez", fromPhone: true, takenAt: "2026-10-12T18:10:00.000Z" }, "DB CheckOut ref: 1-ab.p0", now);
+  assert.deepEqual(phone, {
+    name: "AFTER (from phone, taken 2026-10-12 14:10) — Yahir Gonzalez",
+    description: "Uploaded from DB CheckOut by Yahir Gonzalez · picked from the phone's photos, taken Oct 12, 2026, 2:10 PM · DB CheckOut ref: 1-ab.p0",
+  });
+  // No time in the photo (a screenshot, a WhatsApp copy): said, never guessed.
+  const unknown = photoFileWords({ label: "REPORT", title: "8. Attic — REPORT", byName: "A", fromPhone: true }, null, now);
+  assert.deepEqual(unknown, {
+    name: "8. Attic — REPORT (from phone, time unknown) — A",
+    description: "Uploaded from DB CheckOut by A · picked from the phone's photos, time taken unknown",
+  });
+});
+
+test("uploadPhoto from the phone names the file by when it was taken", async () => {
+  const { client, queries } = fakePave((q) =>
+    "createUploadRequest" in q
+      ? { createUploadRequest: { createdUploadRequest: { id: "up1", url: "u", method: "PUT", headers: {} } } }
+      : { createFile: { createdFile: { id: "f3" } } },
+  );
+  const okFetch = (async () => ({ ok: true, status: 200 }) as Response) as typeof fetch;
+  await uploadPhoto(
+    client,
+    "job1",
+    { label: "BEFORE", data: Buffer.from("x"), contentType: "image/jpeg", taskId: "t1", byName: "Yahir Gonzalez", fromPhone: true, takenAt: "2026-10-12T18:10:00.000Z" },
+    okFetch,
+  );
+  const createDollar = (queries[1]["createFile"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(createDollar["name"], "BEFORE (from phone, taken 2026-10-12 14:10) — Yahir Gonzalez");
+  assert.match(String(createDollar["description"]), /picked from the phone's photos, taken Oct 12, 2026, 2:10 PM$/);
+});
+
 test("uploadPhoto without a task attaches to the job", async () => {
   const { client, queries } = fakePave((q) =>
     "createUploadRequest" in q
@@ -869,6 +909,7 @@ test("listPunchTasks reads the real assignedMemberships shape", async () => {
             description: "Warranty · asked by Dave Elick",
             progress: 0,
             endDate: null,
+            createdAt: "2026-10-13T17:03:48.965Z",
             isToDo: true,
             taskType: { id: TASK_TYPES.punchList },
             assignedMemberships: {
@@ -897,6 +938,10 @@ test("listPunchTasks reads the real assignedMemberships shape", async () => {
   assert.deepEqual(tasks[0].assigneeNames, ["Alberto Gonzalez"]);
   assert.equal(tasks[0].assignees[0].membershipId, "22PdPUpWzpHy");
   assert.equal(tasks[0].assignees[0].email, "albertogonzalez@deitemeyerbrothers.com");
+  // DB Crew T2.9 refuses an AFTER photo from the phone taken before the repair
+  // was asked for, so the task carries when it was created.
+  assert.equal(tasks[0].createdAt, "2026-10-13T17:03:48.965Z");
+  assert.ok(JSON.stringify(queries[0]).includes("createdAt"), "the query asks for createdAt");
 
   // The old query never asked for assignees at all, which is why the app
   // could never show them. Guard the selection so that can't come back.

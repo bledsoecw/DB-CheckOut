@@ -204,6 +204,21 @@ export function decodeAudio(
 }
 const MAX_PHOTO_BYTES = 4_000_000;
 
+/**
+ * Where a photo came from (DB Crew T2.9): `source: "phone"` when it was picked
+ * from the phone's own photos, and `takenAt` the time it was taken, read from
+ * the photo itself. A time that will not parse, or lies outside 2000 to a day
+ * from now, is dropped rather than refused — a photo is never lost over its
+ * date, it just says the time is unknown.
+ */
+export function photoOrigin(body: { source?: unknown; takenAt?: unknown }, now: Date = new Date()): { fromPhone: boolean; takenAt?: string } {
+  const fromPhone = body.source === "phone";
+  if (!fromPhone || typeof body.takenAt !== "string" || !body.takenAt) return { fromPhone };
+  const t = new Date(body.takenAt).getTime();
+  if (!Number.isFinite(t) || t < Date.UTC(2000, 0, 1) || t > now.getTime() + 86_400_000) return { fromPhone };
+  return { fromPhone, takenAt: new Date(t).toISOString() };
+}
+
 const oneLineTitle = (text: string): string => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > 60 ? `${flat.slice(0, 59)}…` : flat;
@@ -483,6 +498,10 @@ export function createHandler(deps: RouterDeps) {
             itemKey?: unknown;
             location?: unknown;
             imageBase64?: unknown;
+            /** "phone" when picked from the phone's own photos (DB Crew T2.9). */
+            source?: unknown;
+            /** When that photo was taken (ISO 8601), read from the photo. */
+            takenAt?: unknown;
           };
           const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
           if (!PHOTO_LABELS.has(label)) {
@@ -524,6 +543,7 @@ export function createHandler(deps: RouterDeps) {
             byName: session.name,
             clientRef: ref,
             title,
+            ...photoOrigin(body),
           };
           const fileId = await uploadPhoto(deps.pave, jobId, upload);
           let commentId: string | null = null;

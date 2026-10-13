@@ -50,6 +50,12 @@ export interface PunchTask {
   /** 0..1 in JT; 1 means the crew finished it. */
   progress: number;
   endDate: string | null;
+  /**
+   * When the repair was asked for (ISO). DB Crew refuses an AFTER photo picked
+   * from the phone that was taken before this — it cannot show the fix.
+   * Optional: a server older than this field simply sends none.
+   */
+  createdAt?: string | null;
   assignees: Assignee[];
   assigneeNames: string[];
   /**

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseVisit } from "../src/routes";
+import { parseVisit, photoOrigin } from "../src/routes";
 import { ANSWER, CLEANUP_ITEMS, CUSTOM_FIELDS, INSPECTION_ITEMS, PUNCH_CREW, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 
 test("parseVisit reads the app's close-inspection body: both checklists and the notes", () => {
@@ -342,4 +342,49 @@ test("extractJobId reads JobTread's real delivery shape, and the older guesses",
   assert.equal(extractJobId({ task: { target: { type: "job", id: "j5" } } }), "j5");
   assert.equal(extractJobId({ createdEvent: { data: { next: { id: "x" } } } }), null);
   assert.equal(extractJobId({}), null);
+});
+
+test("photoOrigin: a phone photo carries its taken time; a bad time is dropped, never refused", () => {
+  const now = new Date("2026-10-13T18:00:00Z");
+  assert.deepEqual(photoOrigin({}, now), { fromPhone: false });
+  assert.deepEqual(photoOrigin({ source: "camera", takenAt: "2026-10-12T18:10:00Z" }, now), { fromPhone: false }, "a time only counts on a phone photo");
+  assert.deepEqual(photoOrigin({ source: "phone", takenAt: "2026-10-12T14:10:00-04:00" }, now), { fromPhone: true, takenAt: "2026-10-12T18:10:00.000Z" });
+  assert.deepEqual(photoOrigin({ source: "phone" }, now), { fromPhone: true });
+  assert.deepEqual(photoOrigin({ source: "phone", takenAt: "yesterday" }, now), { fromPhone: true });
+  assert.deepEqual(photoOrigin({ source: "phone", takenAt: "1970-01-01T00:00:00Z" }, now), { fromPhone: true }, "a zeroed camera clock");
+  assert.deepEqual(photoOrigin({ source: "phone", takenAt: "2026-10-20T00:00:00Z" }, now), { fromPhone: true }, "a phone clock set ahead");
+  assert.deepEqual(photoOrigin({ source: "phone", takenAt: 1760292600000 }, now), { fromPhone: true }, "a number is not the ISO string asked for");
+});
+
+test("an AFTER photo picked from the phone lands on its repair named by when it was taken", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(
+    routerDeps((q) => {
+      if ("task" in q) return { task: { files: { nodes: [] } } };
+      if ("createUploadRequest" in q) {
+        return { createUploadRequest: { createdUploadRequest: { id: "u1", url: "https://up.example", method: "PUT", headers: {} } } };
+      }
+      if ("createFile" in q) return { createFile: { createdFile: { id: "f7" } } };
+      return {};
+    }, queries),
+  );
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
+  try {
+    const call = fakeHttp(
+      "POST",
+      "/jobs/job1/photos",
+      { "x-client-ref": "1758400000000-ab12cd.a" },
+      { label: "AFTER", imageBase64: PIXEL, taskId: "pt1", source: "phone", takenAt: "2026-10-12T14:10:00-04:00" },
+    );
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, 200);
+    const created = queries.filter((q) => "createFile" in q).map((q) => (q["createFile"] as Record<string, unknown>)["$"] as Record<string, unknown>);
+    assert.equal(created.length, 1);
+    assert.equal(created[0]["targetId"], "pt1");
+    assert.match(String(created[0]["name"]), /^AFTER \(from phone, taken 2026-10-12 14:10\) — /);
+    assert.match(String(created[0]["description"]), /picked from the phone's photos, taken Oct 12, 2026, 2:10 PM · DB CheckOut ref: 1758400000000-ab12cd\.a$/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

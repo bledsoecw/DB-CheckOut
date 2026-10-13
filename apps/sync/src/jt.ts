@@ -65,6 +65,8 @@ interface RawTask {
   id: string;
   name: string;
   description: string | null;
+  /** When the task was created — read on punch tasks only (listPunchTasks). */
+  createdAt?: string | null;
   progress: number | null;
   endDate: string | null;
   taskType: { id: string } | null;
@@ -306,6 +308,10 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
           description: {},
           progress: {},
           endDate: {},
+          // When the repair was asked for: DB Crew refuses an AFTER photo
+          // picked from the phone that was taken before it (T2.9). One scalar;
+          // the 50 x 5 shape below still passes (verified live 2026-10-13).
+          createdAt: {},
           isToDo: {},
           taskType: { id: {} },
           // 50 x 10 with the user fields is over Pave's declared-size budget
@@ -338,6 +344,7 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
         description: t.description,
         progress: t.progress ?? 0,
         endDate: t.endDate,
+        createdAt: t.createdAt ?? null,
         assignees,
         assigneeNames: assignees.map((a) => a.name).filter((n) => n.length > 0),
         // Filled in by getJob, which is the layer that knows who is asking.
@@ -1038,6 +1045,71 @@ export interface PhotoUpload {
   clientRef?: string;
   /** Leads the file name instead of the bare label — "8. Attic… — REPORT". */
   title?: string;
+  /**
+   * Picked from the phone's own photos rather than taken in the app (DB Crew
+   * T2.9, Carl 13 Oct 2026). The file says so, so a PM can tell a live shot
+   * from one chosen out of the gallery.
+   */
+  fromPhone?: boolean;
+  /** When a phone photo was actually taken (ISO 8601), read from the photo itself. */
+  takenAt?: string;
+}
+
+/** "Oct 12, 2026, 2:10 PM" in the office's own clock — the time a crew member means. */
+function officeTime(iso: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(iso));
+}
+
+/** "2026-10-12 14:10", office time — the file-name stamp for a phone photo. */
+function officeStamp(iso: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(iso));
+  const v = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${v("year")}-${v("month")}-${v("day")} ${v("hour")}:${v("minute")}`;
+}
+
+/**
+ * The name and description a photo's JobTread file gets. A camera shot keeps
+ * the upload stamp it always had; a photo picked from the phone is named by
+ * when it was TAKEN, says "from phone", and its description says so in words
+ * — or that the time is unknown (screenshots and messaging-app copies carry
+ * none), never a guess.
+ */
+export function photoFileWords(
+  photo: Pick<PhotoUpload, "label" | "title" | "byName" | "fromPhone" | "takenAt">,
+  marker: string | null,
+  now: Date = new Date(),
+): { name: string; description: string } {
+  const head = photo.title ?? photo.label;
+  if (!photo.fromPhone) {
+    const stamp = now.toISOString().slice(0, 16).replace("T", " ");
+    return {
+      name: `${head} ${stamp} — ${photo.byName}`,
+      description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` · ${marker}` : ""}`,
+    };
+  }
+  const taken = photo.takenAt ? ` (from phone, taken ${officeStamp(photo.takenAt)})` : " (from phone, time unknown)";
+  const said = photo.takenAt
+    ? `picked from the phone's photos, taken ${officeTime(photo.takenAt)}`
+    : "picked from the phone's photos, time taken unknown";
+  return {
+    name: `${head}${taken} — ${photo.byName}`,
+    description: `Uploaded from DB CheckOut by ${photo.byName} · ${said}${marker ? ` · ${marker}` : ""}`,
+  };
 }
 
 /**
@@ -1081,15 +1153,15 @@ export async function uploadPhoto(
   });
   if (!sent.ok) throw new Error(`Photo upload failed: ${sent.status}`);
 
-  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const words = photoFileWords(photo, marker);
   const res = await pave.query<{ createFile: { createdFile?: { id: string } } }>({
     createFile: {
       $: {
         targetId,
         targetType,
-        name: `${photo.title ?? photo.label} ${stamp} — ${photo.byName}`,
+        name: words.name,
         uploadRequestId: request.id,
-        description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` · ${marker}` : ""}`,
+        description: words.description,
       },
       createdFile: { id: {} },
     },
