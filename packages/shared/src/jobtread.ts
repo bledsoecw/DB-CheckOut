@@ -184,6 +184,12 @@ export const PIPELINE_TASKS = {
   punchList: { name: "Punch list", typeId: TASK_TYPES.punchList },
   /** Sales rep has spoken to the customer; completing it closes the job. */
   finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general },
+  /**
+   * The PM ticks it after checking the punch work. A human gate with no
+   * status of its own — the summary of every finished repair is posted here
+   * when the last one moves the job to PM Review (Carl, 13 Oct 2026).
+   */
+  pmPunchReview: { name: "PM punch review", typeId: TASK_TYPES.general },
 } as const;
 
 export type PipelineTaskKey = keyof typeof PIPELINE_TASKS;

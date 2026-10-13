@@ -779,6 +779,144 @@ export async function attachFileToComment(pave: PaveClient, commentId: string, f
   return "attached";
 }
 
+// --------------------------------------------------------------------------
+// A finished repair, said where the PM looks (Carl, 13 Oct 2026)
+// --------------------------------------------------------------------------
+//
+// The crew's finish note used to be appended to the bottom of the to-do's
+// description and nowhere else — invisible in the to-do list once the repair
+// was done, and absent from the tasks a PM works from. Now each finished
+// repair posts a MESSAGE on its own to-do with its before and after photos
+// linked, and the repair that moves the job to PM Review posts one summary
+// of every repair on the "PM punch review" task. Messages, not the job's
+// activity feed: Carl's rule for crew notes since the site checks
+// (20 Sep 2026). The description line stays — it is what a re-sent
+// completion is checked against.
+
+/** What a finished repair says on its own to-do. */
+export function repairDoneMessage(note: string | undefined, byName: string): string {
+  const said = note?.trim();
+  return [`✔ REPAIR DONE${said ? ` — ${said}` : ""}`, `Finished by ${byName} via DB CheckOut`].join("\n");
+}
+
+export interface TaskFile {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: string | null;
+}
+
+/** A task's files, newest first (verified live 2026-10-13: files take sortBy createdAt). */
+export async function listTaskFiles(pave: PaveClient, taskId: string): Promise<TaskFile[]> {
+  const res = await pave.query<{ task: { files: { nodes: TaskFile[] } } | null }>({
+    task: {
+      $: { id: taskId },
+      files: {
+        $: { size: 10, sortBy: [{ field: "createdAt", order: "desc" }] },
+        nodes: { id: {}, name: {}, description: {}, createdAt: {} },
+      },
+    },
+  });
+  return res.task?.files.nodes ?? [];
+}
+
+/**
+ * The before and after photos of a repair, among its to-do's files (newest
+ * first). DB Crew sends a repair's photos with its own reference plus ".b" /
+ * ".a", so those are found exactly; otherwise — a photo added another way —
+ * the newest file named BEFORE / AFTER.
+ */
+export function pickRepairPhotos(files: TaskFile[], ref?: string): { before?: string; after?: string } {
+  const byRef = (suffix: string) => {
+    const marker = ref ? clientRefMarker(`${ref}${suffix}`) : null;
+    return marker ? files.find((f) => (f.description ?? "").includes(marker))?.id : undefined;
+  };
+  const byName = (word: string) => files.find((f) => f.name.toUpperCase().startsWith(word))?.id;
+  return { before: byRef(".b") ?? byName("BEFORE"), after: byRef(".a") ?? byName("AFTER") };
+}
+
+/**
+ * Post the finished repair on its to-do and link its photos. With the
+ * completion's client reference a re-send finds the message it posted.
+ */
+export async function postRepairDone(
+  pave: PaveClient,
+  taskId: string,
+  note: string | undefined,
+  byName: string,
+  clientRef?: string,
+): Promise<{ commentId: string; photos: number }> {
+  const commentId = await postTaskMessage(pave, taskId, repairDoneMessage(note, byName), clientRef);
+  if (!commentId) return { commentId, photos: 0 };
+  const picked = pickRepairPhotos(await listTaskFiles(pave, taskId), clientRef);
+  let photos = 0;
+  for (const fileId of [picked.before, picked.after]) {
+    if (!fileId) continue;
+    await attachFileToComment(pave, commentId, fileId);
+    photos++;
+  }
+  return { commentId, photos };
+}
+
+/** "Fixed — Yahir Gonzalez" off the "✔ Done — …" line completeTask wrote; null when there is none. */
+export function doneLine(description: string | null): string | null {
+  const prefix = "✔ Done — ";
+  const lines = (description ?? "").split("\n").map((l) => l.trim()).filter((l) => l.startsWith(prefix));
+  return lines.length ? lines[lines.length - 1].slice(prefix.length) : null;
+}
+
+/** How many after photos the summary links; the rest stay on each repair's own message. */
+export const SUMMARY_PHOTOS_MAX = 10;
+
+/** The summary the PM reads on "PM punch review": every finished repair, its note, who did it. */
+export function pmReviewSummary(done: PunchTask[], photosLinked: number): string {
+  const head = `🔍 READY FOR PM REVIEW — ${done.length} repair${done.length === 1 ? "" : "s"} finished`;
+  const lines = done.map((t, i) => `${i + 1}. ${t.name} — ${doneLine(t.description) ?? "closed in JobTread, no finish note"}`);
+  const photos =
+    photosLinked === 0
+      ? "No after photos to link here; each repair's own messages carry what it has."
+      : photosLinked < done.length
+        ? `After photos for ${photosLinked} of the ${done.length} are linked here; every repair's own message carries its before and after.`
+        : "The after photos are linked here; each repair's own message carries its before and after.";
+  return [head, ...lines, "", photos, "Check the work, then tick PM punch review."].join("\n").slice(0, 3900);
+}
+
+/**
+ * A reference for the summary that is the same for the same set of finished
+ * repairs, so the two callers that can both see the flip (the completion and
+ * JobTread's webhook) post one summary between them, while a later punch
+ * round — a different set — gets its own.
+ */
+export function summaryRef(done: PunchTask[]): string {
+  let h = 0x811c9dc5;
+  for (const ch of done.map((t) => t.id).sort().join(",")) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `pmr-${h.toString(16).padStart(8, "0")}`;
+}
+
+/** Post the summary on "PM punch review" and link each repair's after photo. No milestone, no summary. */
+export async function postPmReviewSummary(
+  pave: PaveClient,
+  punchTasks: PunchTask[],
+  reviewTask: PipelineTask | undefined,
+): Promise<string | null> {
+  if (!reviewTask) return null;
+  const done = punchTasks.filter((t) => t.progress >= 1);
+  if (done.length === 0) return null;
+  const afters: string[] = [];
+  for (const t of done) {
+    if (afters.length >= SUMMARY_PHOTOS_MAX) break;
+    const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
+    if (after) afters.push(after);
+  }
+  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done));
+  if (!commentId) return null;
+  for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
+  return commentId;
+}
+
 /**
  * Close the inspection: write the visit's checklist onto the job's scheduled
  * "Final inspection" task, put the notes and findings in its description,

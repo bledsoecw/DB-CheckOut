@@ -33,6 +33,7 @@ import {
   getJob,
   getJobBasics,
   postTaskMessage,
+  postRepairDone,
   listAssignedWorkByJob,
   listPipelineJobs,
   listPipelineTasks,
@@ -564,6 +565,14 @@ export function createHandler(deps: RouterDeps) {
         const body = (await readBody(req)) as { jobId?: string; note?: string };
         const note = body.note?.trim() ? `${body.note.trim()} — ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
+        // The finish note as a message on the repair's own to-do, its photos
+        // linked (Carl, 13 Oct 2026). Never fails the completion: the repair
+        // is done, and the description line above already says so.
+        try {
+          await postRepairDone(deps.pave, parts[1], body.note, session.name, clientRef(req));
+        } catch (err) {
+          console.warn(`repair message not posted on ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
+        }
         const flipped = body.jobId ? await applyPipeline(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }

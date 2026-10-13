@@ -236,7 +236,13 @@ var PIPELINE_TASKS = {
   /** Its checklist mirrors the job's punch to-dos; it completes when the last one closes. */
   punchList: { name: "Punch list", typeId: TASK_TYPES.punchList },
   /** Sales rep has spoken to the customer; completing it closes the job. */
-  finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general }
+  finalCheckOff: { name: "Final check-off", typeId: TASK_TYPES.general },
+  /**
+   * The PM ticks it after checking the punch work. A human gate with no
+   * status of its own — the summary of every finished repair is posted here
+   * when the last one moves the job to PM Review (Carl, 13 Oct 2026).
+   */
+  pmPunchReview: { name: "PM punch review", typeId: TASK_TYPES.general }
 };
 var PUNCH_CREW = [
   { name: "Alberto Gonzalez", membershipId: "22PdPUpWzpHy" },
@@ -668,6 +674,77 @@ async function attachFileToComment(pave, commentId, fileId) {
   });
   return "attached";
 }
+function repairDoneMessage(note, byName) {
+  const said = note?.trim();
+  return [`\u2714 REPAIR DONE${said ? ` \u2014 ${said}` : ""}`, `Finished by ${byName} via DB CheckOut`].join("\n");
+}
+async function listTaskFiles(pave, taskId) {
+  const res = await pave.query({
+    task: {
+      $: { id: taskId },
+      files: {
+        $: { size: 10, sortBy: [{ field: "createdAt", order: "desc" }] },
+        nodes: { id: {}, name: {}, description: {}, createdAt: {} }
+      }
+    }
+  });
+  return res.task?.files.nodes ?? [];
+}
+function pickRepairPhotos(files, ref) {
+  const byRef = (suffix) => {
+    const marker = ref ? clientRefMarker(`${ref}${suffix}`) : null;
+    return marker ? files.find((f) => (f.description ?? "").includes(marker))?.id : void 0;
+  };
+  const byName = (word) => files.find((f) => f.name.toUpperCase().startsWith(word))?.id;
+  return { before: byRef(".b") ?? byName("BEFORE"), after: byRef(".a") ?? byName("AFTER") };
+}
+async function postRepairDone(pave, taskId, note, byName, clientRef2) {
+  const commentId = await postTaskMessage(pave, taskId, repairDoneMessage(note, byName), clientRef2);
+  if (!commentId) return { commentId, photos: 0 };
+  const picked = pickRepairPhotos(await listTaskFiles(pave, taskId), clientRef2);
+  let photos = 0;
+  for (const fileId of [picked.before, picked.after]) {
+    if (!fileId) continue;
+    await attachFileToComment(pave, commentId, fileId);
+    photos++;
+  }
+  return { commentId, photos };
+}
+function doneLine(description) {
+  const prefix = "\u2714 Done \u2014 ";
+  const lines = (description ?? "").split("\n").map((l) => l.trim()).filter((l) => l.startsWith(prefix));
+  return lines.length ? lines[lines.length - 1].slice(prefix.length) : null;
+}
+var SUMMARY_PHOTOS_MAX = 10;
+function pmReviewSummary(done, photosLinked) {
+  const head = `\u{1F50D} READY FOR PM REVIEW \u2014 ${done.length} repair${done.length === 1 ? "" : "s"} finished`;
+  const lines = done.map((t, i) => `${i + 1}. ${t.name} \u2014 ${doneLine(t.description) ?? "closed in JobTread, no finish note"}`);
+  const photos = photosLinked === 0 ? "No after photos to link here; each repair's own messages carry what it has." : photosLinked < done.length ? `After photos for ${photosLinked} of the ${done.length} are linked here; every repair's own message carries its before and after.` : "The after photos are linked here; each repair's own message carries its before and after.";
+  return [head, ...lines, "", photos, "Check the work, then tick PM punch review."].join("\n").slice(0, 3900);
+}
+function summaryRef(done) {
+  let h = 2166136261;
+  for (const ch of done.map((t) => t.id).sort().join(",")) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return `pmr-${h.toString(16).padStart(8, "0")}`;
+}
+async function postPmReviewSummary(pave, punchTasks, reviewTask) {
+  if (!reviewTask) return null;
+  const done = punchTasks.filter((t) => t.progress >= 1);
+  if (done.length === 0) return null;
+  const afters = [];
+  for (const t of done) {
+    if (afters.length >= SUMMARY_PHOTOS_MAX) break;
+    const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
+    if (after) afters.push(after);
+  }
+  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done));
+  if (!commentId) return null;
+  for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
+  return commentId;
+}
 async function closeInspectionTask(pave, taskId, visit, byName, clientRef2) {
   const res = await pave.query({
     task: { $: { id: taskId }, description: {}, subtasks: { name: {}, isComplete: {} } }
@@ -974,6 +1051,13 @@ async function applyPipeline(pave, jobId, opts = {}) {
   }
   if (!next) return null;
   await setJobStatus(pave, jobId, next);
+  if (currentStatus === STATUS.punchList && next === STATUS.pmReview) {
+    try {
+      await postPmReviewSummary(pave, punchTasks, findPipelineTask(milestones, PIPELINE_TASKS.pmPunchReview));
+    } catch (err) {
+      console.warn(`PM review summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   return next;
 }
 
@@ -1455,6 +1539,11 @@ function createHandler(deps) {
         const body = await readBody(req);
         const note = body.note?.trim() ? `${body.note.trim()} \u2014 ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
+        try {
+          await postRepairDone(deps.pave, parts[1], body.note, session.name, clientRef(req));
+        } catch (err) {
+          console.warn(`repair message not posted on ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
+        }
         const flipped = body.jobId ? await applyPipeline(deps.pave, body.jobId) : null;
         return json(res, 200, { ok: true, flipped });
       }

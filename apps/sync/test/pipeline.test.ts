@@ -373,3 +373,102 @@ test("applyPipeline ticks the inspection line when its punch item closes", async
   const subtasks = ((inspectionWrite!["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>)["subtasks"] as Array<{ isComplete: boolean }>;
   assert.equal(subtasks[0].isComplete, true);
 });
+
+// --------------------------------------------------------------------------
+// The summary on "PM punch review" when the last repair closes (Carl, 13 Oct 2026)
+// --------------------------------------------------------------------------
+
+/** fakeJobPave plus the task-file, message and comment shapes the summary uses. */
+function withMessages(fake: { client: PaveClient; writes: PaveQuery[] }, files: Record<string, Array<{ id: string; name: string; description: string }>>) {
+  const posted: Array<Record<string, unknown>> = [];
+  const linked: unknown[] = [];
+  const base = fake.client.query.bind(fake.client);
+  fake.client.query = async <T,>(q: PaveQuery): Promise<T> => {
+    const task = q["task"] as Record<string, unknown> | undefined;
+    if (task && "comments" in task) return { task: { comments: { nodes: [] } } } as T;
+    if (task && "files" in task) {
+      const id = (task["$"] as Record<string, unknown>)["id"] as string;
+      return { task: { files: { nodes: (files[id] ?? []).map((f) => ({ ...f, createdAt: null })) } } } as T;
+    }
+    if ("createComment" in q) {
+      posted.push((q["createComment"] as Record<string, unknown>)["$"] as Record<string, unknown>);
+      return { createComment: { createdComment: { id: "sum1" } } } as T;
+    }
+    if ("comment" in q) return { comment: { files: { nodes: [] } } } as T;
+    if ("updateComment" in q) {
+      linked.push(((q["updateComment"] as Record<string, unknown>)["$"] as Record<string, unknown>)["files"]);
+      return {} as T;
+    }
+    return base<T>(q);
+  };
+  return { posted, linked };
+}
+
+const withReview = (punchListSubtasks: Array<{ name: string; isComplete: boolean }>) => [
+  ...templateOn(1, punchListSubtasks),
+  { id: "pmr", name: "PM punch review", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
+];
+
+test("the last repair closing posts one summary on PM punch review, with each after photo linked", async () => {
+  const fake = fakeJobPave({
+    status: STATUS.punchList,
+    punch: [
+      { id: "r1", name: "Alberto and Yahir — Reseal the pipe boot", progress: 1, description: "Reseal\n\n✔ Done — New boot — Yahir Gonzalez" },
+      { id: "r2", name: "REPORT: Gutter", progress: 1, description: "Gutter\n\n✔ Done — Yahir Gonzalez" },
+    ],
+    milestones: withReview([{ name: "Alberto and Yahir — Reseal the pipe boot", isComplete: true }, { name: "REPORT: Gutter", isComplete: false }]),
+  });
+  const seen = withMessages(fake, {
+    r1: [{ id: "a1", name: "AFTER 2026-10-13 19:38 — Yahir", description: "x" }, { id: "b1", name: "BEFORE 2026-10-13 19:37 — Yahir", description: "x" }],
+    r2: [{ id: "a2", name: "AFTER 2026-10-13 19:40 — Yahir", description: "x" }],
+  });
+  assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
+  assert.equal(seen.posted.length, 1, "one summary");
+  assert.equal(seen.posted[0]["targetId"], "pmr");
+  assert.equal(seen.posted[0]["targetType"], "task");
+  const message = String(seen.posted[0]["message"]);
+  assert.match(message, /^🔍 READY FOR PM REVIEW — 2 repairs finished\n1\. Alberto and Yahir — Reseal the pipe boot — New boot — Yahir Gonzalez\n2\. REPORT: Gutter — Yahir Gonzalez\n/);
+  assert.match(message, /DB CheckOut ref: pmr-[0-9a-f]{8}$/, "a reference, so the webhook's replay of the same flip finds it");
+  assert.deepEqual(seen.linked, [[{ _type: "file", id: "a1" }], [{ _type: "file", id: "a2" }]], "the after photos, not the before");
+});
+
+test("a clean inspection going to PM Review posts no repair summary", async () => {
+  const fake = fakeJobPave({ status: STATUS.finalInspection, punch: [], milestones: [...templateOn(1), { id: "pmr", name: "PM punch review", progress: null, typeId: TASK_TYPES.general, subtasks: [] }] });
+  const base = fake.client.query.bind(fake.client);
+  fake.client.query = async <T,>(q: PaveQuery): Promise<T> => ("task" in q && !("files" in (q["task"] as object)) && !("comments" in (q["task"] as object)) ? ({ task: { description: null } } as T) : base<T>(q));
+  const seen = withMessages(fake, {});
+  assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
+  assert.equal(seen.posted.length, 0);
+});
+
+test("a job whose template has no PM punch review task still moves, with no summary", async () => {
+  const fake = fakeJobPave({
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "REPORT: Gutter", progress: 1 }],
+    milestones: templateOn(1, [{ name: "REPORT: Gutter", isComplete: false }]),
+  });
+  const seen = withMessages(fake, {});
+  assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
+  assert.equal(seen.posted.length, 0);
+});
+
+test("a summary that fails does not undo the move to PM Review", async () => {
+  const fake = fakeJobPave({
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "REPORT: Gutter", progress: 1 }],
+    milestones: withReview([{ name: "REPORT: Gutter", isComplete: false }]),
+  });
+  const base = fake.client.query.bind(fake.client);
+  fake.client.query = async <T,>(q: PaveQuery): Promise<T> => {
+    if ("task" in q) throw new Error("Request Entity Too Large");
+    return base<T>(q);
+  };
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(await applyPipeline(fake.client, "job1"), STATUS.pmReview);
+  } finally {
+    console.warn = warn;
+  }
+  assert.ok(fake.writes.some((w) => "updateJob" in w), "the status was written");
+});

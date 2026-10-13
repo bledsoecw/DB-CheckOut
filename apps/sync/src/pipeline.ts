@@ -32,6 +32,7 @@ import {
   isInspectionClosed,
   listPipelineTasks,
   listPunchTasks,
+  postPmReviewSummary,
   setJobStatus,
   syncInspectionChecklist,
   syncPunchListTask,
@@ -145,5 +146,15 @@ export async function applyPipeline(
 
   if (!next) return null;
   await setJobStatus(pave, jobId, next);
+  // The last repair just closed: everything the PM has to check, in one
+  // message on "PM punch review" (Carl, 13 Oct 2026). Best-effort — the
+  // status is the decision, and a summary that fails must not undo it.
+  if (currentStatus === STATUS.punchList && next === STATUS.pmReview) {
+    try {
+      await postPmReviewSummary(pave, punchTasks, findPipelineTask(milestones, PIPELINE_TASKS.pmPunchReview));
+    } catch (err) {
+      console.warn(`PM review summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   return next;
 }

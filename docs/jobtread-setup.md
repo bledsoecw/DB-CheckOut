@@ -47,6 +47,25 @@ only (not visible to customer or vendor roles). Visit photos attach to
 the "Final inspection" task instead of the bare job. The task description
 only ever gets the `✔ Inspected by <name> — via DB CheckOut` stamp.
 
+**A finished repair is a message too** (Carl, 13 Oct 2026). Terminado still
+appends `✔ Done — <note> — <name>` to the punch to-do's description (a
+re-sent completion is checked against it), and now also posts
+`✔ REPAIR DONE — <note>` / `Finished by <name> via DB CheckOut` as a
+message on that to-do, carrying the completion's client reference so a
+re-send finds it, with the repair's BEFORE and AFTER files linked — found by
+the `.b` / `.a` references DB Crew sends them with, else the newest file of
+each name (`postRepairDone`, `pickRepairPhotos`). When the last one moves
+the job from Punch List to PM Review, `applyPipeline` posts one summary on
+the **"PM punch review"** task (`PIPELINE_TASKS.pmPunchReview`): every
+finished repair with its finish line (or "closed in JobTread, no finish
+note" for one ticked in JobTread itself), and each repair's AFTER photo
+linked, at most ten. Its reference is a hash of the finished to-dos' ids
+(`summaryRef`), so the completion and JobTread's webhook — which can both
+see the same flip — post one summary between them, while a later punch
+round, a different set, gets its own. Both are best-effort: neither can
+fail the completion or undo the status move. A clean inspection going
+straight to PM Review posts no summary — nothing was repaired.
+
 **JobTread derives a checklist task's progress from its ticks** (ticked /
 total, whatever `progress` is written), so a reported line keeps "Final
 inspection" under 100% until the punch work is done. The pipeline

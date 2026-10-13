@@ -33,8 +33,16 @@ repair work — wired into JobTread and the DB Production board.
    "Terminado" button. The job's scheduled **"Punch list"** task mirrors
    the open repairs as its checklist and completes with the last one;
    when the last repair closes, the job moves to **PM Review**
-   automatically.
+   automatically. Each finished repair posts a **message on its own
+   to-do** — "✔ REPAIR DONE — <the crew's note>", who finished it — with
+   its before and after photos linked (Carl, 13 Oct 2026: the note used to
+   sit only at the bottom of the to-do's description, where nobody found
+   it).
 7. The PM reviews the photos and notes and ticks **"PM punch review"**.
+   The repair that moves the job to PM Review posts **one summary on that
+   task**: every finished repair, its note, who did it, with each repair's
+   after photo linked (up to ten; every repair's own message has the rest).
+   Messages, never the job's activity feed — Carl's rule for crew notes.
    The job then waits for the **sales rep**, who speaks to the customer
    and ticks **"Final check-off"** — that is what sets **Job Completed**,
    so a person has talked to the homeowner before the final payment

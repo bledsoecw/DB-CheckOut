@@ -388,3 +388,32 @@ test("an AFTER photo picked from the phone lands on its repair named by when it 
     globalThis.fetch = realFetch;
   }
 });
+
+test("finishing a repair posts its note as a message on the to-do, with its photos linked", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(
+    routerDeps((q) => {
+      const task = q["task"] as Record<string, unknown> | undefined;
+      if (task && "comments" in task) return { task: { comments: { nodes: [] } } };
+      if (task && "files" in task) {
+        return { task: { files: { nodes: [
+          { id: "fa", name: "AFTER 2026-10-13 19:38 — Carl Bledsoe", description: "DB CheckOut ref: 1758400000000-ab12cd.a", createdAt: null },
+          { id: "fb", name: "BEFORE 2026-10-13 19:37 — Carl Bledsoe", description: "DB CheckOut ref: 1758400000000-ab12cd.b", createdAt: null },
+        ] } } };
+      }
+      if (task) return { task: { description: "Reseal the boot" } };
+      if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
+      if ("comment" in q) return { comment: { files: { nodes: [] } } };
+      return {};
+    }, queries),
+  );
+  const call = fakeHttp("POST", "/tasks/pt1/complete", { "x-client-ref": "1758400000000-ab12cd" }, { note: "New boot, sealed" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  const done = (queries.find((q) => "updateTask" in q)!["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.match(String(done["description"]), /✔ Done — New boot, sealed — /, "the description line stays");
+  const created = (queries.find((q) => "createComment" in q)!["createComment"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(created["targetId"], "pt1");
+  assert.match(String(created["message"]), /^✔ REPAIR DONE — New boot, sealed\nFinished by .+ via DB CheckOut\n\nDB CheckOut ref: 1758400000000-ab12cd$/);
+  assert.equal(queries.filter((q) => "updateComment" in q).length, 2, "before and after linked");
+});

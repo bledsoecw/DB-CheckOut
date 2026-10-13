@@ -30,6 +30,13 @@ import {
   toScopeLines,
   uploadPhoto,
   photoFileWords,
+  repairDoneMessage,
+  pickRepairPhotos,
+  postRepairDone,
+  doneLine,
+  pmReviewSummary,
+  summaryRef,
+  clientRefMarker,
   type PipelineTask,
 } from "../src/jt";
 import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
@@ -1024,4 +1031,112 @@ test("completeTask does not write the done note twice on a re-send", async () =>
   const dollar = (queries[1]["updateTask"] as Record<string, unknown>)["$"] as Record<string, unknown>;
   assert.equal(dollar["description"], already);
   assert.equal(dollar["progress"], 1);
+});
+
+// --------------------------------------------------------------------------
+// A finished repair, said where the PM looks (Carl, 13 Oct 2026)
+// --------------------------------------------------------------------------
+
+test("repairDoneMessage says the repair is done, the note, and who", () => {
+  assert.equal(repairDoneMessage("Fixed the boot", "Yahir Gonzalez"), "✔ REPAIR DONE — Fixed the boot\nFinished by Yahir Gonzalez via DB CheckOut");
+  assert.equal(repairDoneMessage("  ", "Yahir Gonzalez"), "✔ REPAIR DONE\nFinished by Yahir Gonzalez via DB CheckOut");
+  assert.equal(repairDoneMessage(undefined, "A"), "✔ REPAIR DONE\nFinished by A via DB CheckOut");
+});
+
+test("pickRepairPhotos finds this repair's photos by its reference, else the newest by name", () => {
+  const files = [
+    { id: "f3", name: "AFTER 2026-10-13 19:40 — B", description: "Uploaded from DB CheckOut by B · DB CheckOut ref: other.a", createdAt: null },
+    { id: "f2", name: "AFTER 2026-10-13 19:38 — C", description: "Uploaded from DB CheckOut by C · DB CheckOut ref: crt7.a", createdAt: null },
+    { id: "f1", name: "BEFORE (from phone, taken 2026-10-13 12:44) — C", description: "… · DB CheckOut ref: crt7.b", createdAt: null },
+  ];
+  assert.deepEqual(pickRepairPhotos(files, "crt7"), { before: "f1", after: "f2" }, "by reference, not the newest AFTER");
+  assert.deepEqual(pickRepairPhotos(files), { before: "f1", after: "f3" }, "no reference: the newest of each");
+  assert.deepEqual(pickRepairPhotos([], "crt7"), { before: undefined, after: undefined });
+});
+
+test("doneLine reads the finish line completeTask wrote", () => {
+  assert.equal(doneLine("Fix 1\n\nPunch list · asked by Ops\n\n✔ Done — Fixed — Carl Bledsoe"), "Fixed — Carl Bledsoe");
+  assert.equal(doneLine("✔ Done — Carl Bledsoe"), "Carl Bledsoe");
+  assert.equal(doneLine("Reseal the boot"), null);
+  assert.equal(doneLine(null), null);
+});
+
+const doneTask = (id: string, name: string, description: string | null): PunchTask => ({
+  id, name, description, progress: 1, endDate: null, assignees: [], assigneeNames: [], mine: false,
+});
+
+test("pmReviewSummary lists every finished repair, its note and who, and says where the photos are", () => {
+  const done = [
+    doneTask("a", "Alberto and Yahir — Reseal the pipe boot", "Reseal\n\n✔ Done — New boot, sealed — Yahir Gonzalez"),
+    doneTask("b", "REPORT: Gutter", null),
+  ];
+  assert.equal(
+    pmReviewSummary(done, 2),
+    [
+      "🔍 READY FOR PM REVIEW — 2 repairs finished",
+      "1. Alberto and Yahir — Reseal the pipe boot — New boot, sealed — Yahir Gonzalez",
+      "2. REPORT: Gutter — closed in JobTread, no finish note",
+      "",
+      "The after photos are linked here; each repair's own message carries its before and after.",
+      "Check the work, then tick PM punch review.",
+    ].join("\n"),
+  );
+  assert.match(pmReviewSummary(done, 1), /After photos for 1 of the 2 are linked here/);
+  assert.match(pmReviewSummary([done[0]], 0), /^🔍 READY FOR PM REVIEW — 1 repair finished\n[\s\S]*No after photos to link here/);
+});
+
+test("summaryRef is the same for the same repairs in any order, different for another set, and a valid reference", () => {
+  const a = doneTask("t1", "x", null), b = doneTask("t2", "y", null), c = doneTask("t3", "z", null);
+  assert.equal(summaryRef([a, b]), summaryRef([b, a]));
+  assert.notEqual(summaryRef([a, b]), summaryRef([a, b, c]));
+  assert.match(summaryRef([a]), /^pmr-[0-9a-f]{8}$/);
+  assert.ok(clientRefMarker(summaryRef([a, b])), "postTaskMessage can find it again");
+});
+
+test("postRepairDone posts the message on the to-do and links its before and after photos", async () => {
+  const queries: PaveQuery[] = [];
+  const { client } = fakePave((q) => {
+    queries.push(q);
+    const task = q["task"] as Record<string, unknown> | undefined;
+    if (task && "comments" in task) return { task: { comments: { nodes: [] } } };
+    if (task && "files" in task) {
+      return {
+        task: {
+          files: {
+            nodes: [
+              { id: "fa", name: "AFTER 2026-10-13 19:38 — Carl Bledsoe", description: "… · DB CheckOut ref: crt7.a", createdAt: "2026-10-13T19:38:18Z" },
+              { id: "fb", name: "BEFORE (from phone, taken 2026-10-13 12:44) — Carl Bledsoe", description: "… · DB CheckOut ref: crt7.b", createdAt: "2026-10-13T19:38:13Z" },
+            ],
+          },
+        },
+      };
+    }
+    if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
+    if ("comment" in q) return { comment: { files: { nodes: [] } } };
+    return {};
+  });
+  const out = await postRepairDone(client, "pt1", "Fixed", "Carl Bledsoe", "crt7");
+  assert.deepEqual(out, { commentId: "c1", photos: 2 });
+  const created = (queries.find((q) => "createComment" in q)!["createComment"] as Record<string, unknown>)["$"] as Record<string, unknown>;
+  assert.equal(created["targetType"], "task");
+  assert.equal(created["targetId"], "pt1");
+  assert.equal(created["message"], "✔ REPAIR DONE — Fixed\nFinished by Carl Bledsoe via DB CheckOut\n\nDB CheckOut ref: crt7");
+  assert.equal(created["isVisibleToCustomerRoles"], false);
+  const linked = queries.filter((q) => "updateComment" in q).map((q) => ((q["updateComment"] as Record<string, unknown>)["$"] as Record<string, unknown>)["files"]);
+  assert.deepEqual(linked, [[{ _type: "file", id: "fb" }], [{ _type: "file", id: "fa" }]], "before, then after");
+});
+
+test("postRepairDone re-sent finds the message it posted instead of posting twice", async () => {
+  const queries: PaveQuery[] = [];
+  const { client } = fakePave((q) => {
+    queries.push(q);
+    const task = q["task"] as Record<string, unknown> | undefined;
+    if (task && "comments" in task) return { task: { comments: { nodes: [{ id: "c1" }] } } };
+    if (task && "files" in task) return { task: { files: { nodes: [{ id: "fa", name: "AFTER", description: "ref: crt7.a", createdAt: null }] } } };
+    if ("comment" in q) return { comment: { files: { nodes: [{ id: "cf1", file: { id: "fa" } }] } } };
+    return {};
+  });
+  await postRepairDone(client, "pt1", "Fixed", "Carl Bledsoe", "crt7");
+  assert.equal(queries.filter((q) => "createComment" in q).length, 0);
+  assert.equal(queries.filter((q) => "updateComment" in q).length, 0, "the photo already on it is left alone");
 });
