@@ -773,6 +773,19 @@ function messageBody(message) {
   return message.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("DB CheckOut ref:") && !/^— .+ via DB CheckOut$/.test(l) && !/^Reported by .+ via DB CheckOut$/.test(l));
 }
 var NOTE_PREFIXES = ["Inspector notes:", "Attic access limitation", "Cleanup notes:"];
+function visitExtras(messages) {
+  const out = [];
+  const fixed = [...messages].reverse().map(messageBody).filter((b) => b.some((l) => l.startsWith("\u2714 FIXED ON SITE"))).map((b) => {
+    const said = b.find((l) => l.startsWith("\u2714 FIXED ON SITE")) ?? "";
+    const note = said.replace(/^✔ FIXED ON SITE( — )?/, "");
+    const where = b.find((l) => l.startsWith("Where: "));
+    return `- ${b[0]}${note ? ` \u2014 ${note}` : ""}${where ? ` (${where.slice(7)})` : ""}`;
+  });
+  if (fixed.length) out.push("", "Fixed on site:", ...fixed);
+  const notes = messages.find((m) => NOTE_PREFIXES.some((p) => m.trim().startsWith(p)));
+  if (notes) out.push("", "Crew notes:", ...messageBody(notes));
+  return out;
+}
 function inspectionReviewSummary(args) {
   const lines = ["\u{1F50D} READY FOR PM REVIEW \u2014 final inspection passed, no repairs needed"];
   if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
@@ -782,22 +795,63 @@ function inspectionReviewSummary(args) {
       open.length === 0 ? `All ${args.checklist.length} checks passed` : `${args.checklist.length - open.length} of ${args.checklist.length} checks passed \u2014 left open: ${open.map((s) => s.name).join("; ")}`
     );
   }
-  const oldestFirst = [...args.messages].reverse();
-  const fixed = oldestFirst.map(messageBody).filter((b) => b.some((l) => l.startsWith("\u2714 FIXED ON SITE"))).map((b) => {
-    const said = b.find((l) => l.startsWith("\u2714 FIXED ON SITE")) ?? "";
-    const note = said.replace(/^✔ FIXED ON SITE( — )?/, "");
-    const where = b.find((l) => l.startsWith("Where: "));
-    return `- ${b[0]}${note ? ` \u2014 ${note}` : ""}${where ? ` (${where.slice(7)})` : ""}`;
-  });
-  if (fixed.length) lines.push("", "Fixed on site:", ...fixed);
-  const notes = args.messages.find((m) => NOTE_PREFIXES.some((p) => m.trim().startsWith(p)));
-  if (notes) lines.push("", "Crew notes:", ...messageBody(notes));
+  lines.push(...visitExtras(args.messages));
   lines.push(
     "",
     args.photosLinked ? "The visit photos are linked here." : "No visit photos came with the inspection.",
     "Check the work, then tick PM punch review."
   );
   return lines.join("\n").slice(0, 3900);
+}
+function reportNote(description) {
+  return oneLine((description ?? "").split("\n\n")[0] ?? "", 160);
+}
+function punchListSummary(args) {
+  const n = Math.max(args.open.length, args.reported);
+  const lines = [`\u{1F6E0} PUNCH LIST TO SCHEDULE \u2014 the final inspection found ${n} thing${n === 1 ? "" : "s"} to repair`];
+  if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
+  lines.push("");
+  args.open.forEach((t, i) => {
+    const note = reportNote(t.description);
+    const who = t.assigneeNames.length ? `for ${t.assigneeNames.join(" and ")}` : "nobody assigned yet";
+    lines.push(`${i + 1}. ${t.name.replace(/^REPORT:\s*/, "")}${note ? ` \u2014 ${note}` : ""} \u2014 ${who}`);
+  });
+  if (args.reported > args.open.length) {
+    const more = args.reported - args.open.length;
+    lines.push(`${more} more reported on the phone ${more === 1 ? "is" : "are"} still on the way and will show up as to-dos.`);
+  }
+  lines.push(...visitExtras(args.messages));
+  lines.push(
+    "",
+    args.photosLinked ? "The problem photos are linked here." : "No problem photos have reached JobTread yet.",
+    "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out."
+  );
+  return lines.join("\n").slice(0, 3900);
+}
+function punchTarget(milestones) {
+  return findPipelineTask(milestones, PIPELINE_TASKS.punchList) ?? findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+}
+async function postPunchListSummary(pave, inspectionTask, open, reported, target) {
+  if (!target || open.length === 0 && reported === 0) return null;
+  const messages = inspectionTask ? await listTaskMessages(pave, inspectionTask.id) : [];
+  const photos = [];
+  for (const t of open) {
+    if (photos.length >= SUMMARY_PHOTOS_MAX) break;
+    const newest = (await listTaskFiles(pave, t.id))[0];
+    if (newest) photos.push(newest.id);
+  }
+  const message = punchListSummary({
+    inspector: inspectionTask ? inspectorOf(inspectionTask.description) : null,
+    open,
+    reported,
+    messages,
+    photosLinked: photos.length
+  });
+  const ref = `pls-${fnv(inspectionTask?.id ?? open.map((t) => t.id).sort().join(","))}`;
+  const commentId = await postTaskMessage(pave, target.id, message, ref, [PM_REVIEWER.membershipId]);
+  if (!commentId) return null;
+  for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
+  return commentId;
 }
 async function postInspectionReviewSummary(pave, inspectionTask, reviewTask) {
   if (!inspectionTask || !reviewTask) return null;
@@ -1120,15 +1174,18 @@ async function applyPipeline(pave, jobId, opts = {}) {
   }
   if (!next) return null;
   await setJobStatus(pave, jobId, next);
-  if (next === STATUS.pmReview) {
-    try {
+  try {
+    const inspection = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+    if (next === STATUS.pmReview) {
       const review = reviewTarget(milestones);
       if (currentStatus === STATUS.punchList) await postPmReviewSummary(pave, punchTasks, review);
-      else if (currentStatus === STATUS.finalInspection)
-        await postInspectionReviewSummary(pave, findPipelineTask(milestones, PIPELINE_TASKS.finalInspection), review);
-    } catch (err) {
-      console.warn(`PM review summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+      else if (currentStatus === STATUS.finalInspection) await postInspectionReviewSummary(pave, inspection, review);
+    } else if (next === STATUS.punchList && currentStatus === STATUS.finalInspection) {
+      const open = punchTasks.filter((t) => t.progress < 1);
+      await postPunchListSummary(pave, inspection, open, opts.problemsReported ?? 0, punchTarget(milestones));
     }
+  } catch (err) {
+    console.warn(`PM summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
   }
   return next;
 }

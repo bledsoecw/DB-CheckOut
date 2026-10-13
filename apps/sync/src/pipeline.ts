@@ -34,6 +34,8 @@ import {
   listPunchTasks,
   postInspectionReviewSummary,
   postPmReviewSummary,
+  postPunchListSummary,
+  punchTarget,
   reviewTarget,
   setJobStatus,
   syncInspectionChecklist,
@@ -152,15 +154,20 @@ export async function applyPipeline(
   // "PM punch review" with the PM reviewer tagged (Carl, 13 Oct 2026): the
   // last repair closing, or a clean final inspection. Best-effort — the
   // status is the decision, and a summary that fails must not undo it.
-  if (next === STATUS.pmReview) {
-    try {
+  // And an inspection that finds problems tells him too, on the "Punch
+  // list" task, so he can schedule the punch crew (Carl, 13 Oct 2026).
+  try {
+    const inspection = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+    if (next === STATUS.pmReview) {
       const review = reviewTarget(milestones);
       if (currentStatus === STATUS.punchList) await postPmReviewSummary(pave, punchTasks, review);
-      else if (currentStatus === STATUS.finalInspection)
-        await postInspectionReviewSummary(pave, findPipelineTask(milestones, PIPELINE_TASKS.finalInspection), review);
-    } catch (err) {
-      console.warn(`PM review summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
+      else if (currentStatus === STATUS.finalInspection) await postInspectionReviewSummary(pave, inspection, review);
+    } else if (next === STATUS.punchList && currentStatus === STATUS.finalInspection) {
+      const open = punchTasks.filter((t) => t.progress < 1);
+      await postPunchListSummary(pave, inspection, open, opts.problemsReported ?? 0, punchTarget(milestones));
     }
+  } catch (err) {
+    console.warn(`PM summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
   }
   return next;
 }

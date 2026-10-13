@@ -26,7 +26,11 @@ repair work — wired into JobTread and the DB Production board.
    cleanup checks are its subtasks, the notes go in its description — and
    completes it, so the app ticks the same boxes the PM sees on the Gantt.
    That completion is what moves the job: to **Punch List** if the crew
-   found anything, otherwise straight to **PM Review**. (No JT Forms: the
+   found anything, otherwise straight to **PM Review**. Found anything
+   posts a **"PUNCH LIST TO SCHEDULE"** message on the job's "Punch list"
+   task with **Dave Elick tagged** (Carl, 13 Oct 2026) — every repair, the
+   crew's note, who it is assigned to, the problem photos linked — so he
+   can date the punch crew's visit. (No JT Forms: the
    inspection and cleanup forms were retired on 2026-09-21.)
 6. The **punch crew** sees assigned repairs in the same app: where to
    go, what to do, what to bring, before/after photos, and a big

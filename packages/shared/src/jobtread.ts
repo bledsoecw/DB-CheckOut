@@ -210,9 +210,10 @@ export const PUNCH_CREW = [
 ] as const;
 
 /**
- * Who is tagged on the PM review summary — the message that says a job has
- * reached PM Review — so JobTread notifies him he has a review (Carl,
- * 13 Oct 2026). His internal STAFF membership, verified live 2026-10-13
+ * Who is tagged on the summaries the closeout pipeline posts, so JobTread
+ * notifies him (Carl, 13 Oct 2026): when a job reaches PM Review (he has a
+ * review), and when an inspection sends it to Punch List (he schedules the
+ * punch crew). His internal STAFF membership, verified live 2026-10-13
  * (role: Roofing Production Manager). A tag is an `assignee` on the comment,
  * written flat: `{ membershipId }`.
  */

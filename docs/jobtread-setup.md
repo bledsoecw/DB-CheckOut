@@ -80,9 +80,20 @@ task's id (`pmi-…`) — a job passes that rung once. Both carry
 `22PLtDsn6f4P`, verified live), which is how JobTread notifies him; the
 per-repair messages tag nobody. `reviewTarget` falls back to the "Final
 inspection" task on a template with no "PM punch review" (the construction
-schedule has none), so the tag still reaches him. An inspection that finds
-problems goes to Punch List and posts nothing — the review comes after the
-repairs.
+schedule has none), so the tag still reaches him.
+
+**An inspection that finds problems tells him too** (Carl, same day: *"Dave
+needs notified so he can schedule when to send them out to complete the
+punch list"*). Final Inspection → Punch List posts `punchListSummary` on the
+**"Punch list"** task — the step he dates — with `PM_REVIEWER` tagged: who
+inspected, every open REPORT to-do with the crew's note (its description's
+first paragraph) and who it is assigned to ("nobody assigned yet" off a
+roofing job), the fixed-on-site findings and crew notes off the inspection
+task, and each repair's newest photo linked. When the phone reported more
+problems than have reached JobTread (`problemsReported` on the close), it
+says how many are still on the way rather than under-counting. Reference
+`pls-` + the inspection task's id: a job takes that rung once. On a template
+with no Punch list task (`punchTarget`) it goes on "Final inspection".
 
 **JobTread derives a checklist task's progress from its ticks** (ticked /
 total, whatever `progress` is written), so a reported line keeps "Final

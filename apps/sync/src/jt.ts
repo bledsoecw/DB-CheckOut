@@ -974,6 +974,29 @@ function messageBody(message: string): string[] {
 const NOTE_PREFIXES = ["Inspector notes:", "Attic access limitation", "Cleanup notes:"];
 
 /**
+ * What the inspection task's messages add to a summary: every "✔ FIXED ON
+ * SITE" finding (oldest first — JobTread hands them newest first) and the
+ * crew's notes message, each under its heading; nothing when there is none.
+ */
+function visitExtras(messages: string[]): string[] {
+  const out: string[] = [];
+  const fixed = [...messages]
+    .reverse()
+    .map(messageBody)
+    .filter((b) => b.some((l) => l.startsWith("✔ FIXED ON SITE")))
+    .map((b) => {
+      const said = b.find((l) => l.startsWith("✔ FIXED ON SITE")) ?? "";
+      const note = said.replace(/^✔ FIXED ON SITE( — )?/, "");
+      const where = b.find((l) => l.startsWith("Where: "));
+      return `- ${b[0]}${note ? ` — ${note}` : ""}${where ? ` (${where.slice(7)})` : ""}`;
+    });
+  if (fixed.length) out.push("", "Fixed on site:", ...fixed);
+  const notes = messages.find((m) => NOTE_PREFIXES.some((p) => m.trim().startsWith(p)));
+  if (notes) out.push("", "Crew notes:", ...messageBody(notes));
+  return out;
+}
+
+/**
  * The PM's summary of a clean final inspection: who inspected, how the
  * checklist came out (naming any line left open), what the crew corrected on
  * the spot, and the crew's notes — all of it already on the "Final
@@ -995,26 +1018,103 @@ export function inspectionReviewSummary(args: {
         : `${args.checklist.length - open.length} of ${args.checklist.length} checks passed — left open: ${open.map((s) => s.name).join("; ")}`,
     );
   }
-  // Newest first from JobTread; the oldest reads first here.
-  const oldestFirst = [...args.messages].reverse();
-  const fixed = oldestFirst
-    .map(messageBody)
-    .filter((b) => b.some((l) => l.startsWith("✔ FIXED ON SITE")))
-    .map((b) => {
-      const said = b.find((l) => l.startsWith("✔ FIXED ON SITE")) ?? "";
-      const note = said.replace(/^✔ FIXED ON SITE( — )?/, "");
-      const where = b.find((l) => l.startsWith("Where: "));
-      return `- ${b[0]}${note ? ` — ${note}` : ""}${where ? ` (${where.slice(7)})` : ""}`;
-    });
-  if (fixed.length) lines.push("", "Fixed on site:", ...fixed);
-  const notes = args.messages.find((m) => NOTE_PREFIXES.some((p) => m.trim().startsWith(p)));
-  if (notes) lines.push("", "Crew notes:", ...messageBody(notes));
+  lines.push(...visitExtras(args.messages));
   lines.push(
     "",
     args.photosLinked ? "The visit photos are linked here." : "No visit photos came with the inspection.",
     "Check the work, then tick PM punch review.",
   );
   return lines.join("\n").slice(0, 3900);
+}
+
+// --------------------------------------------------------------------------
+// An inspection that finds problems: the PM schedules the punch work
+// --------------------------------------------------------------------------
+
+/** The crew's note on a REPORT to-do — the first paragraph createReportTask wrote. */
+function reportNote(description: string | null): string {
+  return oneLine((description ?? "").split("\n\n")[0] ?? "", 160);
+}
+
+/**
+ * What the PM needs to schedule the punch crew (Carl, 13 Oct 2026: *"Dave
+ * needs notified so he can schedule when to send them out to complete the
+ * punch list"*): every repair the inspection reported, the crew's note, who
+ * it is assigned to; then what was fixed on site and the crew's notes. When
+ * the phone reported more than have reached JobTread yet, it says so rather
+ * than under-counting.
+ */
+export function punchListSummary(args: {
+  inspector: string | null;
+  open: PunchTask[];
+  reported: number;
+  messages: string[];
+  photosLinked: number;
+}): string {
+  const n = Math.max(args.open.length, args.reported);
+  const lines = [`🛠 PUNCH LIST TO SCHEDULE — the final inspection found ${n} thing${n === 1 ? "" : "s"} to repair`];
+  if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
+  lines.push("");
+  args.open.forEach((t, i) => {
+    const note = reportNote(t.description);
+    const who = t.assigneeNames.length ? `for ${t.assigneeNames.join(" and ")}` : "nobody assigned yet";
+    lines.push(`${i + 1}. ${t.name.replace(/^REPORT:\s*/, "")}${note ? ` — ${note}` : ""} — ${who}`);
+  });
+  if (args.reported > args.open.length) {
+    const more = args.reported - args.open.length;
+    lines.push(`${more} more reported on the phone ${more === 1 ? "is" : "are"} still on the way and will show up as to-dos.`);
+  }
+  lines.push(...visitExtras(args.messages));
+  lines.push(
+    "",
+    args.photosLinked ? "The problem photos are linked here." : "No problem photos have reached JobTread yet.",
+    "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out.",
+  );
+  return lines.join("\n").slice(0, 3900);
+}
+
+/**
+ * Where the punch-list summary goes: the template's "Punch list" task — the
+ * step the PM dates — else "Final inspection" (the construction schedule has
+ * no Punch list task), so the PM is told either way.
+ */
+export function punchTarget(milestones: PipelineTask[]): PipelineTask | undefined {
+  return findPipelineTask(milestones, PIPELINE_TASKS.punchList) ?? findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+}
+
+/**
+ * Post the punch-list summary with each repair's newest photo linked and the
+ * PM tagged. A job passes Final Inspection -> Punch List once, so the
+ * reference is the inspection task's id: one summary between the completion
+ * and the webhook.
+ */
+export async function postPunchListSummary(
+  pave: PaveClient,
+  inspectionTask: PipelineTask | undefined,
+  open: PunchTask[],
+  reported: number,
+  target: PipelineTask | undefined,
+): Promise<string | null> {
+  if (!target || (open.length === 0 && reported === 0)) return null;
+  const messages = inspectionTask ? await listTaskMessages(pave, inspectionTask.id) : [];
+  const photos: string[] = [];
+  for (const t of open) {
+    if (photos.length >= SUMMARY_PHOTOS_MAX) break;
+    const newest = (await listTaskFiles(pave, t.id))[0];
+    if (newest) photos.push(newest.id);
+  }
+  const message = punchListSummary({
+    inspector: inspectionTask ? inspectorOf(inspectionTask.description) : null,
+    open,
+    reported,
+    messages,
+    photosLinked: photos.length,
+  });
+  const ref = `pls-${fnv(inspectionTask?.id ?? open.map((t) => t.id).sort().join(","))}`;
+  const commentId = await postTaskMessage(pave, target.id, message, ref, [PM_REVIEWER.membershipId]);
+  if (!commentId) return null;
+  for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
+  return commentId;
 }
 
 /**

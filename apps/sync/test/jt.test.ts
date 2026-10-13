@@ -39,6 +39,7 @@ import {
   clientRefMarker,
   inspectorOf,
   inspectionReviewSummary,
+  punchListSummary,
   type PipelineTask,
 } from "../src/jt";
 import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
@@ -1192,4 +1193,29 @@ test("inspectionReviewSummary reads 26-0246's real shapes: the checks, what was 
   );
   const bare = inspectionReviewSummary({ inspector: null, checklist: [], messages: [], photosLinked: 0 });
   assert.equal(bare, "🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed\n\nNo visit photos came with the inspection.\nCheck the work, then tick PM punch review.");
+});
+
+test("punchListSummary: every repair to schedule, its note, who it is for, then the rest of the visit", () => {
+  const open: PunchTask[] = [
+    { id: "r1", name: "REPORT: Rear slope — pipe boot", description: "Pipe boot cracked, replace it\n\nCrew said (verbatim): \"La bota\"\n\nReported by: Yahir Gonzalez", progress: 0, endDate: null, assignees: [], assigneeNames: ["Alberto Gonzalez", "Yahir Gonzalez"], mine: false },
+    { id: "r2", name: "REPORT: Gutter, NE corner", description: "Downspout loose", progress: 0, endDate: null, assignees: [], assigneeNames: [], mine: false },
+  ];
+  const messages = ["Inspector notes: Customer home, walked it with her.\n— Yahir Gonzalez via DB CheckOut\n\nDB CheckOut ref: x.notes"];
+  assert.equal(
+    punchListSummary({ inspector: "Yahir Gonzalez", open, reported: 2, messages, photosLinked: 2 }),
+    [
+      "🛠 PUNCH LIST TO SCHEDULE — the final inspection found 2 things to repair",
+      "Inspected by Yahir Gonzalez",
+      "",
+      "1. Rear slope — pipe boot — Pipe boot cracked, replace it — for Alberto Gonzalez and Yahir Gonzalez",
+      "2. Gutter, NE corner — Downspout loose — nobody assigned yet",
+      "",
+      "Crew notes:",
+      "Inspector notes: Customer home, walked it with her.",
+      "",
+      "The problem photos are linked here.",
+      "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out.",
+    ].join("\n"),
+  );
+  assert.match(punchListSummary({ inspector: null, open: [], reported: 1, messages: [], photosLinked: 0 }), /found 1 thing to repair\n\n1 more reported on the phone is still on the way[\s\S]*No problem photos have reached JobTread yet/);
 });

@@ -488,15 +488,41 @@ test("a template with no PM punch review task (construction) gets the summary on
   assert.equal(seen.posted[0]["targetId"], "fi");
 });
 
-test("an inspection that finds problems goes to Punch List and posts no review summary", async () => {
+test("an inspection that finds problems tells Dave on the Punch list task, so he can schedule the crew", async () => {
   const fake = fakeJobPave({
     status: STATUS.finalInspection,
-    punch: [{ id: "r1", name: "REPORT: Rear slope — pipe boot", progress: null }],
-    milestones: withReview([]),
+    punch: [{ id: "r1", name: "REPORT: Rear slope — pipe boot", progress: null, description: "Pipe boot cracked, replace it\n\nReported by: Yahir Gonzalez" }],
+    milestones: [
+      { id: "fi", name: "Final inspection", progress: 0.9, typeId: TASK_TYPES.inspection, description: "Walk the job.\n\n✔ Inspected by Yahir Gonzalez — via DB CheckOut", subtasks: [] },
+      { id: "pl", name: "Punch list", progress: null, typeId: TASK_TYPES.punchList, subtasks: [] },
+      { id: "co", name: "Final check-off", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
+      { id: "pmr", name: "PM punch review", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
+    ],
+  });
+  const seen = withMessages(fake, { r1: [{ id: "p1", name: "REPORT 2026-10-13 14:02 — Yahir Gonzalez", description: "x" }] });
+  assert.equal(await applyPipeline(fake.client, "job1", { problemsReported: 2 }), STATUS.punchList);
+  assert.equal(seen.posted.length, 1, "one summary, not a review summary");
+  assert.equal(seen.posted[0]["targetId"], "pl", "on the Punch list task he dates");
+  assert.deepEqual(seen.posted[0]["assignees"], [{ membershipId: PM_REVIEWER.membershipId }]);
+  const message = String(seen.posted[0]["message"]);
+  assert.match(message, /^🛠 PUNCH LIST TO SCHEDULE — the final inspection found 2 things to repair\nInspected by Yahir Gonzalez\n\n1\. Rear slope — pipe boot — Pipe boot cracked, replace it — nobody assigned yet\n1 more reported on the phone is still on the way/);
+  assert.match(message, /DB CheckOut ref: pls-[0-9a-f]{8}$/);
+  assert.deepEqual(seen.linked, [[{ _type: "file", id: "p1" }]], "the problem photo");
+});
+
+test("on a template with no Punch list task (construction) the punch summary goes on Final inspection", async () => {
+  const fake = fakeJobPave({
+    status: STATUS.finalInspection,
+    punch: [{ id: "r1", name: "REPORT: Back door trim", progress: null }],
+    milestones: [
+      { id: "fi", name: "Final inspection", progress: 1, typeId: TASK_TYPES.inspection, subtasks: [] },
+      { id: "co", name: "Final check-off", progress: null, typeId: TASK_TYPES.general, subtasks: [] },
+    ],
   });
   const seen = withMessages(fake, {});
   assert.equal(await applyPipeline(fake.client, "job1", { problemsReported: 1 }), STATUS.punchList);
-  assert.equal(seen.posted.length, 0);
+  assert.equal(seen.posted.length, 1);
+  assert.equal(seen.posted[0]["targetId"], "fi");
 });
 
 test("a summary that fails does not undo the move to PM Review", async () => {
