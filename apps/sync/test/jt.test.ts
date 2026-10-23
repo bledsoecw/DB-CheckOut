@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PaveClient, PaveQuery } from "../src/pave";
 import {
+  PUNCH_ASK,
+  REVIEW_ASK,
   assignedTo,
   attachFileToComment,
   checklistSubtasks,
@@ -780,9 +782,12 @@ function orgTask(
   jobId: string,
   taskTypeId: string,
   assignees: Array<{ name: string; email: string | null }>,
+  name = taskTypeId === TASK_TYPES.inspection ? "Final inspection" : "REPORT: something",
 ) {
   return {
     id,
+    name,
+    isToDo: taskTypeId === TASK_TYPES.punchList,
     taskType: { id: taskTypeId },
     job: { id: jobId },
     assignedMemberships: {
@@ -804,8 +809,12 @@ test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count s
         nodes: [
           orgTask("t1", "jobA", TASK_TYPES.punchList, [ALBERTO]),
           orgTask("t2", "jobA", TASK_TYPES.punchList, [ALBERTO]),
-          // Inspection visit: makes the job "theirs" without inflating the repairs badge.
+          // A final inspection: makes the job "theirs" without inflating the repairs badge.
           orgTask("t3", "jobB", TASK_TYPES.inspection, [ALBERTO]),
+          // A work area's own inspection, on a job still in production — theirs too.
+          orgTask("t6", "jobD", TASK_TYPES.inspection, [ALBERTO], "Final inspection — Gutters"),
+          // A sales rep's inspection visit is Inspection-typed too, and nothing Close Out can act on.
+          orgTask("t7", "jobE", TASK_TYPES.inspection, [ALBERTO], "26-0921 Rob Gamble 567-259-9774"),
           // Somebody else's punch item — must not count for Alberto.
           orgTask("t4", "jobC", TASK_TYPES.punchList, [{ name: "Marcos G.", email: null }]),
           // Task with no job link (org-level) — ignored.
@@ -822,6 +831,8 @@ test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count s
   assert.deepEqual(work.get("jobA"), { any: true, punchOpen: 2 });
   assert.deepEqual(work.get("jobB"), { any: true, punchOpen: 0 });
   assert.equal(work.get("jobC"), undefined);
+  assert.deepEqual(work.get("jobD"), { any: true, punchOpen: 0 });
+  assert.equal(work.get("jobE"), undefined);
 
   // The filter must only ask for open punch/inspection tasks (progress != 1
   // keeps JT's null-progress items, which are open work too).
@@ -835,7 +846,8 @@ test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count s
       {
         or: [
           { and: [[["taskType", "id"], "=", TASK_TYPES.punchList], [["isToDo"], "=", true]] },
-          [["taskType", "id"], "=", TASK_TYPES.inspection],
+          // Final inspections only — the Inspection type alone is mostly sales visits.
+          { and: [[["taskType", "id"], "=", TASK_TYPES.inspection], [["name"], "like", "Final inspection%"]] },
         ],
       },
       [["progress"], "!=", 1],
@@ -1081,7 +1093,7 @@ test("pmReviewSummary lists every finished repair, its note and who, and says wh
       "2. REPORT: Gutter — closed in JobTread, no finish note",
       "",
       "The after photos are linked here; each repair's own message carries its before and after.",
-      "Check the work, then tick PM punch review.",
+      REVIEW_ASK,
     ].join("\n"),
   );
   assert.match(pmReviewSummary(done, 1), /After photos for 1 of the 2 are linked here/);
@@ -1188,11 +1200,11 @@ test("inspectionReviewSummary reads 26-0246's real shapes: the checks, what was 
       "Cleanup notes: No gutters currently on house, more photos per Alberto’s phone on DB Cam.",
       "",
       "The visit photos are linked here.",
-      "Check the work, then tick PM punch review.",
+      REVIEW_ASK,
     ].join("\n"),
   );
   const bare = inspectionReviewSummary({ inspector: null, checklist: [], messages: [], photosLinked: 0 });
-  assert.equal(bare, "🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed\n\nNo visit photos came with the inspection.\nCheck the work, then tick PM punch review.");
+  assert.equal(bare, `🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed\n\nNo visit photos came with the inspection.\n${REVIEW_ASK}`);
 });
 
 test("punchListSummary: every repair to schedule, its note, who it is for, then the rest of the visit", () => {
@@ -1214,7 +1226,7 @@ test("punchListSummary: every repair to schedule, its note, who it is for, then 
       "Inspector notes: Customer home, walked it with her.",
       "",
       "The problem photos are linked here.",
-      "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out.",
+      PUNCH_ASK,
     ].join("\n"),
   );
   assert.match(punchListSummary({ inspector: null, open: [], reported: 1, messages: [], photosLinked: 0 }), /found 1 thing to repair\n\n1 more reported on the phone is still on the way[\s\S]*No problem photos have reached JobTread yet/);

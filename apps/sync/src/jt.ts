@@ -12,7 +12,6 @@ import {
   CUSTOM_FIELDS,
   ORGANIZATION_ID,
   PIPELINE_TASKS,
-  PM_REVIEWER,
   SERVICE_PROJECT_TYPES,
   STATUS,
   TASK_TYPES,
@@ -20,12 +19,25 @@ import {
 import type {
   Assignee,
   ChecklistFinding,
+  CloseoutArea,
   JobDetail,
   ProblemReport,
   PunchTask,
   QueueJob,
   ScopeDocument,
 } from "../../../packages/shared/src/types";
+import {
+  AREA_LABEL,
+  areaInspectionName,
+  areaOfInspectionName,
+  areaOfPunch,
+  areaTagLine,
+  jobAreas,
+  lineArea,
+  usesRoofForm,
+  type AreaKey,
+  type Reviewer,
+} from "./areas";
 
 // --------------------------------------------------------------------------
 // Raw node shapes as Pave returns them
@@ -261,6 +273,25 @@ export async function getJobBasics(pave: PaveClient, jobId: string): Promise<Que
   return res.job ? toQueueJob(res.job) : null;
 }
 
+/** Several jobs as the queue sees them, in one request (each under its own alias). */
+export async function listJobsByIds(pave: PaveClient, ids: readonly string[]): Promise<QueueJob[]> {
+  const out: QueueJob[] = [];
+  // Ten at a time keeps the declared size (10 x 25 field values) far under Pave's cap.
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10);
+    const query: Record<string, unknown> = {};
+    chunk.forEach((id, n) => {
+      query[`j${n}`] = { _: "job", $: { id }, ...JOB_SELECTION };
+    });
+    const res = await pave.query<Record<string, RawJob | null>>(query);
+    chunk.forEach((_, n) => {
+      const job = res[`j${n}`];
+      if (job) out.push(toQueueJob(job));
+    });
+  }
+  return out;
+}
+
 /** Just the job's pipeline Status value — the cheap read for webhook checks. */
 export async function getJobStatusValue(pave: PaveClient, jobId: string): Promise<string> {
   const res = await pave.query<{ job: RawJob | null }>({
@@ -275,10 +306,11 @@ export async function getJob(
   jobId: string,
   viewer?: Viewer,
 ): Promise<JobDetail> {
-  const [res, rawPunch, soldScope] = await Promise.all([
+  const [res, rawPunch, soldScope, inspections] = await Promise.all([
     pave.query<{ job: RawJob | null }>({ job: { $: { id: jobId }, ...JOB_SELECTION } }),
     listPunchTasks(pave, jobId),
     listSoldScope(pave, jobId),
+    listInspectionTasks(pave, jobId),
   ]);
   if (!res.job) throw new Error(`Job not found: ${jobId}`);
 
@@ -288,12 +320,101 @@ export async function getJob(
   // Without a viewer there is no "yours", so the honest count is all of them.
   const count = viewer ? mineOpen : open.length;
 
+  const basics = toQueueJob(res.job, count, mineOpen > 0);
+  const areas = closeoutAreas(basics, punchTasks, inspections, viewer);
   return {
-    ...toQueueJob(res.job, count, mineOpen > 0),
+    ...basics,
+    // An area inspection assigned to them makes the job theirs too.
+    mine: basics.mine || areas.some((a) => a.mine),
     punchTasks,
+    areas,
     soldScope,
     openPunchTotal: open.length,
   };
+}
+
+/** An inspection task on a job, as the area list needs it. */
+export interface InspectionTask {
+  id: string;
+  name: string;
+  progress: number;
+  description: string | null;
+  startDate: string | null;
+  assignees: Array<{ name: string | null; email: string | null }>;
+}
+
+/** The job's "Final inspection…" tasks — the template line and each area's own — with who is on them. */
+export async function listInspectionTasks(pave: PaveClient, jobId: string): Promise<InspectionTask[]> {
+  const res = await pave.query<{
+    job: {
+      tasks: {
+        nodes: Array<{
+          id: string;
+          name: string;
+          progress: number | null;
+          description: string | null;
+          startDate: string | null;
+          assignedMemberships?: { nodes: Array<{ user?: { name?: string | null; emailAddress?: string | null } | null }> } | null;
+        }>;
+      };
+    } | null;
+  }>({
+    job: {
+      $: { id: jobId },
+      tasks: {
+        $: { size: 10, where: [["name"], "like", "Final inspection%"] },
+        nodes: {
+          id: {},
+          name: {},
+          progress: {},
+          description: {},
+          startDate: {},
+          assignedMemberships: { $: { size: 5 }, nodes: { user: { name: {}, emailAddress: {} } } },
+        },
+      },
+    },
+  });
+  return (res.job?.tasks.nodes ?? []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    progress: t.progress ?? 0,
+    description: t.description ?? null,
+    startDate: t.startDate ?? null,
+    assignees: (t.assignedMemberships?.nodes ?? []).map((m) => ({ name: m.user?.name ?? null, email: m.user?.emailAddress ?? null })),
+  }));
+}
+
+/**
+ * The job's work areas as the phone draws them: which form each takes, its
+ * inspection task and who is on it, and the repairs open against it. Empty
+ * on a job that is not roofing.
+ */
+export function closeoutAreas(
+  job: Pick<QueueJob, "jobType" | "projectTypes">,
+  punch: PunchTask[],
+  inspections: InspectionTask[],
+  viewer: Viewer | undefined,
+): CloseoutArea[] {
+  const areas = jobAreas(job);
+  const line = lineArea(areas);
+  return areas.map((area) => {
+    const isLine = area === line;
+    const task = isLine
+      ? inspections.find((t) => sameName(t.name, areaInspectionName(area, line)))
+      : inspections.find((t) => areaOfInspectionName(t.name) === area);
+    return {
+      key: area,
+      label: AREA_LABEL[area],
+      line: isLine,
+      form: usesRoofForm(area, line) ? "roof" : "notes",
+      inspectionTaskId: task?.id ?? null,
+      inspectionDate: task?.startDate ?? null,
+      assigneeNames: (task?.assignees ?? []).map((a) => a.name ?? "").filter((n) => n.length > 0),
+      mine: task ? viewerMatches(task.assignees, viewer) : false,
+      inspected: Boolean(task && (task.progress >= 1 || (task.description ?? "").includes(INSPECTED_STAMP))),
+      openRepairs: punch.filter((t) => t.progress < 1 && areaOfPunch(t, areas) === area).length,
+    };
+  });
 }
 
 export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<PunchTask[]> {
@@ -398,10 +519,21 @@ function viewerMatches(
 
 /** What the viewer is on the hook for on one job (see listAssignedWorkByJob). */
 export interface AssignedWork {
-  /** They are on any open punch/inspection task here — the job is "theirs". */
+  /** They are on an open repair or final inspection here — the job is "theirs". */
   any: boolean;
   /** Open punch-type tasks naming them — the number on the REPAIRS badge. */
   punchOpen: number;
+}
+
+/**
+ * Close-out work: a punch to-do, or a FINAL inspection — the template line
+ * or a work area's own "Final inspection — Gutters". The Inspection type
+ * alone is not enough: the org uses it for every sales rep's inspection
+ * visit, and a sales visit is nothing Close Out can act on.
+ */
+export function isCloseoutTask(task: { name?: string | null; taskType?: { id: string } | null; isToDo?: boolean | null }): boolean {
+  if (task.taskType?.id === TASK_TYPES.punchList) return task.isToDo !== false;
+  return task.taskType?.id === TASK_TYPES.inspection && /^\s*final inspection/i.test(task.name ?? "");
 }
 
 /**
@@ -456,7 +588,9 @@ export async function listAssignedWorkByJob(
                     or: [
                       // Punch items are to-dos; the scheduled "Punch list" phase task shares the type.
                       { and: [[["taskType", "id"], "=", TASK_TYPES.punchList], [["isToDo"], "=", true]] },
-                      [["taskType", "id"], "=", TASK_TYPES.inspection],
+                      // Final inspections only: the template line and each work area's own.
+                      // Not every Inspection-typed task — those are mostly sales visits.
+                      { and: [[["taskType", "id"], "=", TASK_TYPES.inspection], [["name"], "like", "Final inspection%"]] },
                     ],
                   },
                   [["progress"], "!=", 1],
@@ -466,6 +600,8 @@ export async function listAssignedWorkByJob(
             nextPage: {},
             nodes: {
               id: {},
+              name: {},
+              isToDo: {},
               taskType: { id: {} },
               job: { id: {} },
               assignedMemberships: {
@@ -484,7 +620,7 @@ export async function listAssignedWorkByJob(
           name: m.user?.name ?? null,
           email: m.user?.emailAddress ?? null,
         }));
-        if (!viewerMatches(assignees, viewer)) continue;
+        if (!isCloseoutTask(task) || !viewerMatches(assignees, viewer)) continue;
         const entry = work.get(jobId) ?? { any: false, punchOpen: 0 };
         entry.any = true;
         if (task.taskType?.id === TASK_TYPES.punchList) entry.punchOpen += 1;
@@ -694,17 +830,27 @@ const COMMENT_VISIBILITY = {
   isVisibleToVendorRoles: false,
 } as const;
 
-/** The message on this task created for this client reference, if it already exists. */
-export async function findCommentByRef(pave: PaveClient, taskId: string, ref: string): Promise<string | null> {
+/**
+ * Where a message goes: a task's own thread, or — for a summary about a work
+ * area that has no task of its own to carry it — the job's.
+ */
+export interface MessageTarget {
+  type: "task" | "job";
+  id: string;
+}
+
+/** The message on this task (or job) created for this client reference, if it already exists. */
+export async function findCommentByRef(pave: PaveClient, target: string | MessageTarget, ref: string): Promise<string | null> {
   const marker = clientRefMarker(ref);
   if (!marker) return null;
-  const res = await pave.query<{ task: { comments: { nodes: Array<{ id: string }> } } | null }>({
-    task: {
-      $: { id: taskId },
+  const t: MessageTarget = typeof target === "string" ? { type: "task", id: target } : target;
+  const res = await pave.query<Record<string, { comments: { nodes: Array<{ id: string }> } } | null>>({
+    [t.type]: {
+      $: { id: t.id },
       comments: { $: { size: 5, where: [["message"], "like", `%${marker}%`] }, nodes: { id: {} } },
     },
   });
-  return res.task?.comments?.nodes?.[0]?.id ?? null;
+  return res[t.type]?.comments?.nodes?.[0]?.id ?? null;
 }
 
 /**
@@ -720,16 +866,27 @@ export async function postTaskMessage(
   /** Memberships tagged on the message; JobTread notifies each. */
   tagged: readonly string[] = [],
 ): Promise<string> {
+  return postMessage(pave, { type: "task", id: taskId }, message, clientRef, tagged);
+}
+
+/** postTaskMessage, on a task or on the job itself. */
+export async function postMessage(
+  pave: PaveClient,
+  target: MessageTarget,
+  message: string,
+  clientRef?: string,
+  tagged: readonly string[] = [],
+): Promise<string> {
   const marker = clientRefMarker(clientRef);
   if (marker && clientRef) {
-    const existing = await findCommentByRef(pave, taskId, clientRef);
+    const existing = await findCommentByRef(pave, target, clientRef);
     if (existing) return existing;
   }
   const res = await pave.query<{ createComment: { createdComment?: { id: string } } }>({
     createComment: {
       $: {
-        targetType: "task",
-        targetId: taskId,
+        targetType: target.type,
+        targetId: target.id,
         message: marker ? `${message}\n\n${marker}` : message,
         ...COMMENT_VISIBILITY,
         ...(tagged.length ? { assignees: tagged.map((membershipId) => ({ membershipId })) } : {}),
@@ -873,8 +1030,22 @@ export function doneLine(description: string | null): string | null {
 /** How many after photos the summary links; the rest stay on each repair's own message. */
 export const SUMMARY_PHOTOS_MAX = 10;
 
-/** The summary the PM reads on "PM punch review": every finished repair, its note, who did it. */
-export function pmReviewSummary(done: PunchTask[], photosLinked: number): string {
+/**
+ * What every summary asks of the PM. The approval and the repair day are
+ * the Production Board's now (Carl, 23 Oct 2026: "The PMs need to live in
+ * Production board for all of this") — its Close-out panel lists the area.
+ */
+export const REVIEW_ASK = "Check the work, then approve it on the Production Board (Close-out), or put it on a punch list there.";
+export const PUNCH_ASK = "Book the repair day on the Production Board (Close-out). Assigned repairs are already on their phones in Close Out.";
+
+/** "Work area: Gutters" under a summary's head — only on a job with more than one. */
+const areaLine = (label?: string | null): string[] => (label ? [`Work area: ${label}`] : []);
+
+/** The memberships a summary is tagged to: its reviewer, when JobTread knows who that is. */
+const tagsFor = (reviewer: Reviewer | null): string[] => (reviewer?.membershipId ? [reviewer.membershipId] : []);
+
+/** The summary the PM reads when an area's repairs are all finished: every repair, its note, who did it. */
+export function pmReviewSummary(done: PunchTask[], photosLinked: number, area?: string | null): string {
   const head = `🔍 READY FOR PM REVIEW — ${done.length} repair${done.length === 1 ? "" : "s"} finished`;
   const lines = done.map((t, i) => `${i + 1}. ${t.name} — ${doneLine(t.description) ?? "closed in JobTread, no finish note"}`);
   const photos =
@@ -883,7 +1054,7 @@ export function pmReviewSummary(done: PunchTask[], photosLinked: number): string
       : photosLinked < done.length
         ? `After photos for ${photosLinked} of the ${done.length} are linked here; every repair's own message carries its before and after.`
         : "The after photos are linked here; each repair's own message carries its before and after.";
-  return [head, ...lines, "", photos, "Check the work, then tick PM punch review."].join("\n").slice(0, 3900);
+  return [head, ...areaLine(area), ...lines, "", photos, REVIEW_ASK].join("\n").slice(0, 3900);
 }
 
 /**
@@ -907,24 +1078,33 @@ function fnv(text: string): string {
 }
 
 /**
- * Post the summary on the review task (see reviewTarget) and link each
- * repair's after photo, tagging the PM reviewer so JobTread notifies him.
+ * Post the summary for one area's finished repairs and link each repair's
+ * after photo, tagging the area's reviewer so JobTread notifies him. The
+ * reference is checked FIRST: this runs on every webhook event of a job in
+ * close-out, and the same finished set must cost one lookup, not a read of
+ * every repair's files.
  */
 export async function postPmReviewSummary(
   pave: PaveClient,
   punchTasks: PunchTask[],
-  reviewTask: PipelineTask | undefined,
+  target: MessageTarget | undefined,
+  reviewer: Reviewer | null | (() => Promise<Reviewer | null>),
+  area?: string | null,
 ): Promise<string | null> {
-  if (!reviewTask) return null;
+  if (!target) return null;
   const done = punchTasks.filter((t) => t.progress >= 1);
   if (done.length === 0) return null;
+  const ref = summaryRef(done);
+  const already = await findCommentByRef(pave, target, ref);
+  if (already) return already;
+  const who = typeof reviewer === "function" ? await reviewer() : reviewer;
   const afters: string[] = [];
   for (const t of done) {
     if (afters.length >= SUMMARY_PHOTOS_MAX) break;
     const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
     if (after) afters.push(after);
   }
-  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done), [PM_REVIEWER.membershipId]);
+  const commentId = await postMessage(pave, target, pmReviewSummary(done, afters.length, area), ref, tagsFor(who));
   if (!commentId) return null;
   for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
   return commentId;
@@ -1007,8 +1187,9 @@ export function inspectionReviewSummary(args: {
   checklist: Subtask[];
   messages: string[];
   photosLinked: number;
+  area?: string | null;
 }): string {
-  const lines = ["🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed"];
+  const lines = ["🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed", ...areaLine(args.area)];
   if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
   const open = args.checklist.filter((s) => !s.isComplete);
   if (args.checklist.length) {
@@ -1022,7 +1203,7 @@ export function inspectionReviewSummary(args: {
   lines.push(
     "",
     args.photosLinked ? "The visit photos are linked here." : "No visit photos came with the inspection.",
-    "Check the work, then tick PM punch review.",
+    REVIEW_ASK,
   );
   return lines.join("\n").slice(0, 3900);
 }
@@ -1050,9 +1231,10 @@ export function punchListSummary(args: {
   reported: number;
   messages: string[];
   photosLinked: number;
+  area?: string | null;
 }): string {
   const n = Math.max(args.open.length, args.reported);
-  const lines = [`🛠 PUNCH LIST TO SCHEDULE — the final inspection found ${n} thing${n === 1 ? "" : "s"} to repair`];
+  const lines = [`🛠 PUNCH LIST TO SCHEDULE — the final inspection found ${n} thing${n === 1 ? "" : "s"} to repair`, ...areaLine(args.area)];
   if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
   lines.push("");
   args.open.forEach((t, i) => {
@@ -1068,7 +1250,7 @@ export function punchListSummary(args: {
   lines.push(
     "",
     args.photosLinked ? "The problem photos are linked here." : "No problem photos have reached JobTread yet.",
-    "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out.",
+    PUNCH_ASK,
   );
   return lines.join("\n").slice(0, 3900);
 }
@@ -1082,20 +1264,27 @@ export function punchTarget(milestones: PipelineTask[]): PipelineTask | undefine
   return findPipelineTask(milestones, PIPELINE_TASKS.punchList) ?? findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
 }
 
+/** The parts of an inspection task a summary reads. */
+export type InspectionRecord = Pick<PipelineTask, "id" | "description" | "subtasks">;
+
 /**
  * Post the punch-list summary with each repair's newest photo linked and the
- * PM tagged. A job passes Final Inspection -> Punch List once, so the
- * reference is the inspection task's id: one summary between the completion
- * and the webhook.
+ * area's reviewer tagged. An inspection closes once, so the reference is the
+ * inspection task's id: a re-sent close posts it once.
  */
 export async function postPunchListSummary(
   pave: PaveClient,
-  inspectionTask: PipelineTask | undefined,
+  inspectionTask: InspectionRecord | undefined,
   open: PunchTask[],
   reported: number,
-  target: PipelineTask | undefined,
+  target: MessageTarget | undefined,
+  reviewer: Reviewer | null,
+  area?: string | null,
 ): Promise<string | null> {
   if (!target || (open.length === 0 && reported === 0)) return null;
+  const ref = `pls-${fnv(inspectionTask?.id ?? open.map((t) => t.id).sort().join(","))}`;
+  const already = await findCommentByRef(pave, target, ref);
+  if (already) return already;
   const messages = inspectionTask ? await listTaskMessages(pave, inspectionTask.id) : [];
   const photos: string[] = [];
   for (const t of open) {
@@ -1109,26 +1298,30 @@ export async function postPunchListSummary(
     reported,
     messages,
     photosLinked: photos.length,
+    area,
   });
-  const ref = `pls-${fnv(inspectionTask?.id ?? open.map((t) => t.id).sort().join(","))}`;
-  const commentId = await postTaskMessage(pave, target.id, message, ref, [PM_REVIEWER.membershipId]);
+  const commentId = await postMessage(pave, target, message, ref, tagsFor(reviewer));
   if (!commentId) return null;
   for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
   return commentId;
 }
 
 /**
- * Post the clean-inspection summary on the review task, with the visit's
- * photos linked and the PM reviewer tagged. A job passes Final Inspection ->
- * PM Review once, so the reference is the inspection task's own id: the
- * completion and the webhook that can both see the flip post it once.
+ * Post the clean-inspection summary, with the visit's photos linked and the
+ * area's reviewer tagged. An inspection closes once, so the reference is the
+ * inspection task's own id: a re-sent close posts it once.
  */
 export async function postInspectionReviewSummary(
   pave: PaveClient,
-  inspectionTask: PipelineTask | undefined,
-  reviewTask: PipelineTask | undefined,
+  inspectionTask: InspectionRecord | undefined,
+  target: MessageTarget | undefined,
+  reviewer: Reviewer | null,
+  area?: string | null,
 ): Promise<string | null> {
-  if (!inspectionTask || !reviewTask) return null;
+  if (!inspectionTask || !target) return null;
+  const ref = `pmi-${fnv(inspectionTask.id)}`;
+  const already = await findCommentByRef(pave, target, ref);
+  if (already) return already;
   const [messages, files] = await Promise.all([listTaskMessages(pave, inspectionTask.id), listTaskFiles(pave, inspectionTask.id)]);
   const photos = files.filter((f) => f.name.toUpperCase().startsWith("INSPECTION")).slice(0, SUMMARY_PHOTOS_MAX).map((f) => f.id);
   const message = inspectionReviewSummary({
@@ -1136,8 +1329,9 @@ export async function postInspectionReviewSummary(
     checklist: inspectionTask.subtasks,
     messages,
     photosLinked: photos.length,
+    area,
   });
-  const commentId = await postTaskMessage(pave, reviewTask.id, message, `pmi-${fnv(inspectionTask.id)}`, [PM_REVIEWER.membershipId]);
+  const commentId = await postMessage(pave, target, message, ref, tagsFor(reviewer));
   if (!commentId) return null;
   for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
   return commentId;
@@ -1188,6 +1382,41 @@ export async function closeInspectionTask(
   });
   // The crew's free-text notes are a message on the task, not its description.
   const message = visitNotesMessage(visit, byName);
+  if (message) await postTaskMessage(pave, taskId, message, clientRef ? `${clientRef}.notes` : undefined);
+}
+
+/** The crew's notes on an area inspection, as one task message, or null when there are none. */
+export function areaNotesMessage(notes: string | undefined, byName: string): string | null {
+  const said = notes?.trim();
+  return said ? `Inspector notes: ${said}\n— ${byName} via DB CheckOut` : null;
+}
+
+/**
+ * Close a work area's inspection that is notes and photos rather than the
+ * roof checklist (Carl, 23 Oct 2026). The same stamp close-inspection writes
+ * — "✔ Inspected by …" is what both apps read as "inspected", whatever the
+ * task's progress says — plus progress 1, and the notes as a message on the
+ * task, where the board's review sheet reads them. Idempotent the same way:
+ * the stamp is only appended once, and the notes message carries the send's
+ * reference.
+ */
+export async function closeAreaInspection(
+  pave: PaveClient,
+  taskId: string,
+  notes: string | undefined,
+  byName: string,
+  clientRef?: string,
+): Promise<void> {
+  const res = await pave.query<{ task: { description: string | null } | null }>({
+    task: { $: { id: taskId }, description: {} },
+  });
+  const stamp = `${INSPECTED_STAMP}${byName} — ${CHECKLIST_STAMP}`;
+  const existing = res.task?.description ?? "";
+  const description = existing.includes(stamp) ? existing : existing ? `${existing}\n\n${stamp}` : stamp;
+  await pave.query({
+    updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) } },
+  });
+  const message = areaNotesMessage(notes, byName);
   if (message) await postTaskMessage(pave, taskId, message, clientRef ? `${clientRef}.notes` : undefined);
 }
 
@@ -1335,6 +1564,8 @@ export async function createReportTask(
   report: ProblemReport,
   clientRef?: string,
   assignedMembershipIds: readonly string[] = [],
+  /** The work area it is filed against, when it is not the template line's (an untagged REPORT is the line's). */
+  area?: AreaKey | null,
 ): Promise<string> {
   const marker = clientRefMarker(clientRef);
   if (marker && clientRef) {
@@ -1348,6 +1579,9 @@ export async function createReportTask(
   if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
   if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
   if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
+  // "Gutters · reported by Yahir": how the board and the next send file it
+  // under its area (areaOfPunch, and the board's tradeOfPunch).
+  if (area) lines.push(areaTagLine(area, report.reportedBy || "the crew"));
   const item = checklistItemByKey(report.itemKey);
   if (item) lines.push(`Checklist: ${item.subtask}\nDB CheckOut item: ${item.code}`);
   if (marker) lines.push(marker);
@@ -1533,7 +1767,11 @@ export async function uploadPhoto(
   return res.createFile.createdFile?.id ?? "";
 }
 
-/** Move the job's Status custom field. */
+/**
+ * Move the job's Status custom field. Only for a job OUTSIDE the work-area
+ * loop (a service call, a construction job — see pipeline.ts): the
+ * Production Board moves every job that has work areas.
+ */
 export async function setJobStatus(pave: PaveClient, jobId: string, status: string): Promise<void> {
   await pave.query({
     updateJob: {

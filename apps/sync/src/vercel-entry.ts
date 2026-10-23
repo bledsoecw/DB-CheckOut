@@ -17,6 +17,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadEnv } from "./env";
 import { createPaveClient } from "./pave";
 import { createHandler } from "./routes";
+import { createBoardClient } from "./board";
 import { ensureWebhook } from "./webhookRegistration";
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -40,6 +41,7 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
         allowedEmails: env.allowedEmails,
         webhookSecret: env.webhookSecret,
         crewAppSecret: env.crewAppSecret,
+        board: createBoardClient(env.boardUrl, env.closeoutHookSecret),
       });
     }
     await handler(req, res);

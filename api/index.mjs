@@ -14,6 +14,8 @@ function loadEnv(source = process.env) {
     allowedEmails: (source.GOOGLE_ALLOWED_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
     crewAppSecret: source.CREW_APP_SECRET ?? "",
+    boardUrl: source.BOARD_URL ?? "",
+    closeoutHookSecret: source.CLOSEOUT_HOOK_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     geminiApiKey: source.GEMINI_API_KEY ?? "",
     geminiModel: source.GEMINI_MODEL ?? "gemini-flash-lite-latest",
@@ -170,11 +172,14 @@ var CUSTOM_FIELDS = {
 };
 var SERVICE_PROJECT_TYPES = ["R-Repairs/Service", "R-Warranty"];
 var STATUS = {
+  preProduction: "Pre-Production",
   production: "Production",
   finalInspection: "Final Inspection",
   punchList: "Punch List",
   /** Renamed in JT from "Punch Review" on 2026-09-16 — JT refuses the old value. */
   pmReview: "PM Review",
+  /** Every work area approved: the sales rep calls the customer, then sets Job Completed by hand. */
+  repReview: "Sales Rep > Cust Final Contact",
   jobCompleted: "Job Completed",
   pendingFinalPayment: "Pending Final Payment"
 };
@@ -251,6 +256,74 @@ var PUNCH_CREW = [
 var PM_REVIEWER = { name: "Dave Elick", membershipId: "22PLtDsn6f4P" };
 function isRoofingJob(job) {
   return job.jobType === "Roofing" || job.projectTypes.some((t) => t.startsWith("R-"));
+}
+
+// apps/sync/src/areas.ts
+var AREA_ORDER = ["shingle", "metal", "flat", "siding", "gutters"];
+var AREA_LABEL = {
+  shingle: "Shingle roof",
+  metal: "Metal roof",
+  flat: "Low-slope roof",
+  siding: "Siding",
+  gutters: "Gutters"
+};
+var PTYPE_AREA = {
+  "R-Shingles": "shingle",
+  "R-Metal": "metal",
+  "R-Low Slope": "flat",
+  "R-Commercial": "flat",
+  "R-Siding": "siding",
+  "R-Gutters": "gutters"
+};
+var ROOFS = ["shingle", "metal", "flat"];
+function isAreaKey(v) {
+  return typeof v === "string" && AREA_ORDER.includes(v);
+}
+function jobAreas(job) {
+  if (job.jobType !== "Roofing") return [];
+  const found = /* @__PURE__ */ new Set();
+  for (const p of job.projectTypes) {
+    const a = PTYPE_AREA[p];
+    if (a) found.add(a);
+  }
+  return AREA_ORDER.filter((a) => found.has(a));
+}
+function lineArea(areas) {
+  return areas.find((a) => ROOFS.includes(a)) ?? areas[0] ?? null;
+}
+function usesRoofForm(area, line) {
+  return area === line && ROOFS.includes(area);
+}
+function areaInspectionName(area, line) {
+  return area === line ? "Final inspection" : `Final inspection \u2014 ${AREA_LABEL[area]}`;
+}
+var flat = (s) => s.replace(/\s+/g, " ").trim();
+function areaOfInspectionName(name) {
+  const m = /^Final inspection — (.+)$/.exec(flat(name));
+  return m ? AREA_ORDER.find((a) => AREA_LABEL[a] === m[1].trim()) ?? null : null;
+}
+function areaOfReviewName(name) {
+  const m = /^PM review — (.+)$/.exec(flat(name));
+  return m ? AREA_ORDER.find((a) => AREA_LABEL[a] === m[1].trim()) ?? null : null;
+}
+function areaTagLine(area, byName) {
+  return `${AREA_LABEL[area]} \xB7 reported by ${byName}`;
+}
+function areaOfPunch(task, areas) {
+  const text = task.description ?? "";
+  for (const a of AREA_ORDER) {
+    if (new RegExp(`(^|\xB7)\\s*${AREA_LABEL[a]}\\s*\xB7\\s*(asked|reported) by`, "im").test(text)) return a;
+  }
+  if (/^(REPORT|FIXED ON SITE):/i.test(task.name.trim())) return lineArea(areas);
+  return areas.length === 1 ? areas[0] : null;
+}
+function fallbackReviewer(area) {
+  if (area === "gutters") return { name: "Neal Deitemeyer", membershipId: "22PLUqZNCKaY" };
+  return { name: PM_REVIEWER.name, membershipId: PM_REVIEWER.membershipId };
+}
+function fallbackRepairCrew(area, roofingJob) {
+  if (area === "shingle" || area === null && roofingJob) return PUNCH_CREW.map((m) => m.membershipId);
+  return [];
 }
 
 // apps/sync/src/jt.ts
@@ -379,30 +452,91 @@ async function getJobBasics(pave, jobId) {
   });
   return res.job ? toQueueJob(res.job) : null;
 }
-async function getJobStatusValue(pave, jobId) {
-  const res = await pave.query({
-    job: { $: { id: jobId }, ...JOB_SELECTION }
-  });
-  if (!res.job) return "";
-  return cfv(res.job, CUSTOM_FIELDS.status) ?? "";
+async function listJobsByIds(pave, ids) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10);
+    const query = {};
+    chunk.forEach((id, n) => {
+      query[`j${n}`] = { _: "job", $: { id }, ...JOB_SELECTION };
+    });
+    const res = await pave.query(query);
+    chunk.forEach((_, n) => {
+      const job = res[`j${n}`];
+      if (job) out.push(toQueueJob(job));
+    });
+  }
+  return out;
 }
 async function getJob(pave, jobId, viewer) {
-  const [res, rawPunch, soldScope] = await Promise.all([
+  const [res, rawPunch, soldScope, inspections] = await Promise.all([
     pave.query({ job: { $: { id: jobId }, ...JOB_SELECTION } }),
     listPunchTasks(pave, jobId),
-    listSoldScope(pave, jobId)
+    listSoldScope(pave, jobId),
+    listInspectionTasks(pave, jobId)
   ]);
   if (!res.job) throw new Error(`Job not found: ${jobId}`);
   const punchTasks = rawPunch.map((t) => ({ ...t, mine: assignedTo(t, viewer) }));
   const open = punchTasks.filter((t) => t.progress < 1);
   const mineOpen = open.filter((t) => t.mine).length;
   const count = viewer ? mineOpen : open.length;
+  const basics = toQueueJob(res.job, count, mineOpen > 0);
+  const areas = closeoutAreas(basics, punchTasks, inspections, viewer);
   return {
-    ...toQueueJob(res.job, count, mineOpen > 0),
+    ...basics,
+    // An area inspection assigned to them makes the job theirs too.
+    mine: basics.mine || areas.some((a) => a.mine),
     punchTasks,
+    areas,
     soldScope,
     openPunchTotal: open.length
   };
+}
+async function listInspectionTasks(pave, jobId) {
+  const res = await pave.query({
+    job: {
+      $: { id: jobId },
+      tasks: {
+        $: { size: 10, where: [["name"], "like", "Final inspection%"] },
+        nodes: {
+          id: {},
+          name: {},
+          progress: {},
+          description: {},
+          startDate: {},
+          assignedMemberships: { $: { size: 5 }, nodes: { user: { name: {}, emailAddress: {} } } }
+        }
+      }
+    }
+  });
+  return (res.job?.tasks.nodes ?? []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    progress: t.progress ?? 0,
+    description: t.description ?? null,
+    startDate: t.startDate ?? null,
+    assignees: (t.assignedMemberships?.nodes ?? []).map((m) => ({ name: m.user?.name ?? null, email: m.user?.emailAddress ?? null }))
+  }));
+}
+function closeoutAreas(job, punch, inspections, viewer) {
+  const areas = jobAreas(job);
+  const line = lineArea(areas);
+  return areas.map((area) => {
+    const isLine = area === line;
+    const task = isLine ? inspections.find((t) => sameName(t.name, areaInspectionName(area, line))) : inspections.find((t) => areaOfInspectionName(t.name) === area);
+    return {
+      key: area,
+      label: AREA_LABEL[area],
+      line: isLine,
+      form: usesRoofForm(area, line) ? "roof" : "notes",
+      inspectionTaskId: task?.id ?? null,
+      inspectionDate: task?.startDate ?? null,
+      assigneeNames: (task?.assignees ?? []).map((a) => a.name ?? "").filter((n) => n.length > 0),
+      mine: task ? viewerMatches(task.assignees, viewer) : false,
+      inspected: Boolean(task && (task.progress >= 1 || (task.description ?? "").includes(INSPECTED_STAMP))),
+      openRepairs: punch.filter((t) => t.progress < 1 && areaOfPunch(t, areas) === area).length
+    };
+  });
 }
 async function listPunchTasks(pave, jobId) {
   const res = await pave.query({
@@ -467,6 +601,10 @@ function viewerMatches(assignees, viewer) {
     (a) => email.length > 0 && norm(a.email) === email || name.length > 0 && norm(a.name) === name
   );
 }
+function isCloseoutTask(task) {
+  if (task.taskType?.id === TASK_TYPES.punchList) return task.isToDo !== false;
+  return task.taskType?.id === TASK_TYPES.inspection && /^\s*final inspection/i.test(task.name ?? "");
+}
 var ASSIGNED_SCAN_PAGE_SIZE = 40;
 var ASSIGNED_SCAN_ASSIGNEES = 10;
 var ASSIGNED_SCAN_PAGES = 10;
@@ -496,7 +634,9 @@ async function listAssignedWorkByJob(pave, viewer) {
                     or: [
                       // Punch items are to-dos; the scheduled "Punch list" phase task shares the type.
                       { and: [[["taskType", "id"], "=", TASK_TYPES.punchList], [["isToDo"], "=", true]] },
-                      [["taskType", "id"], "=", TASK_TYPES.inspection]
+                      // Final inspections only: the template line and each work area's own.
+                      // Not every Inspection-typed task — those are mostly sales visits.
+                      { and: [[["taskType", "id"], "=", TASK_TYPES.inspection], [["name"], "like", "Final inspection%"]] }
                     ]
                   },
                   [["progress"], "!=", 1]
@@ -506,6 +646,8 @@ async function listAssignedWorkByJob(pave, viewer) {
             nextPage: {},
             nodes: {
               id: {},
+              name: {},
+              isToDo: {},
               taskType: { id: {} },
               job: { id: {} },
               assignedMemberships: {
@@ -524,7 +666,7 @@ async function listAssignedWorkByJob(pave, viewer) {
           name: m.user?.name ?? null,
           email: m.user?.emailAddress ?? null
         }));
-        if (!viewerMatches(assignees, viewer)) continue;
+        if (!isCloseoutTask(task) || !viewerMatches(assignees, viewer)) continue;
         const entry2 = work.get(jobId) ?? { any: false, punchOpen: 0 };
         entry2.any = true;
         if (task.taskType?.id === TASK_TYPES.punchList) entry2.punchOpen += 1;
@@ -582,8 +724,8 @@ var CHECKLIST_STAMP = "via DB CheckOut";
 var INSPECTED_STAMP = "\u2714 Inspected by ";
 var ITEM_MARKER = /DB CheckOut item: ([A-Z]?\d+)/;
 var oneLine = (text, max) => {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+  const flat2 = text.replace(/\s+/g, " ").trim();
+  return flat2.length > max ? `${flat2.slice(0, max - 1)}\u2026` : flat2;
 };
 function checklistSubtasks(visit, current = []) {
   const answered = { ...visit.cleanup, ...visit.inspection };
@@ -614,28 +756,32 @@ var COMMENT_VISIBILITY = {
   isVisibleToCustomerRoles: false,
   isVisibleToVendorRoles: false
 };
-async function findCommentByRef(pave, taskId, ref) {
+async function findCommentByRef(pave, target, ref) {
   const marker = clientRefMarker(ref);
   if (!marker) return null;
+  const t = typeof target === "string" ? { type: "task", id: target } : target;
   const res = await pave.query({
-    task: {
-      $: { id: taskId },
+    [t.type]: {
+      $: { id: t.id },
       comments: { $: { size: 5, where: [["message"], "like", `%${marker}%`] }, nodes: { id: {} } }
     }
   });
-  return res.task?.comments?.nodes?.[0]?.id ?? null;
+  return res[t.type]?.comments?.nodes?.[0]?.id ?? null;
 }
 async function postTaskMessage(pave, taskId, message, clientRef2, tagged = []) {
+  return postMessage(pave, { type: "task", id: taskId }, message, clientRef2, tagged);
+}
+async function postMessage(pave, target, message, clientRef2, tagged = []) {
   const marker = clientRefMarker(clientRef2);
   if (marker && clientRef2) {
-    const existing = await findCommentByRef(pave, taskId, clientRef2);
+    const existing = await findCommentByRef(pave, target, clientRef2);
     if (existing) return existing;
   }
   const res = await pave.query({
     createComment: {
       $: {
-        targetType: "task",
-        targetId: taskId,
+        targetType: target.type,
+        targetId: target.id,
         message: marker ? `${message}
 
 ${marker}` : message,
@@ -718,11 +864,15 @@ function doneLine(description) {
   return lines.length ? lines[lines.length - 1].slice(prefix.length) : null;
 }
 var SUMMARY_PHOTOS_MAX = 10;
-function pmReviewSummary(done, photosLinked) {
+var REVIEW_ASK = "Check the work, then approve it on the Production Board (Close-out), or put it on a punch list there.";
+var PUNCH_ASK = "Book the repair day on the Production Board (Close-out). Assigned repairs are already on their phones in Close Out.";
+var areaLine = (label) => label ? [`Work area: ${label}`] : [];
+var tagsFor = (reviewer) => reviewer?.membershipId ? [reviewer.membershipId] : [];
+function pmReviewSummary(done, photosLinked, area) {
   const head = `\u{1F50D} READY FOR PM REVIEW \u2014 ${done.length} repair${done.length === 1 ? "" : "s"} finished`;
   const lines = done.map((t, i) => `${i + 1}. ${t.name} \u2014 ${doneLine(t.description) ?? "closed in JobTread, no finish note"}`);
   const photos = photosLinked === 0 ? "No after photos to link here; each repair's own messages carry what it has." : photosLinked < done.length ? `After photos for ${photosLinked} of the ${done.length} are linked here; every repair's own message carries its before and after.` : "The after photos are linked here; each repair's own message carries its before and after.";
-  return [head, ...lines, "", photos, "Check the work, then tick PM punch review."].join("\n").slice(0, 3900);
+  return [head, ...areaLine(area), ...lines, "", photos, REVIEW_ASK].join("\n").slice(0, 3900);
 }
 function summaryRef(done) {
   return `pmr-${fnv(done.map((t) => t.id).sort().join(","))}`;
@@ -735,17 +885,21 @@ function fnv(text) {
   }
   return h.toString(16).padStart(8, "0");
 }
-async function postPmReviewSummary(pave, punchTasks, reviewTask) {
-  if (!reviewTask) return null;
+async function postPmReviewSummary(pave, punchTasks, target, reviewer, area) {
+  if (!target) return null;
   const done = punchTasks.filter((t) => t.progress >= 1);
   if (done.length === 0) return null;
+  const ref = summaryRef(done);
+  const already = await findCommentByRef(pave, target, ref);
+  if (already) return already;
+  const who = typeof reviewer === "function" ? await reviewer() : reviewer;
   const afters = [];
   for (const t of done) {
     if (afters.length >= SUMMARY_PHOTOS_MAX) break;
     const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
     if (after) afters.push(after);
   }
-  const commentId = await postTaskMessage(pave, reviewTask.id, pmReviewSummary(done, afters.length), summaryRef(done), [PM_REVIEWER.membershipId]);
+  const commentId = await postMessage(pave, target, pmReviewSummary(done, afters.length, area), ref, tagsFor(who));
   if (!commentId) return null;
   for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
   return commentId;
@@ -787,7 +941,7 @@ function visitExtras(messages) {
   return out;
 }
 function inspectionReviewSummary(args) {
-  const lines = ["\u{1F50D} READY FOR PM REVIEW \u2014 final inspection passed, no repairs needed"];
+  const lines = ["\u{1F50D} READY FOR PM REVIEW \u2014 final inspection passed, no repairs needed", ...areaLine(args.area)];
   if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
   const open = args.checklist.filter((s) => !s.isComplete);
   if (args.checklist.length) {
@@ -799,7 +953,7 @@ function inspectionReviewSummary(args) {
   lines.push(
     "",
     args.photosLinked ? "The visit photos are linked here." : "No visit photos came with the inspection.",
-    "Check the work, then tick PM punch review."
+    REVIEW_ASK
   );
   return lines.join("\n").slice(0, 3900);
 }
@@ -808,7 +962,7 @@ function reportNote(description) {
 }
 function punchListSummary(args) {
   const n = Math.max(args.open.length, args.reported);
-  const lines = [`\u{1F6E0} PUNCH LIST TO SCHEDULE \u2014 the final inspection found ${n} thing${n === 1 ? "" : "s"} to repair`];
+  const lines = [`\u{1F6E0} PUNCH LIST TO SCHEDULE \u2014 the final inspection found ${n} thing${n === 1 ? "" : "s"} to repair`, ...areaLine(args.area)];
   if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
   lines.push("");
   args.open.forEach((t, i) => {
@@ -824,15 +978,18 @@ function punchListSummary(args) {
   lines.push(
     "",
     args.photosLinked ? "The problem photos are linked here." : "No problem photos have reached JobTread yet.",
-    "Schedule the punch crew: date the Punch list task. Assigned repairs are already on their phones in Close Out."
+    PUNCH_ASK
   );
   return lines.join("\n").slice(0, 3900);
 }
 function punchTarget(milestones) {
   return findPipelineTask(milestones, PIPELINE_TASKS.punchList) ?? findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
 }
-async function postPunchListSummary(pave, inspectionTask, open, reported, target) {
+async function postPunchListSummary(pave, inspectionTask, open, reported, target, reviewer, area) {
   if (!target || open.length === 0 && reported === 0) return null;
+  const ref = `pls-${fnv(inspectionTask?.id ?? open.map((t) => t.id).sort().join(","))}`;
+  const already = await findCommentByRef(pave, target, ref);
+  if (already) return already;
   const messages = inspectionTask ? await listTaskMessages(pave, inspectionTask.id) : [];
   const photos = [];
   for (const t of open) {
@@ -845,25 +1002,29 @@ async function postPunchListSummary(pave, inspectionTask, open, reported, target
     open,
     reported,
     messages,
-    photosLinked: photos.length
+    photosLinked: photos.length,
+    area
   });
-  const ref = `pls-${fnv(inspectionTask?.id ?? open.map((t) => t.id).sort().join(","))}`;
-  const commentId = await postTaskMessage(pave, target.id, message, ref, [PM_REVIEWER.membershipId]);
+  const commentId = await postMessage(pave, target, message, ref, tagsFor(reviewer));
   if (!commentId) return null;
   for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
   return commentId;
 }
-async function postInspectionReviewSummary(pave, inspectionTask, reviewTask) {
-  if (!inspectionTask || !reviewTask) return null;
+async function postInspectionReviewSummary(pave, inspectionTask, target, reviewer, area) {
+  if (!inspectionTask || !target) return null;
+  const ref = `pmi-${fnv(inspectionTask.id)}`;
+  const already = await findCommentByRef(pave, target, ref);
+  if (already) return already;
   const [messages, files] = await Promise.all([listTaskMessages(pave, inspectionTask.id), listTaskFiles(pave, inspectionTask.id)]);
   const photos = files.filter((f) => f.name.toUpperCase().startsWith("INSPECTION")).slice(0, SUMMARY_PHOTOS_MAX).map((f) => f.id);
   const message = inspectionReviewSummary({
     inspector: inspectorOf(inspectionTask.description),
     checklist: inspectionTask.subtasks,
     messages,
-    photosLinked: photos.length
+    photosLinked: photos.length,
+    area
   });
-  const commentId = await postTaskMessage(pave, reviewTask.id, message, `pmi-${fnv(inspectionTask.id)}`, [PM_REVIEWER.membershipId]);
+  const commentId = await postMessage(pave, target, message, ref, tagsFor(reviewer));
   if (!commentId) return null;
   for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
   return commentId;
@@ -894,6 +1055,26 @@ ${note}` : note;
     }
   });
   const message = visitNotesMessage(visit, byName);
+  if (message) await postTaskMessage(pave, taskId, message, clientRef2 ? `${clientRef2}.notes` : void 0);
+}
+function areaNotesMessage(notes, byName) {
+  const said = notes?.trim();
+  return said ? `Inspector notes: ${said}
+\u2014 ${byName} via DB CheckOut` : null;
+}
+async function closeAreaInspection(pave, taskId, notes, byName, clientRef2) {
+  const res = await pave.query({
+    task: { $: { id: taskId }, description: {} }
+  });
+  const stamp = `${INSPECTED_STAMP}${byName} \u2014 ${CHECKLIST_STAMP}`;
+  const existing = res.task?.description ?? "";
+  const description = existing.includes(stamp) ? existing : existing ? `${existing}
+
+${stamp}` : stamp;
+  await pave.query({
+    updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) } }
+  });
+  const message = areaNotesMessage(notes, byName);
   if (message) await postTaskMessage(pave, taskId, message, clientRef2 ? `${clientRef2}.notes` : void 0);
 }
 async function syncInspectionChecklist(pave, task, punchTasks) {
@@ -974,7 +1155,7 @@ async function findFileByRef(pave, targetType, targetId, ref) {
   });
   return res[targetType]?.files.nodes[0]?.id ?? null;
 }
-async function createReportTask(pave, jobId, report, clientRef2, assignedMembershipIds = []) {
+async function createReportTask(pave, jobId, report, clientRef2, assignedMembershipIds = [], area) {
   const marker = clientRefMarker(clientRef2);
   if (marker && clientRef2) {
     const existing = await findTaskByRef(pave, jobId, clientRef2);
@@ -987,6 +1168,7 @@ async function createReportTask(pave, jobId, report, clientRef2, assignedMembers
   if (report.heardText) lines.push(`Crew said (verbatim): "${report.heardText}"`);
   if (report.originalCrew) lines.push(`Original work by: ${report.originalCrew}`);
   if (report.reportedBy) lines.push(`Reported by: ${report.reportedBy}`);
+  if (area) lines.push(areaTagLine(area, report.reportedBy || "the crew"));
   const item = checklistItemByKey(report.itemKey);
   if (item) lines.push(`Checklist: ${item.subtask}
 DB CheckOut item: ${item.code}`);
@@ -1131,63 +1313,184 @@ function openProblemCount(input) {
   return Math.max(open, input.problemsReported);
 }
 function nextPipelineStatus(input) {
-  if (input.currentStatus === STATUS.pmReview && input.checkOffDone) {
-    return STATUS.jobCompleted;
-  }
-  if (shouldFlipToPmReview(input.currentStatus, input.punchTasks)) {
-    return STATUS.pmReview;
-  }
+  if (input.currentStatus === STATUS.pmReview && input.checkOffDone) return STATUS.jobCompleted;
+  if (shouldFlipToPmReview(input.currentStatus, input.punchTasks)) return STATUS.pmReview;
   if (input.currentStatus === STATUS.finalInspection && input.inspectionDone) {
     return openProblemCount(input) > 0 ? STATUS.punchList : STATUS.pmReview;
   }
   return null;
 }
-var isDone = (task) => (task?.progress ?? 0) >= 1;
-async function applyPipeline(pave, jobId, opts = {}) {
-  const currentStatus = await getJobStatusValue(pave, jobId);
+async function applyLinear(pave, basics, board, opts = {}) {
+  const jobId = basics.id;
+  const currentStatus = basics.status;
   const inPipeline = currentStatus === STATUS.finalInspection || currentStatus === STATUS.punchList || currentStatus === STATUS.pmReview;
-  if (!inPipeline) return null;
+  if (!inPipeline) return { flipped: null, reviewer: null };
   const needsPunch = currentStatus !== STATUS.pmReview;
   const [punchTasks, milestones] = await Promise.all([
     needsPunch ? listPunchTasks(pave, jobId) : Promise.resolve([]),
     listPipelineTasks(pave, jobId)
   ]);
+  const problemsReported = opts.problemsReported ?? 0;
+  const inspection = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
   const input = {
     currentStatus,
-    inspectionDone: isInspectionClosed(findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)),
-    checkOffDone: isDone(findPipelineTask(milestones, PIPELINE_TASKS.finalCheckOff)),
+    inspectionDone: isInspectionClosed(inspection),
+    checkOffDone: (findPipelineTask(milestones, PIPELINE_TASKS.finalCheckOff)?.progress ?? 0) >= 1,
     punchTasks,
-    problemsReported: opts.problemsReported ?? 0
+    problemsReported
   };
   const next = nextPipelineStatus(input);
   if (needsPunch) {
-    try {
-      await syncPunchListTask(pave, findPipelineTask(milestones, PIPELINE_TASKS.punchList), punchTasks, {
-        cleanInspection: currentStatus === STATUS.finalInspection && input.inspectionDone && openProblemCount(input) === 0
-      });
-      await syncInspectionChecklist(pave, findPipelineTask(milestones, PIPELINE_TASKS.finalInspection), punchTasks);
-    } catch (err) {
-      console.warn(
-        `checklists not updated for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
+    await syncChecklists(
+      pave,
+      { jobId, basics, areas: [], line: null, punch: punchTasks, milestones },
+      problemsReported,
+      currentStatus === STATUS.finalInspection && input.inspectionDone
+    );
   }
-  if (!next) return null;
+  if (!next) return { flipped: null, reviewer: null };
   await setJobStatus(pave, jobId, next);
+  let reviewer = null;
   try {
-    const inspection = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
-    if (next === STATUS.pmReview) {
-      const review = reviewTarget(milestones);
-      if (currentStatus === STATUS.punchList) await postPmReviewSummary(pave, punchTasks, review);
-      else if (currentStatus === STATUS.finalInspection) await postInspectionReviewSummary(pave, inspection, review);
-    } else if (next === STATUS.punchList && currentStatus === STATUS.finalInspection) {
+    const answer = board ? await board.closeout({ jobId, move: false, actor: opts.actor }) : null;
+    reviewer = reviewerOf(answer, null);
+    const review = reviewTarget(milestones);
+    const asTask = (t) => t ? { type: "task", id: t.id } : void 0;
+    if (next === STATUS.pmReview && currentStatus === STATUS.punchList) {
+      await postPmReviewSummary(pave, punchTasks, asTask(review), reviewer);
+    } else if (next === STATUS.pmReview && currentStatus === STATUS.finalInspection) {
+      await postInspectionReviewSummary(pave, inspection, asTask(review), reviewer);
+    } else if (next === STATUS.punchList) {
       const open = punchTasks.filter((t) => t.progress < 1);
-      await postPunchListSummary(pave, inspection, open, opts.problemsReported ?? 0, punchTarget(milestones));
+      await postPunchListSummary(pave, inspection, open, problemsReported, asTask(punchTarget(milestones)), reviewer);
     }
   } catch (err) {
     console.warn(`PM summary not posted on ${jobId}: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return next;
+  return { flipped: next, reviewer: reviewer?.name ?? null };
+}
+async function readCloseoutState(pave, jobId, basics) {
+  const job = basics ?? await getJobBasics(pave, jobId);
+  if (!job) return null;
+  const [punch, milestones] = await Promise.all([listPunchTasks(pave, jobId), listPipelineTasks(pave, jobId)]);
+  const areas = jobAreas(job);
+  return { jobId, basics: job, areas, line: lineArea(areas), punch, milestones };
+}
+function punchFor(state, area) {
+  return state.punch.filter((t) => areaOfPunch(t, state.areas) === area);
+}
+function areaInspectionTaskOf(milestones, area, line) {
+  if (area === null || area === line) return findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
+  return milestones.find((t) => areaOfInspectionName(t.name) === area);
+}
+function summaryTargets(state, area) {
+  if (area === null || area === state.line) {
+    const asTask = (t) => t ? { type: "task", id: t.id } : void 0;
+    return { review: asTask(reviewTarget(state.milestones)), punch: asTask(punchTarget(state.milestones)) };
+  }
+  const job = { type: "job", id: state.jobId };
+  return { review: job, punch: job };
+}
+function reviewerOf(answer, area) {
+  const found = answer?.areas.find((a) => a.area === area);
+  if (found) return found.reviewer;
+  if (area === null && answer?.pm) return answer.pm;
+  return fallbackReviewer(area);
+}
+var areaLabel = (state, area) => state.areas.length > 1 && area ? AREA_LABEL[area] : null;
+function areaApproved(milestones, area) {
+  return area !== null && milestones.some((t) => areaOfReviewName(t.name) === area && t.progress >= 1);
+}
+async function syncChecklists(pave, state, problemsReported = 0, closed) {
+  const inspection = findPipelineTask(state.milestones, PIPELINE_TASKS.finalInspection);
+  try {
+    await syncPunchListTask(pave, findPipelineTask(state.milestones, PIPELINE_TASKS.punchList), state.punch, {
+      // Only on a one-area job: a clean roof says nothing about gutters still to hang.
+      cleanInspection: state.areas.length <= 1 && (closed ?? isInspectionClosed(inspection)) && openProblemCount({ punchTasks: state.punch, problemsReported }) === 0
+    });
+    await syncInspectionChecklist(pave, inspection, state.punch);
+  } catch (err) {
+    console.warn(`checklists not updated for ${state.jobId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+async function postRepairSummaries(pave, state, reviewer) {
+  const posted = [];
+  const groups = [...state.areas, null];
+  for (const area of groups) {
+    const tasks = punchFor(state, area);
+    if (tasks.length === 0 || tasks.some((t) => t.progress < 1)) continue;
+    const who = area ?? state.line;
+    if (areaApproved(state.milestones, who)) continue;
+    try {
+      const id = await postPmReviewSummary(
+        pave,
+        tasks,
+        summaryTargets(state, who).review,
+        () => reviewer(who),
+        areaLabel(state, area)
+      );
+      if (id) posted.push(id);
+    } catch (err) {
+      console.warn(`repair summary not posted on ${state.jobId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return posted;
+}
+function boardOnce(board, jobId, actor) {
+  let pending = null;
+  return () => pending ??= board ? board.closeout({ jobId, move: false, actor }) : Promise.resolve(null);
+}
+async function applyPipeline(pave, jobId, board) {
+  const basics = await getJobBasics(pave, jobId);
+  if (!basics) return null;
+  if (jobAreas(basics).length === 0) return (await applyLinear(pave, basics, board)).flipped;
+  if (basics.status !== STATUS.finalInspection && basics.status !== STATUS.punchList) return null;
+  const state = await readCloseoutState(pave, jobId, basics);
+  if (!state) return null;
+  await syncChecklists(pave, state);
+  const ask = boardOnce(board, jobId);
+  await postRepairSummaries(pave, state, async (area) => reviewerOf(await ask(), area));
+  return null;
+}
+async function afterInspection(pave, board, args) {
+  const basics = await getJobBasics(pave, args.jobId);
+  if (!basics) return { flipped: null, reviewer: null };
+  if (jobAreas(basics).length === 0) {
+    return applyLinear(pave, basics, board, { problemsReported: args.problemsReported, actor: args.actor });
+  }
+  const state = await readCloseoutState(pave, args.jobId, basics);
+  if (!state) return { flipped: null, reviewer: null };
+  const area = args.area ?? state.line;
+  await syncChecklists(pave, state, area === state.line ? args.problemsReported : 0);
+  const answer = board ? await board.closeout({ jobId: args.jobId, move: true, problemsReported: args.problemsReported, area, actor: args.actor }) : null;
+  const reviewer = reviewerOf(answer, area);
+  const inspection = areaInspectionTaskOf(state.milestones, area, state.line);
+  const open = punchFor(state, area).filter((t) => t.progress < 1);
+  const targets = summaryTargets(state, area);
+  const label = areaLabel(state, area);
+  let posted = null;
+  try {
+    posted = openProblemCount({ punchTasks: open, problemsReported: args.problemsReported }) > 0 ? await postPunchListSummary(pave, inspection, open, args.problemsReported, targets.punch, reviewer, label) : await postInspectionReviewSummary(pave, inspection, targets.review, reviewer, label);
+  } catch (err) {
+    console.warn(`inspection summary not posted on ${args.jobId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return { flipped: answer?.moved?.to ?? null, reviewer: posted ? reviewer?.name ?? null : null };
+}
+async function afterRepair(pave, board, args) {
+  const basics = await getJobBasics(pave, args.jobId);
+  if (!basics) return { flipped: null, reviewer: null };
+  if (jobAreas(basics).length === 0) return applyLinear(pave, basics, board, { actor: args.actor });
+  const state = await readCloseoutState(pave, args.jobId, basics);
+  if (!state) return { flipped: null, reviewer: null };
+  await syncChecklists(pave, state);
+  const answer = board ? await board.closeout({ jobId: args.jobId, move: true, actor: args.actor }) : null;
+  const names = [];
+  const posted = await postRepairSummaries(pave, state, async (area) => {
+    const r = reviewerOf(answer, area);
+    if (r) names.push(r.name);
+    return r;
+  });
+  return { flipped: answer?.moved?.to ?? null, reviewer: posted.length ? names[0] ?? null : null };
 }
 
 // apps/sync/src/translate.ts
@@ -1424,8 +1727,8 @@ function photoOrigin(body, now = /* @__PURE__ */ new Date()) {
   return { fromPhone, takenAt: new Date(t).toISOString() };
 }
 var oneLineTitle = (text) => {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > 60 ? `${flat.slice(0, 59)}\u2026` : flat;
+  const flat2 = text.replace(/\s+/g, " ").trim();
+  return flat2.length > 60 ? `${flat2.slice(0, 59)}\u2026` : flat2;
 };
 function decodePhoto(imageBase64) {
   if (typeof imageBase64 !== "string" || !imageBase64) return null;
@@ -1445,6 +1748,17 @@ function decodePhoto(imageBase64) {
     return null;
   }
 }
+var ASSIGNED_STATUSES = [
+  STATUS.preProduction,
+  STATUS.production,
+  STATUS.finalInspection,
+  STATUS.punchList,
+  STATUS.pmReview,
+  STATUS.repReview
+];
+function areaOf(value, areas) {
+  return isAreaKey(value) && areas.includes(value) ? value : null;
+}
 function createHandler(deps) {
   return async function handle(req, res) {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -1456,7 +1770,8 @@ function createHandler(deps) {
           signIn: Boolean(deps.googleClientId && deps.sessionSecret),
           gemini: Boolean(deps.geminiApiKey),
           webhook: Boolean(deps.webhookSecret),
-          crewApp: Boolean(deps.crewAppSecret)
+          crewApp: Boolean(deps.crewAppSecret),
+          board: Boolean(deps.board)
         });
       }
       if (req.method === "GET" && url.pathname === "/auth/config") {
@@ -1490,7 +1805,7 @@ function createHandler(deps) {
         let flipped = null;
         if (jobId) {
           try {
-            flipped = await applyPipeline(deps.pave, jobId);
+            flipped = await applyPipeline(deps.pave, jobId, deps.board);
           } catch (err) {
             console.warn(
               `pipeline check skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`
@@ -1531,7 +1846,17 @@ function createHandler(deps) {
             job.openPunchCount = work.punchOpen;
           }
         }
-        return json(res, 200, jobs);
+        const listed = new Set(jobs.map((j) => j.id));
+        const others = [...assigned.entries()].filter(([id, w]) => w.any && !listed.has(id)).map(([id]) => id);
+        let extra = [];
+        if (others.length) {
+          try {
+            extra = (await listJobsByIds(deps.pave, others.slice(0, 30))).filter((j) => ASSIGNED_STATUSES.includes(j.status)).map((j) => ({ ...j, mine: true, openPunchCount: assigned.get(j.id)?.punchOpen ?? 0 }));
+          } catch (err) {
+            console.warn(`assigned jobs outside the pipeline not listed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return json(res, 200, [...jobs, ...extra].sort((a, b) => a.number.localeCompare(b.number)));
       }
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
         return json(res, 200, await getJob(deps.pave, parts[1], session ?? void 0));
@@ -1569,8 +1894,29 @@ function createHandler(deps) {
           if (task) {
             await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name, clientRef(req));
           }
-          const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
-          return json(res, 200, { completedTaskId: task?.id ?? null, flipped });
+          const outcome = await afterInspection(deps.pave, deps.board, { jobId, area: null, problemsReported, actor: session.name });
+          return json(res, 200, { completedTaskId: task?.id ?? null, flipped: outcome.flipped, sentTo: outcome.reviewer });
+        }
+        if (parts[2] === "close-area-inspection") {
+          const body = await readBody(req);
+          const basics = await getJobBasics(deps.pave, jobId);
+          if (!basics) return json(res, 404, { error: "JobTread has no job with that id" });
+          const areas = jobAreas(basics);
+          const area = areaOf(body.area, areas);
+          if (!area) {
+            return json(res, 400, {
+              error: `area must be one of this job's work areas (${areas.length ? areas.join(", ") : "it has none"})`
+            });
+          }
+          const problemsReported = typeof body.problemsReported === "number" && body.problemsReported > 0 ? Math.floor(body.problemsReported) : 0;
+          const notes = typeof body.notes === "string" ? body.notes.slice(0, 4e3) : void 0;
+          const line = lineArea(areas);
+          const ref = clientRef(req);
+          let taskId = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line)?.id;
+          if (!taskId) taskId = await createAreaInspection(deps.pave, jobId, area, line, ref);
+          await closeAreaInspection(deps.pave, taskId, notes, session.name, ref);
+          const outcome = await afterInspection(deps.pave, deps.board, { jobId, area, problemsReported, actor: session.name });
+          return json(res, 200, { completedTaskId: taskId, flipped: outcome.flipped, sentTo: outcome.reviewer });
         }
         if (parts[2] === "reports") {
           const report = await readBody(req);
@@ -1578,18 +1924,32 @@ function createHandler(deps) {
             return json(res, 400, { error: "location and englishNote are required" });
           }
           const ref = clientRef(req);
+          let basics = null;
+          try {
+            basics = await getJobBasics(deps.pave, jobId);
+          } catch {
+          }
+          const areas = basics ? jobAreas(basics) : [];
+          const line = lineArea(areas);
+          const area = areaOf(report.area, areas) ?? line;
           let assignTo = [];
           if (report.fixedOnSite !== true) {
-            try {
-              const basics = await getJobBasics(deps.pave, jobId);
-              if (basics && isRoofingJob(basics)) assignTo = PUNCH_CREW.map((m) => m.membershipId);
-            } catch {
-            }
+            const back = basics?.status === STATUS.pmReview || basics?.status === STATUS.repReview;
+            const answer = deps.board && areas.length ? await deps.board.closeout({ jobId, move: back, repairs: true, problemsReported: 1, area, actor: session.name }) : null;
+            const fromBoard = answer?.areas.find((a) => a.area === area);
+            assignTo = fromBoard ? fromBoard.crew : fallbackRepairCrew(area, basics ? isRoofingJob(basics) : false);
           }
-          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref, assignTo);
+          const id = await createReportTask(
+            deps.pave,
+            jobId,
+            { ...report, reportedBy: session.name },
+            ref,
+            assignTo,
+            area && area !== line ? area : null
+          );
           let commentId = null;
           try {
-            const inspection = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection);
+            const inspection = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line);
             if (inspection) {
               commentId = await postTaskMessage(deps.pave, inspection.id, findingMessage(report, session.name), ref);
             }
@@ -1638,7 +1998,16 @@ function createHandler(deps) {
           let inspectionTaskId;
           if (label === "INSPECTION" || label === "REPORT") {
             try {
-              inspectionTaskId = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection)?.id;
+              const milestones = await listPipelineTasks(deps.pave, jobId);
+              let area = null;
+              let line = null;
+              if (isAreaKey(body.area)) {
+                const basics = await getJobBasics(deps.pave, jobId);
+                const areas = basics ? jobAreas(basics) : [];
+                area = areaOf(body.area, areas);
+                line = lineArea(areas);
+              }
+              inspectionTaskId = areaInspectionTaskOf(milestones, area, line)?.id;
             } catch {
             }
           }
@@ -1673,8 +2042,8 @@ function createHandler(deps) {
         } catch (err) {
           console.warn(`repair message not posted on ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
         }
-        const flipped = body.jobId ? await applyPipeline(deps.pave, body.jobId) : null;
-        return json(res, 200, { ok: true, flipped });
+        const outcome = body.jobId ? await afterRepair(deps.pave, deps.board, { jobId: body.jobId, actor: session.name }) : { flipped: null, reviewer: null };
+        return json(res, 200, { ok: true, flipped: outcome.flipped, sentTo: outcome.reviewer });
       }
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });
     } catch (err) {
@@ -1682,6 +2051,33 @@ function createHandler(deps) {
       return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
   };
+}
+async function createAreaInspection(pave, jobId, area, line, ref) {
+  const marker = ref ? clientRefMarker(`${ref}.task`) : null;
+  if (marker && ref) {
+    const existing = await findTaskByRef(pave, jobId, `${ref}.task`);
+    if (existing) return existing;
+  }
+  const description = [
+    `Final inspection of the ${AREA_LABEL[area].toLowerCase()} \u2014 inspected in Close Out with nobody booked on the board.`,
+    ...marker ? [marker] : []
+  ].join("\n\n");
+  const res = await pave.query({
+    createTask: {
+      $: {
+        targetType: "job",
+        targetId: jobId,
+        taskTypeId: TASK_TYPES.inspection,
+        isToDo: true,
+        name: areaInspectionName(area, line),
+        description
+      },
+      createdTask: { id: {} }
+    }
+  });
+  const id = res.createTask.createdTask?.id;
+  if (!id) throw new Error("JobTread did not create the inspection task");
+  return id;
 }
 var asObject = (v) => v && typeof v === "object" ? v : void 0;
 var asId = (v) => typeof v === "string" && v ? v : null;
@@ -1710,6 +2106,69 @@ function describeWebhook(body) {
   const next = asObject(data?.["next"]);
   const kind = asId(event["type"]) ?? asId(event["eventType"]) ?? (next ? asId(next["jobId"]) ? "task" : asId(next["number"]) ? "job" : "record" : "?");
   return `event=${kind} eventKeys=${Object.keys(event).join(",")} next=${next ? Object.keys(next).slice(0, 12).join(",") : "-"}`;
+}
+
+// apps/sync/src/board.ts
+var TIMEOUT_MS = 1e4;
+var asObj = (v) => v && typeof v === "object" ? v : null;
+var asStr = (v) => typeof v === "string" && v ? v : null;
+function readBoardAnswer(raw) {
+  const o = asObj(raw);
+  if (!o || o["ok"] !== true || !Array.isArray(o["areas"])) return null;
+  const m = asObj(o["moved"]);
+  const moved = m && asStr(m["from"]) && asStr(m["to"]) ? { from: m["from"], to: m["to"] } : null;
+  const areas = [];
+  for (const a of o["areas"]) {
+    const x = asObj(a);
+    if (!x || !isAreaKey(x["trade"])) continue;
+    const r = asObj(x["reviewer"]);
+    const crew = Array.isArray(x["crew"]) ? x["crew"].map((c) => asStr(asObj(c)?.["membershipId"])).filter((id) => Boolean(id)) : [];
+    areas.push({
+      area: x["trade"],
+      label: asStr(x["label"]) ?? "",
+      line: x["line"] === true,
+      inspectionName: asStr(x["inspectionName"]) ?? "",
+      stage: asStr(x["stage"]) ?? "",
+      reviewer: r && asStr(r["name"]) ? { name: r["name"], membershipId: asStr(r["membershipId"]) } : null,
+      crew
+    });
+  }
+  const p = asObj(o["pm"]);
+  const pm = p && asStr(p["name"]) ? { name: p["name"], membershipId: asStr(p["membershipId"]) } : null;
+  return { status: asStr(o["status"]), moved, areas, pm };
+}
+function createBoardClient(baseUrl, secret, fetchImpl = fetch) {
+  if (!baseUrl || !secret) return null;
+  let origin;
+  try {
+    origin = new URL(baseUrl).origin;
+  } catch {
+    console.warn("BOARD_URL is not a URL \u2014 the Production Board will not be asked");
+    return null;
+  }
+  return {
+    async closeout(ask) {
+      try {
+        const res = await fetchImpl(`${origin}/api/hooks/closeout`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+          body: JSON.stringify(ask),
+          signal: AbortSignal.timeout(TIMEOUT_MS)
+        });
+        const text = await res.text();
+        if (!res.ok) {
+          console.warn(`board close-out hook ${res.status} for ${ask.jobId}: ${text.slice(0, 200)}`);
+          return null;
+        }
+        const answer = readBoardAnswer(JSON.parse(text));
+        if (!answer) console.warn(`board close-out hook answered something unreadable for ${ask.jobId}`);
+        return answer;
+      } catch (err) {
+        console.warn(`board close-out hook failed for ${ask.jobId}: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      }
+    }
+  };
 }
 
 // apps/sync/src/webhookRegistration.ts
@@ -1750,7 +2209,8 @@ async function entry(req, res) {
         workspaceDomain: env.workspaceDomain,
         allowedEmails: env.allowedEmails,
         webhookSecret: env.webhookSecret,
-        crewAppSecret: env.crewAppSecret
+        crewAppSecret: env.crewAppSecret,
+        board: createBoardClient(env.boardUrl, env.closeoutHookSecret)
       });
     }
     await handler(req, res);

@@ -17,12 +17,13 @@ import {
   type SessionUser,
 } from "./auth";
 import { PaveError, type PaveClient } from "./pave";
-import { isRoofingJob, PIPELINE_TASKS, PUNCH_CREW, STATUS } from "../../../packages/shared/src/jobtread";
-import type { CloseInspectionRequest, ProblemReport } from "../../../packages/shared/src/types";
+import { isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
 import {
   attachFileToComment,
   checklistItemTitle,
   clientRefMarker,
+  closeAreaInspection,
   closeInspectionTask,
   completeTask,
   createReportTask,
@@ -35,6 +36,7 @@ import {
   postTaskMessage,
   postRepairDone,
   listAssignedWorkByJob,
+  listJobsByIds,
   listPipelineJobs,
   listPipelineTasks,
   listSoldScope,
@@ -42,7 +44,9 @@ import {
   type PhotoUpload,
   type VisitChecklists,
 } from "./jt";
-import { applyPipeline } from "./pipeline";
+import { afterInspection, afterRepair, applyPipeline, areaInspectionTaskOf } from "./pipeline";
+import { areaInspectionName, fallbackRepairCrew, isAreaKey, jobAreas, lineArea, AREA_LABEL, type AreaKey } from "./areas";
+import type { BoardClient } from "./board";
 import { summarizeScope, transcribeNote, translateTexts, TRANSLATE_LIMITS } from "./translate";
 
 export interface RouterDeps {
@@ -63,6 +67,12 @@ export interface RouterDeps {
    * token is then simply unauthorized.
    */
   crewAppSecret: string;
+  /**
+   * The Production Board's close-out hook (board.ts). It moves the job's
+   * Status — Close Out no longer does — and names each work area's
+   * reviewer. Absent: fallback reviewers, and the board's hourly sweep.
+   */
+  board?: BoardClient | null;
   /** Injectable for tests; defaults to the real Google JWKS verification. */
   verifyGoogle?: (credential: string, clientId: string) => Promise<Record<string, unknown>>;
 }
@@ -245,6 +255,28 @@ export function decodePhoto(imageBase64: unknown): { data: Buffer; contentType: 
   }
 }
 
+/**
+ * Statuses a job can carry while somebody still has close-out work on it.
+ * The queue lists every job at Final Inspection, Punch List or PM Review;
+ * past those three, a job is listed for a crew member only when a work
+ * area's inspection or a repair is assigned to them — booked while the rest
+ * of the job is still in production, or a punch list the PM put on after
+ * the rep had it — and never once it is completed and billing.
+ */
+export const ASSIGNED_STATUSES: readonly string[] = [
+  STATUS.preProduction,
+  STATUS.production,
+  STATUS.finalInspection,
+  STATUS.punchList,
+  STATUS.pmReview,
+  STATUS.repReview,
+];
+
+/** A job's work area named in a body, when the job has it. */
+function areaOf(value: unknown, areas: readonly AreaKey[]): AreaKey | null {
+  return isAreaKey(value) && areas.includes(value) ? value : null;
+}
+
 export function createHandler(deps: RouterDeps) {
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -258,6 +290,7 @@ export function createHandler(deps: RouterDeps) {
           gemini: Boolean(deps.geminiApiKey),
           webhook: Boolean(deps.webhookSecret),
           crewApp: Boolean(deps.crewAppSecret),
+          board: Boolean(deps.board),
         });
       }
 
@@ -287,7 +320,9 @@ export function createHandler(deps: RouterDeps) {
       }
 
       // JobTread webhook: POST /webhooks/jobtread/<WEBHOOK_SECRET>
-      // On any job/task event we re-evaluate the PM Review flip.
+      // On any job/task event the checklists are kept in step and a work
+      // area whose last repair closed in JobTread gets its summary. The
+      // Status is the Production Board's; `flipped` stays in the answer, null.
       if (req.method === "POST" && parts[0] === "webhooks" && parts[1] === "jobtread") {
         if (!deps.webhookSecret || parts[2] !== deps.webhookSecret) {
           return json(res, 401, { error: "Bad webhook token" });
@@ -303,7 +338,7 @@ export function createHandler(deps: RouterDeps) {
           // Best-effort: a failed check must answer 200, or JobTread retries
           // the delivery and a JT hiccup turns into a 5xx retry storm.
           try {
-            flipped = await applyPipeline(deps.pave, jobId);
+            flipped = await applyPipeline(deps.pave, jobId, deps.board);
           } catch (err) {
             console.warn(
               `pipeline check skipped for ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -364,7 +399,23 @@ export function createHandler(deps: RouterDeps) {
             job.openPunchCount = work.punchOpen;
           }
         }
-        return json(res, 200, jobs);
+        // Close-out work assigned to them on a job outside those three
+        // statuses — a work area inspected or repaired while the rest of the
+        // job is still in production. Best-effort: the queue never fails
+        // over the extra rows.
+        const listed = new Set(jobs.map((j) => j.id));
+        const others = [...assigned.entries()].filter(([id, w]) => w.any && !listed.has(id)).map(([id]) => id);
+        let extra: QueueJob[] = [];
+        if (others.length) {
+          try {
+            extra = (await listJobsByIds(deps.pave, others.slice(0, 30)))
+              .filter((j) => ASSIGNED_STATUSES.includes(j.status))
+              .map((j) => ({ ...j, mine: true, openPunchCount: assigned.get(j.id)?.punchOpen ?? 0 }));
+          } catch (err) {
+            console.warn(`assigned jobs outside the pipeline not listed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return json(res, 200, [...jobs, ...extra].sort((a, b) => a.number.localeCompare(b.number)));
       }
 
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
@@ -428,8 +479,40 @@ export function createHandler(deps: RouterDeps) {
           if (task) {
             await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name, clientRef(req));
           }
-          const flipped = await applyPipeline(deps.pave, jobId, { problemsReported });
-          return json(res, 200, { completedTaskId: task?.id ?? null, flipped });
+          // The board moves the Status (told how many problems the phone
+          // found, so the REPORTs still on their way count) and the area's
+          // reviewer is told what the inspection found.
+          const outcome = await afterInspection(deps.pave, deps.board, { jobId, area: null, problemsReported, actor: session.name });
+          return json(res, 200, { completedTaskId: task?.id ?? null, flipped: outcome.flipped, sentTo: outcome.reviewer });
+        }
+
+        // A work area inspected with notes and photos instead of the roof
+        // checklist — the gutters, the siding (Carl, 23 Oct 2026: "notes and
+        // photos for now"). Sent LAST, after its findings and photos, like
+        // close-inspection. The area's inspection is the task the PM booked
+        // on the board; with none booked, one is made so the visit is on
+        // record rather than lost.
+        if (parts[2] === "close-area-inspection") {
+          const body = (await readBody(req)) as Partial<CloseAreaInspectionRequest>;
+          const basics = await getJobBasics(deps.pave, jobId);
+          if (!basics) return json(res, 404, { error: "JobTread has no job with that id" });
+          const areas = jobAreas(basics);
+          const area = areaOf(body.area, areas);
+          if (!area) {
+            return json(res, 400, {
+              error: `area must be one of this job's work areas (${areas.length ? areas.join(", ") : "it has none"})`,
+            });
+          }
+          const problemsReported =
+            typeof body.problemsReported === "number" && body.problemsReported > 0 ? Math.floor(body.problemsReported) : 0;
+          const notes = typeof body.notes === "string" ? body.notes.slice(0, 4000) : undefined;
+          const line = lineArea(areas);
+          const ref = clientRef(req);
+          let taskId = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line)?.id;
+          if (!taskId) taskId = await createAreaInspection(deps.pave, jobId, area, line, ref);
+          await closeAreaInspection(deps.pave, taskId, notes, session.name, ref);
+          const outcome = await afterInspection(deps.pave, deps.board, { jobId, area, problemsReported, actor: session.name });
+          return json(res, 200, { completedTaskId: taskId, flipped: outcome.flipped, sentTo: outcome.reviewer });
         }
 
         if (parts[2] === "reports") {
@@ -438,24 +521,50 @@ export function createHandler(deps: RouterDeps) {
             return json(res, 400, { error: "location and englishNote are required" });
           }
           const ref = clientRef(req);
-          // A REPORT on a roofing job goes straight to the service crew; a
-          // correction already made (FIXED ON SITE) is documentation, nobody's.
+          // Which work area it is about (the template line's when the phone
+          // does not say), and who its repairs go to: the board's answer for
+          // that area — Alberto and Yahir on a shingle roof, nobody else by
+          // default — or the same rule from areas.ts when the board cannot be
+          // asked. A correction already made (FIXED ON SITE) is documentation,
+          // nobody's.
+          let basics: QueueJob | null = null;
+          try {
+            basics = await getJobBasics(deps.pave, jobId);
+          } catch {
+            // unknown job: filed against the line, left for the PM to assign
+          }
+          const areas = basics ? jobAreas(basics) : [];
+          const line = lineArea(areas);
+          const area = areaOf(report.area, areas) ?? line;
           let assignTo: readonly string[] = [];
           if (report.fixedOnSite !== true) {
-            try {
-              const basics = await getJobBasics(deps.pave, jobId);
-              if (basics && isRoofingJob(basics)) assignTo = PUNCH_CREW.map((m) => m.membershipId);
-            } catch {
-              // unknown job type: leave it for the PM to assign
-            }
+            // A finding on a job already past Punch List brings it back: the
+            // board's one allowed move backwards. Otherwise the close moves it.
+            const back = basics?.status === STATUS.pmReview || basics?.status === STATUS.repReview;
+            // A job with no work areas is not the board's loop: nothing to ask.
+            const answer =
+              deps.board && areas.length
+                ? await deps.board.closeout({ jobId, move: back, repairs: true, problemsReported: 1, area, actor: session.name })
+                : null;
+            const fromBoard = answer?.areas.find((a) => a.area === area);
+            assignTo = fromBoard ? fromBoard.crew : fallbackRepairCrew(area, basics ? isRoofingJob(basics) : false);
           }
-          const id = await createReportTask(deps.pave, jobId, { ...report, reportedBy: session.name }, ref, assignTo);
-          // The finding is a MESSAGE on the "Final inspection" task naming the
+          // Tagged with its area when that is not the line's — an untagged
+          // REPORT has always meant the roof's form.
+          const id = await createReportTask(
+            deps.pave,
+            jobId,
+            { ...report, reportedBy: session.name },
+            ref,
+            assignTo,
+            area && area !== line ? area : null,
+          );
+          // The finding is a MESSAGE on its area's inspection task naming the
           // checklist line it is about; its photos get linked to that message
           // as they arrive. Best-effort: the to-do is the record.
           let commentId: string | null = null;
           try {
-            const inspection = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection);
+            const inspection = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line);
             if (inspection) {
               commentId = await postTaskMessage(deps.pave, inspection.id, findingMessage(report, session.name), ref);
             }
@@ -503,6 +612,8 @@ export function createHandler(deps: RouterDeps) {
             source?: unknown;
             /** When that photo was taken (ISO 8601), read from the photo. */
             takenAt?: unknown;
+            /** The work area an INSPECTION or REPORT photo belongs to; absent, the line's. */
+            area?: unknown;
           };
           const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
           if (!PHOTO_LABELS.has(label)) {
@@ -532,7 +643,16 @@ export function createHandler(deps: RouterDeps) {
           let inspectionTaskId: string | undefined;
           if (label === "INSPECTION" || label === "REPORT") {
             try {
-              inspectionTaskId = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection)?.id;
+              const milestones = await listPipelineTasks(deps.pave, jobId);
+              let area: AreaKey | null = null;
+              let line: AreaKey | null = null;
+              if (isAreaKey(body.area)) {
+                const basics = await getJobBasics(deps.pave, jobId);
+                const areas = basics ? jobAreas(basics) : [];
+                area = areaOf(body.area, areas);
+                line = lineArea(areas);
+              }
+              inspectionTaskId = areaInspectionTaskOf(milestones, area, line)?.id;
             } catch {
               // no template on the job, or JT hiccup — the upload below still happens
             }
@@ -560,7 +680,8 @@ export function createHandler(deps: RouterDeps) {
         }
       }
 
-      // Crew finished a punch task -> mark complete, maybe flip to PM Review.
+      // Crew finished a punch task -> mark complete; the board moves the job
+      // on when it was the last, and the area's reviewer is told.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = (await readBody(req)) as { jobId?: string; note?: string };
         const note = body.note?.trim() ? `${body.note.trim()} — ${session.name}` : session.name;
@@ -573,8 +694,10 @@ export function createHandler(deps: RouterDeps) {
         } catch (err) {
           console.warn(`repair message not posted on ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
         }
-        const flipped = body.jobId ? await applyPipeline(deps.pave, body.jobId) : null;
-        return json(res, 200, { ok: true, flipped });
+        const outcome = body.jobId
+          ? await afterRepair(deps.pave, deps.board, { jobId: body.jobId, actor: session.name })
+          : { flipped: null, reviewer: null };
+        return json(res, 200, { ok: true, flipped: outcome.flipped, sentTo: outcome.reviewer });
       }
 
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });
@@ -585,6 +708,45 @@ export function createHandler(deps: RouterDeps) {
       return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
   };
+}
+
+/**
+ * A work area's inspection task, made by the crew's close when the PM never
+ * booked one — named and typed exactly as the board makes it, so both apps
+ * find it. A re-sent close finds the one it made by the send's reference.
+ */
+async function createAreaInspection(
+  pave: PaveClient,
+  jobId: string,
+  area: AreaKey,
+  line: AreaKey | null,
+  ref: string | undefined,
+): Promise<string> {
+  const marker = ref ? clientRefMarker(`${ref}.task`) : null;
+  if (marker && ref) {
+    const existing = await findTaskByRef(pave, jobId, `${ref}.task`);
+    if (existing) return existing;
+  }
+  const description = [
+    `Final inspection of the ${AREA_LABEL[area].toLowerCase()} — inspected in Close Out with nobody booked on the board.`,
+    ...(marker ? [marker] : []),
+  ].join("\n\n");
+  const res = await pave.query<{ createTask: { createdTask?: { id: string } } }>({
+    createTask: {
+      $: {
+        targetType: "job",
+        targetId: jobId,
+        taskTypeId: TASK_TYPES.inspection,
+        isToDo: true,
+        name: areaInspectionName(area, line),
+        description,
+      },
+      createdTask: { id: {} },
+    },
+  });
+  const id = res.createTask.createdTask?.id;
+  if (!id) throw new Error("JobTread did not create the inspection task");
+  return id;
 }
 
 const asObject = (v: unknown): Record<string, unknown> | undefined =>

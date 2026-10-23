@@ -47,6 +47,12 @@ only (not visible to customer or vendor roles). Visit photos attach to
 the "Final inspection" task instead of the bare job. The task description
 only ever gets the `✔ Inspected by <name> — via DB CheckOut` stamp.
 
+**Read the next three paragraphs with *Work areas* below (23 Oct 2026).**
+The summaries they describe no longer ride a Status flip and are no longer
+always Dave's: each is posted per work area, to that area's reviewer, and
+Close Out writes no Status at all. The messages, their shapes and their
+references are unchanged.
+
 **A finished repair is a message too** (Carl, 13 Oct 2026). Terminado still
 appends `✔ Done — <note> — <name>` to the punch to-do's description (a
 re-sent completion is checked against it), and now also posts
@@ -248,40 +254,106 @@ a dependency chain, so every task write the sync server makes passes
 
 ## Status conventions (job custom field `22PBAjfWVVv9` "Status")
 
-| Status value | Meaning for DB CheckOut |
+**DB CheckOut writes no Status on a job with work areas (since 23 Oct
+2026).** The Production Board owns it: a roofing job is closed out one
+**work area** at a time (the roof,
+the siding, the gutters — off its Project Types), and the board moves the
+Status to where the area furthest behind stands, forward only. Close Out
+tells the board what happened — `POST {BOARD_URL}/api/hooks/closeout` after
+an inspection closes, a repair finishes, or a finding is reported on a job
+already past Punch List — and the board's hourly sweep catches anything
+done in JobTread itself.
+
+**A job with no work areas keeps the old rule, moved by Close Out.** A
+service call (R-Repairs/Service, R-Warranty), a construction job, a roofing
+job with no Project Type: the board's rule has nothing to work from, so
+`applyLinear` in `apps/sync/src/pipeline.ts` moves it exactly as before —
+
+```
+Final Inspection ──(crew closes "Final inspection")──┬─ problems? ──> Punch List
+                                                     └─ clean?    ──> PM Review
+Punch List ──────(last punch task closes)──────────────────────────> PM Review
+PM Review ───────(sales rep ticks "Final check-off")──────────────> Job Completed
+```
+
+— with its summaries tagged to the job's own PM when the board can say who
+that is (Dave otherwise, as before).
+
+For a job WITH work areas:
+
+| Status value | What it means now |
 | --- | --- |
-| `Final Inspection` | Job enters the crew app queue — service/QC crew (or a sales rep on far jobs) inspects & cleans up |
-| `Punch List` | **Set automatically when the crew completes "Final inspection" and the visit found open problems**; repairs assigned & in progress |
-| `PM Review` (was `Punch Review` until 2026-09-16) | Set automatically either when the last punch task closes with its after photo, **or when a clean inspection completes with nothing to repair**; the PM reviews photos & notes and ticks "PM punch review" |
-| `Job Completed` | **Set automatically when the sales rep ticks "Final check-off"** — they have spoken to the customer and all is well |
-| stays `Final Inspection` | Hold — correction required before advancing, or the job never got the template |
+| `Production` | Some area is not inspected-and-booked yet — still being installed, or its inspection not booked |
+| `Final Inspection` | Every area's inspection is booked or done, nothing open; the job is in the crew app queue |
+| `Punch List` | Some area has repairs open |
+| `PM Review` | Every area inspected or repaired, waiting on its reviewer (on the board) |
+| `Sales Rep > Cust Final Contact` | Every area approved; the sales rep speaks to the customer |
+| `Job Completed` | **Set by the sales rep by hand** after that call (it fires the final 10% payment milestone) |
 
 ```
-Final Inspection ──(crew completes "Final inspection")──┬─ problems? ──> Punch List
-                                                        └─ clean?    ──> PM Review
-Punch List ──────(last punch task closes)──────────────────────────────> PM Review
-PM Review ───────(PM ticks "PM punch review", then the sales rep speaks
-                  to the customer and ticks "Final check-off")─────────> Job Completed
+                 the area furthest behind decides
+Production ──> Final Inspection ──> Punch List ──> PM Review ──> Sales Rep > Cust Final Contact
+                     (booked)        (repairs)      (to review)        (all approved)
+                                                                              │
+                                                       sales rep, by hand ──> Job Completed
 ```
 
-The PM's own tick is a human gate with **no status of its own** — the job
-waits at `PM Review` through both check-offs, and only the sales rep's
-closes it. That is deliberate: `Job Completed` fires the final 10% payment
-milestone, so a person talks to the customer before any of this touches
-money.
-
-The pipeline is strictly linear (no status is ever re-entered), so
-automations can safely key off status transitions — and that is also what
-makes every rule idempotent: each is guarded on the status it moves OUT
-of, so a duplicate delivery from the app's offline outbox is a no-op. A
-rejected repair moves the job back from `PM Review` to `Punch List`.
+The board moves the Status forward only. The one way back is open work: a
+PM's own punch list on the board, or a crew finding reported on a job at PM
+Review or Rep review (the reports route asks the board with `repairs: true`),
+brings the job back to `Punch List`.
 
 **The routing does not depend on write ordering.** The app's outbox
 (`flushOutbox`) continues past a failing item rather than stopping, so a
 `REPORT:` task can reach JobTread *after* the close that is meant to
 notice it. `POST /jobs/:id/close-inspection` therefore carries the visit's
-own `problemsReported` count, and the decision takes the larger of that
-and the open punch tasks actually on the job.
+own `problemsReported` count and passes it to the board, which takes the
+larger of that and the open punch tasks actually on the job — so a close
+that outruns its own findings cannot send the job past Punch List.
+
+## Work areas (Carl, 23 Oct 2026)
+
+The names are load-bearing and identical on both sides (`apps/sync/src/areas.ts`
+here, `src/lib/trades.ts` on the board):
+
+| What | Name / marker |
+| --- | --- |
+| The roof's inspection (the first roof, or the first area on a job with no roof) | the template's `Final inspection` — Close Out's roof checklist |
+| Any other area's inspection | `Final inspection — Gutters` (Inspection-typed to-do, booked by the PM on the board; made by Close Out if nobody booked it) |
+| An area's approval | `PM review — Gutters` (General-typed to-do, ticked by the board when the PM approves) |
+| A repair the board put on an area | description line `Punch list · Gutters · asked by Carl` |
+| A crew finding on an area other than the roof's line | description line `Gutters · reported by Yahir Gonzalez` |
+| An untagged `REPORT:` / `FIXED ON SITE:` | the roof's line area — the roof checklist's |
+
+An area inspected with notes and photos (`POST /jobs/:id/close-area-inspection`,
+`{ area, notes, problemsReported }`) gets the same `✔ Inspected by … — via
+DB CheckOut` stamp as the roof, progress 1, and its notes as a message on
+the task — where the board's review sheet reads them. Its photos are
+`POST /jobs/:id/photos` with `label: "INSPECTION"` and the same `area`.
+
+**Summaries go to the area's reviewer.** Who reviews which area is the
+board's Operations list (Dave Elick the shingle roofs, Neal Deitemeyer the
+gutters, the job's own PM for metal, low slope and siding), read back from
+the hook every time. With the board unreachable: Dave for the roof, Neal for
+the gutters, Dave for anything else (`fallbackReviewer`). The roof's
+summaries go on "PM punch review" / "Punch list" as before; any other
+area's go on the job (`targetType: "job"`), because the area has no step of
+its own and its inspection task's messages are the crew's notes. A summary
+is posted once per thing it is about — the inspection task (`pmi-` / `pls-`)
+or the exact set of finished repairs (`pmr-`) — and that reference is looked
+up BEFORE anything else, so a webhook replay costs one read.
+
+**Repairs go to whoever the area's repairs go to**: the board's answer —
+Alberto and Yahir on a shingle roof, nobody on any other area — or the same
+rule from `fallbackRepairCrew` when the board cannot be asked. A roofing job
+with no area at all (a service call) keeps the old rule: the service crew.
+
+**The queue lists assigned close-out work at any Status.** Besides every job
+at Final Inspection, Punch List or PM Review, a person sees any job (at
+Pre-Production, Production or Sales Rep > Cust Final Contact too) where an
+open repair or a final inspection — the template line or an area's own — is
+assigned to them. A sales rep's Inspection-typed visit is not close-out work
+and never makes a job theirs.
 
 There is no form any more: the task's checklist plus its description
 (who inspected, the notes) and the photos on the job are the record.

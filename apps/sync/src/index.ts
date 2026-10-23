@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { loadEnv } from "./env";
 import { createPaveClient } from "./pave";
 import { createHandler } from "./routes";
+import { createBoardClient } from "./board";
 import { ensureWebhook } from "./webhookRegistration";
 
 const env = loadEnv();
@@ -16,6 +17,7 @@ const handler = createHandler({
   allowedEmails: env.allowedEmails,
   webhookSecret: env.webhookSecret,
   crewAppSecret: env.crewAppSecret,
+  board: createBoardClient(env.boardUrl, env.closeoutHookSecret),
 });
 
 const server = createServer((req, res) => {

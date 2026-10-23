@@ -98,6 +98,7 @@ export function mockJobDetail(jobId: string): JobDetail {
     return {
       ...base,
       soldScope: MOCK_SCOPE,
+      areas: [],
       openPunchTotal: 2,
       // Demo data carries a mix on purpose: two items belonging to whoever is
       // holding the phone and one that doesn't, so the Míos / Todos switch has
@@ -136,5 +137,5 @@ export function mockJobDetail(jobId: string): JobDetail {
       ],
     };
   }
-  return { ...base, punchTasks: [], soldScope: MOCK_SCOPE, openPunchTotal: 0 };
+  return { ...base, punchTasks: [], areas: [], soldScope: MOCK_SCOPE, openPunchTotal: 0 };
 }

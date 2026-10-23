@@ -6,7 +6,12 @@
 
 import type { Answer } from "./jobtread";
 
-/** A job in the crew queue (Status = Final Inspection, or with punch tasks assigned to the user). */
+/**
+ * A job in the crew queue: every job at Final Inspection, Punch List or PM
+ * Review, plus — whatever its Status — any job with close-out work assigned
+ * to the requesting user (a work area's inspection or a repair booked while
+ * the rest of the job is still in production).
+ */
 export interface QueueJob {
   id: string;
   number: string;
@@ -94,8 +99,41 @@ export interface ScopeSummary {
   es: string;
 }
 
+/**
+ * One work area of a roofing job (Carl, 23 Oct 2026) — the roof, the
+ * siding, the gutters — inspected, repaired and approved on its own.
+ */
+export interface CloseoutArea {
+  /** "shingle" | "metal" | "flat" | "siding" | "gutters". */
+  key: string;
+  /** "Shingle roof", "Gutters". */
+  label: string;
+  /** This area owns the template's "Final inspection" line. */
+  line: boolean;
+  /**
+   * How the crew inspects it: "roof" is the eight roof checks plus cleanup,
+   * sent through close-inspection; "notes" is notes and photos, sent through
+   * close-area-inspection.
+   */
+  form: "roof" | "notes";
+  /** Its inspection task in JobTread, when the PM has booked one. */
+  inspectionTaskId: string | null;
+  /** The day it is booked for. */
+  inspectionDate: string | null;
+  /** Who is on it. */
+  assigneeNames: string[];
+  /** The signed-in crew member is one of them. */
+  mine: boolean;
+  /** Close Out's "Inspected by" stamp is on it, or it is complete. */
+  inspected: boolean;
+  /** Open repairs filed against this area. */
+  openRepairs: number;
+}
+
 export interface JobDetail extends QueueJob {
   punchTasks: PunchTask[];
+  /** The job's work areas, in order — empty on a job that is not roofing. */
+  areas: CloseoutArea[];
   /** Open punch items on this job, whoever they belong to. */
   openPunchTotal: number;
   /** Approved customer orders, oldest first — what was sold, changes included. */
@@ -149,14 +187,34 @@ export interface ChecklistFinding {
 }
 
 /**
- * POST /jobs/:id/reports — a problem report. Becomes an unassigned punch
- * task for the PM/Service Manager to assign, unless the crew corrected it
- * on the spot (fixedOnSite) — then the task is created already complete,
- * purely as documentation of the correction.
+ * POST /jobs/:id/close-area-inspection — a work area inspected with notes
+ * and photos rather than the roof checklist (Carl, 23 Oct 2026: gutter and
+ * siding inspections are "notes and photos for now"). The photos are their
+ * own sends (POST /jobs/:id/photos, label INSPECTION, with the same `area`);
+ * findings are their own reports, with `area` set.
+ */
+export interface CloseAreaInspectionRequest {
+  area: string;
+  /** What the inspector saw (English). */
+  notes?: string;
+  /** Findings this visit still needing a return trip — the reports can land after this. */
+  problemsReported: number;
+}
+
+/**
+ * POST /jobs/:id/reports — a problem report. Becomes a punch to-do filed
+ * against its work area, assigned to whoever that area's repairs go to,
+ * unless the crew corrected it on the spot (fixedOnSite) — then the task is
+ * created already complete, purely as documentation of the correction.
  */
 export interface ProblemReport {
   /** The checklist item (INSPECTION_ITEMS / CLEANUP_ITEMS key) this came from, when it did. */
   itemKey?: string;
+  /**
+   * The work area it is about (CloseoutArea.key). Absent: the template
+   * line's — what every build before work areas sent.
+   */
+  area?: string;
   /** Short location, e.g. "Rear slope — pipe boot". */
   location: string;
   /** Clean English note for the office (voice pipeline output or typed). */

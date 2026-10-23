@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseVisit, photoOrigin } from "../src/routes";
 import { ANSWER, CLEANUP_ITEMS, CUSTOM_FIELDS, INSPECTION_ITEMS, PUNCH_CREW, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import type { BoardAnswer, BoardAsk, BoardClient } from "../src/board";
 
 test("parseVisit reads the app's close-inspection body: both checklists and the notes", () => {
   const visit = parseVisit({
@@ -416,4 +417,261 @@ test("finishing a repair posts its note as a message on the to-do, with its phot
   assert.equal(created["targetId"], "pt1");
   assert.match(String(created["message"]), /^✔ REPAIR DONE — New boot, sealed\nFinished by .+ via DB CheckOut\n\nDB CheckOut ref: 1758400000000-ab12cd$/);
   assert.equal(queries.filter((q) => "updateComment" in q).length, 2, "before and after linked");
+});
+
+// --------------------------------------------------------------------------
+// Work areas, and the board that moves the Status (Carl, 23 Oct 2026)
+// --------------------------------------------------------------------------
+
+interface AreaJob {
+  status: string;
+  projectTypes: string[];
+  /** Tasks on the job (the pipeline read sees them all). */
+  tasks: Array<{ id: string; name: string; progress?: number | null; typeId?: string | null; description?: string | null }>;
+}
+
+/** A two-area roofing job, as every read the routes make sees it. */
+function areaResponder(job: AreaJob) {
+  return (q: PaveQuery): unknown => {
+    if ("createTask" in q) return { createTask: { createdTask: { id: "new-task" } } };
+    if ("createComment" in q) return { createComment: { createdComment: { id: "c9" } } };
+    if ("updateTask" in q || "updateJob" in q) return {};
+    const task = q["task"] as Record<string, unknown> | undefined;
+    if (task) {
+      if ("comments" in task) return { task: { comments: { nodes: [] } } };
+      if ("files" in task) return { task: { files: { nodes: [] } } };
+      const id = (task["$"] as Record<string, unknown>)["id"];
+      return { task: { description: job.tasks.find((t) => t.id === id)?.description ?? null } };
+    }
+    if ("job" in q) {
+      const jobQ = q["job"] as Record<string, unknown>;
+      if ("comments" in jobQ) return { job: { comments: { nodes: [] } } };
+      if ("tasks" in jobQ) {
+        const text = JSON.stringify(jobQ);
+        if (text.includes("assignedMemberships")) return { job: { tasks: { nodes: [] } } };
+        if (text.includes("DB CheckOut ref")) return { job: { tasks: { nodes: [] } } };
+        return {
+          job: {
+            tasks: {
+              nodes: job.tasks.map((t) => ({
+                id: t.id,
+                name: t.name,
+                progress: t.progress ?? null,
+                taskType: t.typeId ? { id: t.typeId } : null,
+                description: t.description ?? null,
+                subtasks: [],
+              })),
+            },
+          },
+        };
+      }
+      return {
+        job: {
+          id: "job1",
+          number: "26-1483",
+          name: "261483 McCoy_Roof",
+          customFieldValues: {
+            nodes: [
+              { value: job.status, customField: { id: CUSTOM_FIELDS.status } },
+              { value: "Roofing", customField: { id: CUSTOM_FIELDS.jobType } },
+              ...job.projectTypes.map((v) => ({ value: v, customField: { id: CUSTOM_FIELDS.projectType } })),
+            ],
+          },
+        },
+      };
+    }
+    return {};
+  };
+}
+
+function boardThat(answer: Partial<BoardAnswer> = {}): BoardClient & { asks: BoardAsk[] } {
+  const asks: BoardAsk[] = [];
+  return {
+    asks,
+    async closeout(ask) {
+      asks.push(ask);
+      return { status: null, moved: null, pm: null, areas: [], ...answer };
+    },
+  };
+}
+
+const McCOY: AreaJob = {
+  status: "Production",
+  projectTypes: ["R-Shingles", "R-Gutters"],
+  tasks: [
+    { id: "fi", name: "Final inspection", typeId: TASK_TYPES.inspection },
+    { id: "fg", name: "Final inspection — Gutters", typeId: TASK_TYPES.inspection, description: "Walk the gutters." },
+  ],
+};
+const GUTTERS_AREA = {
+  area: "gutters" as const, label: "Gutters", line: false, inspectionName: "Final inspection — Gutters", stage: "inspect",
+  reviewer: { name: "Neal Deitemeyer", membershipId: "22PLUqZNCKaY" }, crew: [] as string[],
+};
+
+const dollarOf = (q: PaveQuery | undefined, key: string) => (q![key] as Record<string, unknown>)["$"] as Record<string, unknown>;
+
+test("a finding on the gutters is filed under the gutters: tagged, its message on their inspection, nobody's repair by default", async () => {
+  const queries: PaveQuery[] = [];
+  const board = boardThat({ areas: [GUTTERS_AREA] });
+  const handle = createHandler({ ...routerDeps(areaResponder(McCOY), queries), board });
+  const call = fakeHttp("POST", "/jobs/job1/reports", {}, { area: "gutters", location: "NE corner", englishNote: "Downspout loose" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  const created = dollarOf(queries.find((q) => "createTask" in q), "createTask");
+  assert.match(String(created["description"]), /\n\nGutters · reported by Yahir Gonzalez/);
+  assert.equal(created["assignedMembershipIds"], undefined, "the board names nobody for gutters");
+  assert.equal(dollarOf(queries.find((q) => "createComment" in q), "createComment")["targetId"], "fg");
+  // At Production the close moves the job; a finding only asks who its repairs go to.
+  assert.deepEqual(board.asks, [{ jobId: "job1", move: false, repairs: true, problemsReported: 1, area: "gutters", actor: "Yahir Gonzalez" }]);
+});
+
+test("a finding on a job already at PM Review asks the board to bring it back to Punch List", async () => {
+  const board = boardThat({ areas: [{ ...GUTTERS_AREA, area: "shingle", line: true, label: "Shingle roof", crew: ["22PdPUpWzpHy"] }] });
+  const queries: PaveQuery[] = [];
+  const handle = createHandler({ ...routerDeps(areaResponder({ ...McCOY, status: "PM Review" }), queries), board });
+  const call = fakeHttp("POST", "/jobs/job1/reports", {}, { location: "Ridge", englishNote: "Cap lifted" });
+  await handle(call.req, call.res);
+  assert.equal(board.asks[0].move, true);
+  assert.equal(board.asks[0].area, "shingle", "no area named: the template line's");
+  const created = dollarOf(queries.find((q) => "createTask" in q), "createTask");
+  assert.deepEqual(created["assignedMembershipIds"], ["22PdPUpWzpHy"], "the board's crew for the roof");
+  assert.doesNotMatch(String(created["description"]), /· reported by/, "an untagged REPORT is the roof's, as always");
+});
+
+test("with no board, a shingle finding goes to Alberto and Yahir and a gutters finding to nobody", async () => {
+  const roof: PaveQuery[] = [];
+  let call = fakeHttp("POST", "/jobs/job1/reports", {}, { location: "Ridge", englishNote: "Cap lifted" });
+  await createHandler(routerDeps(areaResponder(McCOY), roof))(call.req, call.res);
+  assert.deepEqual(dollarOf(roof.find((q) => "createTask" in q), "createTask")["assignedMembershipIds"], PUNCH_CREW.map((m) => m.membershipId));
+
+  const gutters: PaveQuery[] = [];
+  call = fakeHttp("POST", "/jobs/job1/reports", {}, { area: "gutters", location: "NE", englishNote: "Loose" });
+  await createHandler(routerDeps(areaResponder(McCOY), gutters))(call.req, call.res);
+  assert.equal(dollarOf(gutters.find((q) => "createTask" in q), "createTask")["assignedMembershipIds"], undefined);
+});
+
+test("POST /jobs/:id/close-area-inspection stamps the area's own inspection, posts the notes, and tells the board and the reviewer", async () => {
+  const queries: PaveQuery[] = [];
+  const board = boardThat({ moved: null, areas: [GUTTERS_AREA] });
+  const handle = createHandler({ ...routerDeps(areaResponder(McCOY), queries), board });
+  const call = fakeHttp("POST", "/jobs/job1/close-area-inspection", { "x-client-ref": "1758400000000-ab12cd" }, {
+    area: "gutters",
+    notes: "All downspouts strapped and running clear.",
+    problemsReported: 0,
+  });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  assert.deepEqual(JSON.parse(call.out.body), { completedTaskId: "fg", flipped: null, sentTo: "Neal Deitemeyer" });
+  const stamp = dollarOf(queries.find((q) => "updateTask" in q && dollarOf(q, "updateTask")["id"] === "fg"), "updateTask");
+  assert.equal(stamp["progress"], 1);
+  assert.equal(stamp["description"], "Walk the gutters.\n\n✔ Inspected by Yahir Gonzalez — via DB CheckOut");
+  const posted = queries.filter((q) => "createComment" in q).map((q) => dollarOf(q, "createComment"));
+  assert.equal(posted[0]["targetId"], "fg", "the notes on the inspection task, where the board's review sheet reads them");
+  assert.match(String(posted[0]["message"]), /^Inspector notes: All downspouts strapped and running clear\.\n— Yahir Gonzalez via DB CheckOut/);
+  assert.equal(posted[1]["targetType"], "job", "the summary on the job — the gutters have no review step of their own");
+  assert.deepEqual(posted[1]["assignees"], [{ membershipId: "22PLUqZNCKaY" }]);
+  assert.deepEqual(board.asks, [{ jobId: "job1", move: true, problemsReported: 0, area: "gutters", actor: "Yahir Gonzalez" }]);
+  assert.ok(!queries.some((q) => "updateJob" in q), "Close Out writes no Status");
+});
+
+test("an area inspection nobody booked is made, so the visit is on record", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(routerDeps(areaResponder({ ...McCOY, tasks: [McCOY.tasks[0]] }), queries));
+  const call = fakeHttp("POST", "/jobs/job1/close-area-inspection", {}, { area: "gutters", problemsReported: 0 });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  const made = dollarOf(queries.find((q) => "createTask" in q), "createTask");
+  assert.equal(made["name"], "Final inspection — Gutters");
+  assert.equal(made["taskTypeId"], TASK_TYPES.inspection);
+  assert.equal(made["isToDo"], true);
+  assert.equal(JSON.parse(call.out.body).completedTaskId, "new-task");
+});
+
+test("close-area-inspection refuses an area the job does not have", async () => {
+  const handle = createHandler(routerDeps(areaResponder(McCOY), []));
+  const call = fakeHttp("POST", "/jobs/job1/close-area-inspection", {}, { area: "siding", problemsReported: 0 });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 400);
+  assert.match(JSON.parse(call.out.body).error, /shingle, gutters/);
+});
+
+test("an inspection photo for the gutters lands on the gutters' inspection", async () => {
+  const queries: PaveQuery[] = [];
+  const responder = areaResponder(McCOY);
+  const handle = createHandler(
+    routerDeps((q) => {
+      if ("createUploadRequest" in q) {
+        return { createUploadRequest: { createdUploadRequest: { id: "u1", url: "https://up.example", method: "PUT", headers: {} } } };
+      }
+      if ("createFile" in q) return { createFile: { createdFile: { id: "f1" } } };
+      return responder(q);
+    }, queries),
+  );
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
+  try {
+    const call = fakeHttp("POST", "/jobs/job1/photos", {}, { label: "INSPECTION", imageBase64: PIXEL, area: "gutters" });
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, 200);
+    assert.equal(dollarOf(queries.find((q) => "createFile" in q), "createFile")["targetId"], "fg");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("finishing a repair answers where the board moved the job and who was told", async () => {
+  const board = boardThat({ moved: { from: "Punch List", to: "PM Review" }, areas: [] });
+  const handle = createHandler({ ...routerDeps(areaResponder({ ...McCOY, status: "Punch List" }), []), board });
+  const call = fakeHttp("POST", "/tasks/pt1/complete", {}, { jobId: "job1" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  assert.deepEqual(JSON.parse(call.out.body), { ok: true, flipped: "PM Review", sentTo: null });
+  assert.deepEqual(board.asks, [{ jobId: "job1", move: true, actor: "Yahir Gonzalez" }]);
+});
+
+test("the queue lists a job still in production when a work area's close-out is assigned to them", async () => {
+  const queries: PaveQuery[] = [];
+  const job = (id: string, number: string, status: string) => ({
+    id,
+    number,
+    name: `${number} Test`,
+    customFieldValues: { nodes: [{ value: status, customField: { id: CUSTOM_FIELDS.status } }] },
+  });
+  const handle = createHandler(
+    routerDeps((q) => {
+      if ("customField" in q) {
+        return { customField: { customFieldValues: { nextPage: null, nodes: [{ job: job("jFI", "26-0900", "Final Inspection") }] } } };
+      }
+      if ("organization" in q) {
+        const me = [{ id: "m1", user: { name: "Yahir Gonzalez", emailAddress: "yahirgonzalez@deitemeyerbrothers.com" } }];
+        return {
+          organization: {
+            tasks: {
+              nextPage: null,
+              nodes: [
+                { id: "t1", name: "Final inspection — Gutters", isToDo: true, taskType: { id: TASK_TYPES.inspection }, job: { id: "jProd" }, assignedMemberships: { nodes: me } },
+                { id: "t2", name: "REPORT: old", isToDo: true, taskType: { id: TASK_TYPES.punchList }, job: { id: "jDone" }, assignedMemberships: { nodes: me } },
+                { id: "t3", name: "REPORT: ridge", isToDo: true, taskType: { id: TASK_TYPES.punchList }, job: { id: "jFI" }, assignedMemberships: { nodes: me } },
+              ],
+            },
+          },
+        };
+      }
+      // listJobsByIds: one alias per job.
+      const out: Record<string, unknown> = {};
+      for (const [alias, sel] of Object.entries(q)) {
+        const id = ((sel as Record<string, unknown>)["$"] as Record<string, unknown>)["id"];
+        out[alias] = id === "jProd" ? job("jProd", "26-1483", "Production") : job("jDone", "25-7000", "Job Completed");
+      }
+      return out;
+    }, queries),
+  );
+  const call = fakeHttp("GET", "/queue");
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  const jobs = JSON.parse(call.out.body) as Array<{ id: string; mine: boolean; openPunchCount: number; status: string }>;
+  assert.deepEqual(jobs.map((j) => [j.id, j.status, j.mine, j.openPunchCount]), [
+    ["jFI", "Final Inspection", true, 1],
+    ["jProd", "Production", true, 0],
+  ], "the gutters job is theirs; a completed job's stale to-do is not listed");
 });

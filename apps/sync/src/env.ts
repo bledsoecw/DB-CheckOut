@@ -15,6 +15,15 @@ export interface Env {
    * equal to this, plus X-Acting-Email / X-Acting-Name. Off until set.
    */
   crewAppSecret: string;
+  /**
+   * The Production Board's origin and the shared secret on its close-out
+   * hook (`CLOSEOUT_HOOK_SECRET`, the same value on both projects). With
+   * both, every close tells the board, which moves the job's Status and
+   * names each work area's reviewer; without them Close Out tags its
+   * fallback reviewers and the board's hourly sweep moves the Status.
+   */
+  boardUrl: string;
+  closeoutHookSecret: string;
   /** Public base URL of this deployment, used to self-register the webhook. */
   publicUrl: string;
   /** Gemini API key for ES translation of JT text. Disabled until set. */
@@ -39,6 +48,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
     crewAppSecret: source.CREW_APP_SECRET ?? "",
+    boardUrl: source.BOARD_URL ?? "",
+    closeoutHookSecret: source.CLOSEOUT_HOOK_SECRET ?? "",
     publicUrl: source.PUBLIC_URL ?? "https://closeout.deitemeyerbrothers.com",
     geminiApiKey: source.GEMINI_API_KEY ?? "",
     geminiModel: source.GEMINI_MODEL ?? "gemini-flash-lite-latest",

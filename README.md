@@ -25,37 +25,54 @@ repair work — wired into JobTread and the DB Production board.
    **"Final inspection"** task — the eight inspection checks and the five
    cleanup checks are its subtasks, the notes go in its description — and
    completes it, so the app ticks the same boxes the PM sees on the Gantt.
-   That completion is what moves the job: to **Punch List** if the crew
-   found anything, otherwise straight to **PM Review**. Found anything
-   posts a **"PUNCH LIST TO SCHEDULE"** message on the job's "Punch list"
-   task with **Dave Elick tagged** (Carl, 13 Oct 2026) — every repair, the
-   crew's note, who it is assigned to, the problem photos linked — so he
-   can date the punch crew's visit. (No JT Forms: the
-   inspection and cleanup forms were retired on 2026-09-21.)
-6. The **punch crew** sees assigned repairs in the same app: where to
+   Found anything posts a **"PUNCH LIST TO SCHEDULE"** message on the job's
+   "Punch list" task — every repair, the crew's note, who it is assigned to,
+   the problem photos linked — tagged to **that work area's reviewer**, so
+   he can book the repair day. (No JT Forms: the inspection and cleanup
+   forms were retired on 2026-09-21.)
+6. **A roofing job is closed out one work area at a time** (Carl, 23 Oct
+   2026) — the roof, the siding, the gutters, each off the job's Project
+   Types. The roof's is the template line above; every other area has its
+   own **"Final inspection — Gutters"** task, booked by the PM on the
+   Production Board, and is inspected with **notes and photos**
+   (`POST /jobs/:id/close-area-inspection`) rather than the roof checklist.
+   A finding carries its area (`"Gutters · reported by Yahir"` in its
+   description), and goes to whoever that area's repairs go to: Alberto and
+   Yahir on a shingle roof, nobody else by default.
+7. The **punch crew** sees assigned repairs in the same app: where to
    go, what to do, what to bring, before/after photos, and a big
    "Terminado" button. The job's scheduled **"Punch list"** task mirrors
-   the open repairs as its checklist and completes with the last one;
-   when the last repair closes, the job moves to **PM Review**
-   automatically. Each finished repair posts a **message on its own
-   to-do** — "✔ REPAIR DONE — <the crew's note>", who finished it — with
-   its before and after photos linked (Carl, 13 Oct 2026: the note used to
-   sit only at the bottom of the to-do's description, where nobody found
-   it).
-7. The PM reviews the photos and notes and ticks **"PM punch review"**.
-   Whatever moves the job to PM Review posts **one summary on that task**
-   with **Dave Elick tagged**, so JobTread notifies him he has a review
-   (`PM_REVIEWER`): after the last repair, every finished repair, its note,
-   who did it, each after photo linked (up to ten; every repair's own
-   message has the rest); after a clean final inspection, who inspected, how
-   the checklist came out, what was fixed on site, the crew's notes, the
-   visit photos linked. A template with no "PM punch review" task (the
-   construction schedule) gets it on "Final inspection" instead. Messages,
-   never the job's activity feed — Carl's rule for crew notes.
-   The job then waits for the **sales rep**, who speaks to the customer
-   and ticks **"Final check-off"** — that is what sets **Job Completed**,
-   so a person has talked to the homeowner before the final payment
-   milestone fires.
+   the open repairs as its checklist and completes with the last one.
+   Each finished repair posts a **message on its own to-do** — "✔ REPAIR
+   DONE — <the crew's note>", who finished it — with its before and after
+   photos linked. When the **last repair on a work area** closes, one
+   summary — every finished repair, its note, who did it, each after photo
+   linked — is posted for **that area's reviewer**; a clean inspection
+   posts the same kind of summary (who inspected, how the checklist came
+   out, what was fixed on site, the crew's notes, the visit photos). The
+   roof's go on the template's **"PM punch review"** task; any other
+   area's go on the job, since it has no review step of its own.
+8. **The PM approves each area, or puts it on a punch list, on the
+   Production Board** (its Close-out panel). Who reviews which area is
+   Operations' list on the board — Dave Elick the shingle roofs, Neal the
+   gutters, the job's own PM for metal, low slope and siding — and Close
+   Out asks the board each time (`src/board.ts`), so a change there needs
+   no deploy here.
+9. **Close Out does not write the Status of a job with work areas** (Carl,
+   23 Oct 2026: "the board sets the Status, Close Out stops"). After an inspection closes, a
+   finding is reported on a job already past Punch List, or a repair
+   finishes, the server tells the board (`POST {BOARD_URL}/api/hooks/closeout`),
+   and the board moves the Status by its own rule — the work area furthest
+   behind decides, forward only: Production → Final Inspection → Punch
+   List → PM Review → **Sales Rep > Cust Final Contact** once every area is
+   approved. The sales rep speaks to the customer and sets **Job
+   Completed** by hand. Without the board configured, the board's hourly
+   sweep moves it instead. **A job with no work areas** — a service call
+   (R-Repairs/Service, R-Warranty), a construction job — is not the
+   board's loop, so Close Out still moves it by the rule it always had:
+   Final Inspection → Punch List or PM Review when the inspection closes,
+   Punch List → PM Review when the last repair closes, PM Review → Job
+   Completed when the sales rep ticks "Final check-off".
 
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:
@@ -71,11 +88,14 @@ docs/              jobtread-setup.md is the JT build contract
 ```
 
 **Sync server** (`apps/sync`) — the bridge between the app and JobTread:
-queue of pipeline jobs (Final Inspection / Punch List / PM Review),
-the visit's checklists onto the "Final inspection" task, problem reports
-→ unassigned Punch List tasks, task completion, the closeout pipeline
-(`src/pipeline.ts` — which milestone completing moves the job to which
-status, and the "Punch list" checklist mirror), and a webhook receiver.
+queue of pipeline jobs (Final Inspection / Punch List / PM Review, plus any
+job with close-out work assigned to the person asking, whatever its
+Status), the visit's checklists onto the "Final inspection" task, a work
+area's notes-and-photos close, problem reports → Punch List to-dos filed
+under their area, task completion, the close-out (`src/pipeline.ts` — the
+checklist mirrors and the summaries to each area's reviewer; `src/areas.ts`
+— the work areas, named exactly as the board names them; `src/board.ts` —
+the door to the board, which owns the Status), and a webhook receiver.
 Run it:
 
 ```
@@ -96,6 +116,15 @@ preset "Other", no build command → set env vars `JT_GRANT_KEY`,
 paste values only in Vercel's dashboard, never in the repo) → Deploy.
 The JobTread webhook URL is then
 `https://<project>.vercel.app/webhooks/jobtread/<WEBHOOK_SECRET>`.
+
+**The Production Board** is asked after every close (`src/board.ts`):
+set `BOARD_URL` (the board's origin, `https://ops.deitemeyerbrothers.com`)
+and `CLOSEOUT_HOOK_SECRET` — the SAME value as the board's
+`CLOSEOUT_HOOK_SECRET`. Both set, the board moves the job's Status the
+moment the crew closes something and names each work area's reviewer;
+either missing, summaries are tagged to the fallback reviewers in
+`src/areas.ts` and the board's hourly sweep moves the Status. Nothing the
+crew sends can fail over it. `GET /health` reports it as `board`.
 
 **The crew's face is DB Crew now (Oct 2026).** The inspection, cleanup,
 report and repair screens were redrawn inside DB Crew
@@ -205,8 +234,9 @@ Key design decisions:
   once every report is assigned or dismissed.
 - **JT is the system of record** — checklists live on the job's
   scheduled tasks, queue and assignments come from the Production board
-  (job Status:
-  Production → Final Inspection → Punch List → PM Review → Job Completed), and all
+  (job Status, moved by the board:
+  Production → Final Inspection → Punch List → PM Review → Sales Rep > Cust
+  Final Contact → Job Completed, the last by the rep), and all
   results land back on the JT job.
 
 Customer names and addresses in the mockups are sample data; PM names

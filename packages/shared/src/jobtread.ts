@@ -30,13 +30,22 @@ export const CUSTOM_FIELDS = {
  */
 export const SERVICE_PROJECT_TYPES: readonly string[] = ["R-Repairs/Service", "R-Warranty"];
 
-/** Pipeline statuses DB CheckOut reads and writes (job Status field). */
+/**
+ * Job Status values DB CheckOut reads. On a roofing job with work areas it
+ * writes none of them: the Production Board moves the Status from the
+ * areas (Carl, 23 Oct 2026), and Close Out tells it what happened. A job
+ * with no work areas (a service call, construction) is still moved here,
+ * by the old rule (pipeline.ts `applyLinear`).
+ */
 export const STATUS = {
+  preProduction: "Pre-Production",
   production: "Production",
   finalInspection: "Final Inspection",
   punchList: "Punch List",
   /** Renamed in JT from "Punch Review" on 2026-09-16 — JT refuses the old value. */
   pmReview: "PM Review",
+  /** Every work area approved: the sales rep calls the customer, then sets Job Completed by hand. */
+  repReview: "Sales Rep > Cust Final Contact",
   jobCompleted: "Job Completed",
   pendingFinalPayment: "Pending Final Payment",
 } as const;
