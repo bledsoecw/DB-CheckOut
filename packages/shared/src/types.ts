@@ -69,6 +69,11 @@ export interface PunchTask {
    * "Alberto Gonzalez" in JT is the person holding the phone.
    */
   mine: boolean;
+  /**
+   * The work area the repair is filed against (CloseoutArea.key), read off
+   * its tag line; null when no area claims it. Only GET /jobs/:id sets it.
+   */
+  area?: string | null;
 }
 
 /** One line of an approved customer order (the record stays English). */

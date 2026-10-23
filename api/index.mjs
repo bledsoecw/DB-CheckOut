@@ -482,11 +482,14 @@ async function getJob(pave, jobId, viewer) {
   const count = viewer ? mineOpen : open.length;
   const basics = toQueueJob(res.job, count, mineOpen > 0);
   const areas = closeoutAreas(basics, punchTasks, inspections, viewer);
+  const keys = jobAreas(basics);
   return {
     ...basics,
     // An area inspection assigned to them makes the job theirs too.
     mine: basics.mine || areas.some((a) => a.mine),
-    punchTasks,
+    // Which area each repair is for, so the phone can say "the last repair on
+    // the gutters" rather than claim the whole job moves on.
+    punchTasks: punchTasks.map((t) => ({ ...t, area: keys.length ? areaOfPunch(t, keys) : null })),
     areas,
     soldScope,
     openPunchTotal: open.length
