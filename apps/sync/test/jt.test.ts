@@ -19,6 +19,7 @@ import {
   findTaskByRef,
   inspectionNote,
   listAssignedWorkByJob,
+  bookedDayOf,
   ASSIGNED_SCAN_ASSIGNEES,
   ASSIGNED_SCAN_PAGE_SIZE,
   ASSIGNED_SCAN_PAGES,
@@ -828,10 +829,10 @@ test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count s
     email: "AlbertoGonzalez@deitemeyerbrothers.com",
     name: "whoever",
   });
-  assert.deepEqual(work.get("jobA"), { any: true, punchOpen: 2 });
-  assert.deepEqual(work.get("jobB"), { any: true, punchOpen: 0 });
+  assert.deepEqual(work.get("jobA"), { any: true, punchOpen: 2, booked: [] });
+  assert.deepEqual(work.get("jobB"), { any: true, punchOpen: 0, booked: [] });
   assert.equal(work.get("jobC"), undefined);
-  assert.deepEqual(work.get("jobD"), { any: true, punchOpen: 0 });
+  assert.deepEqual(work.get("jobD"), { any: true, punchOpen: 0, booked: [] });
   assert.equal(work.get("jobE"), undefined);
 
   // The filter must only ask for open punch/inspection tasks (progress != 1
@@ -852,6 +853,58 @@ test("listAssignedWorkByJob groups the viewer's open tasks by job, punch count s
       },
       [["progress"], "!=", 1],
     ],
+  });
+});
+
+test("listAssignedWorkByJob says which days the viewer's close-out work is booked for", async () => {
+  // Carl, 26 Oct 2026: "I see the 25-0001 job listed under assigned, but no
+  // date … I do not know when this inspection is scheduled for." The scan
+  // already reads every task naming the viewer; it reads their dates too, so
+  // the phone can file each job under its day without a second query.
+  const dated = (t: ReturnType<typeof orgTask>, startDate: string | null, endDate: string | null) => ({ ...t, startDate, endDate });
+  const { client, queries } = fakePave(() => ({
+    organization: {
+      tasks: {
+        nextPage: null,
+        nodes: [
+          dated(orgTask("t1", "jobA", TASK_TYPES.inspection, [ALBERTO]), "2026-10-27", "2026-10-27"),
+          // Three repairs on one day are one day of work.
+          dated(orgTask("t2", "jobB", TASK_TYPES.punchList, [ALBERTO]), "2026-10-29", "2026-10-29"),
+          dated(orgTask("t3", "jobB", TASK_TYPES.punchList, [ALBERTO]), "2026-10-29", "2026-10-29"),
+          dated(orgTask("t4", "jobB", TASK_TYPES.punchList, [ALBERTO]), "2026-10-28", null),
+          // No day yet: the job is still theirs, it just has nowhere on the calendar.
+          dated(orgTask("t5", "jobC", TASK_TYPES.punchList, [ALBERTO]), null, null),
+        ],
+      },
+    },
+  }));
+  const work = await listAssignedWorkByJob(client, ALBERTO);
+  assert.deepEqual(work.get("jobA")?.booked, [{ start: "2026-10-27", end: "2026-10-27", kind: "inspection" }]);
+  assert.deepEqual(work.get("jobB"), {
+    any: true,
+    punchOpen: 3,
+    booked: [
+      { start: "2026-10-28", end: "2026-10-28", kind: "repair" },
+      { start: "2026-10-29", end: "2026-10-29", kind: "repair" },
+    ],
+  });
+  assert.deepEqual(work.get("jobC"), { any: true, punchOpen: 1, booked: [] });
+  const nodes = ((queries[0]["organization"] as Record<string, unknown>)["tasks"] as Record<string, unknown>)["nodes"] as Record<string, unknown>;
+  assert.ok("startDate" in nodes && "endDate" in nodes, "the scan asks for the dates");
+});
+
+test("bookedDayOf reads JobTread's dates, and an end before the start is the one day", () => {
+  assert.equal(bookedDayOf({ startDate: null }), null);
+  assert.equal(bookedDayOf({ startDate: "soon" }), null);
+  assert.deepEqual(bookedDayOf({ startDate: "2026-10-27T00:00:00Z", endDate: "2026-10-28", taskType: { id: TASK_TYPES.inspection } }), {
+    start: "2026-10-27",
+    end: "2026-10-28",
+    kind: "inspection",
+  });
+  assert.deepEqual(bookedDayOf({ startDate: "2026-10-27", endDate: "2026-10-20", taskType: { id: TASK_TYPES.punchList } }), {
+    start: "2026-10-27",
+    end: "2026-10-27",
+    kind: "repair",
   });
 });
 
@@ -888,7 +941,7 @@ test("listAssignedWorkByJob keeps what it gathered when a page is refused, and s
   } finally {
     console.warn = origWarn;
   }
-  assert.deepEqual(work.get("jobA"), { any: true, punchOpen: 0 });
+  assert.deepEqual(work.get("jobA"), { any: true, punchOpen: 0, booked: [] });
   // The refusal is no longer silent.
   assert.ok(warned.some((w) => w.includes("Request Entity Too Large")), warned.join("\n"));
 });

@@ -37,6 +37,22 @@ export interface QueueJob {
    * requesting user. Drives the Assigned / All tabs on the queue.
    */
   mine: boolean;
+  /**
+   * The days the requesting user's open close-out work on this job is booked
+   * for — a final inspection's day, a repair day — oldest first. Empty when
+   * none of it has a day yet; absent on a job that is not theirs, and from a
+   * server older than the field. The phone groups the Assigned list by these
+   * and draws the day strip off them, so the card itself never grows.
+   */
+  booked?: BookedDay[];
+}
+
+/** One booked stretch of close-out work, as JobTread dates it (YYYY-MM-DD). */
+export interface BookedDay {
+  start: string;
+  /** The same as start on a one-day booking, which is nearly all of them. */
+  end: string;
+  kind: "inspection" | "repair";
 }
 
 /** Somebody a punch item is assigned to in JobTread. */

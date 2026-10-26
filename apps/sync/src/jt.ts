@@ -18,6 +18,7 @@ import {
 } from "../../../packages/shared/src/jobtread";
 import type {
   Assignee,
+  BookedDay,
   ChecklistFinding,
   CloseoutArea,
   JobDetail,
@@ -82,6 +83,8 @@ interface RawTask {
   /** When the task was created — read on punch tasks only (listPunchTasks). */
   createdAt?: string | null;
   progress: number | null;
+  /** Read by the org-wide assigned scan, for the day the work is booked. */
+  startDate?: string | null;
   endDate: string | null;
   taskType: { id: string } | null;
   /** To-do (true) or scheduled task (false). Punch items are to-dos. */
@@ -526,6 +529,29 @@ export interface AssignedWork {
   any: boolean;
   /** Open punch-type tasks naming them — the number on the REPAIRS badge. */
   punchOpen: number;
+  /** The days that work is booked for, oldest first; undated work adds nothing. */
+  booked: BookedDay[];
+}
+
+/**
+ * A task's booked stretch, or null when it has no day. JobTread hands back
+ * plain dates, sometimes with a time on them; an end before the start (or
+ * none) is read as the one day.
+ */
+export function bookedDayOf(task: { startDate?: string | null; endDate?: string | null; taskType?: { id: string } | null }): BookedDay | null {
+  const start = String(task.startDate ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return null;
+  const rawEnd = String(task.endDate ?? "").slice(0, 10);
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) && rawEnd >= start ? rawEnd : start;
+  return { start, end, kind: task.taskType?.id === TASK_TYPES.punchList ? "repair" : "inspection" };
+}
+
+/** Add a booking once — three repair items on one day are one day of work. */
+function addBooked(list: BookedDay[], day: BookedDay | null): void {
+  if (!day) return;
+  if (list.some((d) => d.start === day.start && d.end === day.end && d.kind === day.kind)) return;
+  list.push(day);
+  list.sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end) || a.kind.localeCompare(b.kind));
 }
 
 /**
@@ -605,6 +631,9 @@ export async function listAssignedWorkByJob(
               id: {},
               name: {},
               isToDo: {},
+              // The day it is booked for — the phone files the job under it.
+              startDate: {},
+              endDate: {},
               taskType: { id: {} },
               job: { id: {} },
               assignedMemberships: {
@@ -624,9 +653,10 @@ export async function listAssignedWorkByJob(
           email: m.user?.emailAddress ?? null,
         }));
         if (!isCloseoutTask(task) || !viewerMatches(assignees, viewer)) continue;
-        const entry = work.get(jobId) ?? { any: false, punchOpen: 0 };
+        const entry = work.get(jobId) ?? { any: false, punchOpen: 0, booked: [] };
         entry.any = true;
         if (task.taskType?.id === TASK_TYPES.punchList) entry.punchOpen += 1;
+        addBooked(entry.booked, bookedDayOf(task));
         work.set(jobId, entry);
       }
       if (!tasks?.nextPage) break;

@@ -397,6 +397,7 @@ export function createHandler(deps: RouterDeps) {
           if (work) {
             job.mine = work.any;
             job.openPunchCount = work.punchOpen;
+            job.booked = work.booked;
           }
         }
         // Close-out work assigned to them on a job outside those three
@@ -410,7 +411,12 @@ export function createHandler(deps: RouterDeps) {
           try {
             extra = (await listJobsByIds(deps.pave, others.slice(0, 30)))
               .filter((j) => ASSIGNED_STATUSES.includes(j.status))
-              .map((j) => ({ ...j, mine: true, openPunchCount: assigned.get(j.id)?.punchOpen ?? 0 }));
+              .map((j) => ({
+                ...j,
+                mine: true,
+                openPunchCount: assigned.get(j.id)?.punchOpen ?? 0,
+                booked: assigned.get(j.id)?.booked ?? [],
+              }));
           } catch (err) {
             console.warn(`assigned jobs outside the pipeline not listed: ${err instanceof Error ? err.message : String(err)}`);
           }

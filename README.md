@@ -90,7 +90,8 @@ docs/              jobtread-setup.md is the JT build contract
 **Sync server** (`apps/sync`) — the bridge between the app and JobTread:
 queue of pipeline jobs (Final Inspection / Punch List / PM Review, plus any
 job with close-out work assigned to the person asking, whatever its
-Status), the visit's checklists onto the "Final inspection" task, a work
+Status — each of their jobs carrying `booked`, the days that work is booked
+for, so DB Crew can file the Assigned list under its days), the visit's checklists onto the "Final inspection" task, a work
 area's notes-and-photos close, problem reports → Punch List to-dos filed
 under their area, task completion, the close-out (`src/pipeline.ts` — the
 checklist mirrors and the summaries to each area's reviewer; `src/areas.ts`

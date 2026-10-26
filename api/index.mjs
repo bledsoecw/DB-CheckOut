@@ -604,6 +604,19 @@ function viewerMatches(assignees, viewer) {
     (a) => email.length > 0 && norm(a.email) === email || name.length > 0 && norm(a.name) === name
   );
 }
+function bookedDayOf(task) {
+  const start = String(task.startDate ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return null;
+  const rawEnd = String(task.endDate ?? "").slice(0, 10);
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) && rawEnd >= start ? rawEnd : start;
+  return { start, end, kind: task.taskType?.id === TASK_TYPES.punchList ? "repair" : "inspection" };
+}
+function addBooked(list, day) {
+  if (!day) return;
+  if (list.some((d) => d.start === day.start && d.end === day.end && d.kind === day.kind)) return;
+  list.push(day);
+  list.sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end) || a.kind.localeCompare(b.kind));
+}
 function isCloseoutTask(task) {
   if (task.taskType?.id === TASK_TYPES.punchList) return task.isToDo !== false;
   return task.taskType?.id === TASK_TYPES.inspection && /^\s*final inspection/i.test(task.name ?? "");
@@ -651,6 +664,9 @@ async function listAssignedWorkByJob(pave, viewer) {
               id: {},
               name: {},
               isToDo: {},
+              // The day it is booked for — the phone files the job under it.
+              startDate: {},
+              endDate: {},
               taskType: { id: {} },
               job: { id: {} },
               assignedMemberships: {
@@ -670,9 +686,10 @@ async function listAssignedWorkByJob(pave, viewer) {
           email: m.user?.emailAddress ?? null
         }));
         if (!isCloseoutTask(task) || !viewerMatches(assignees, viewer)) continue;
-        const entry2 = work.get(jobId) ?? { any: false, punchOpen: 0 };
+        const entry2 = work.get(jobId) ?? { any: false, punchOpen: 0, booked: [] };
         entry2.any = true;
         if (task.taskType?.id === TASK_TYPES.punchList) entry2.punchOpen += 1;
+        addBooked(entry2.booked, bookedDayOf(task));
         work.set(jobId, entry2);
       }
       if (!tasks?.nextPage) break;
@@ -1847,6 +1864,7 @@ function createHandler(deps) {
           if (work) {
             job.mine = work.any;
             job.openPunchCount = work.punchOpen;
+            job.booked = work.booked;
           }
         }
         const listed = new Set(jobs.map((j) => j.id));
@@ -1854,7 +1872,12 @@ function createHandler(deps) {
         let extra = [];
         if (others.length) {
           try {
-            extra = (await listJobsByIds(deps.pave, others.slice(0, 30))).filter((j) => ASSIGNED_STATUSES.includes(j.status)).map((j) => ({ ...j, mine: true, openPunchCount: assigned.get(j.id)?.punchOpen ?? 0 }));
+            extra = (await listJobsByIds(deps.pave, others.slice(0, 30))).filter((j) => ASSIGNED_STATUSES.includes(j.status)).map((j) => ({
+              ...j,
+              mine: true,
+              openPunchCount: assigned.get(j.id)?.punchOpen ?? 0,
+              booked: assigned.get(j.id)?.booked ?? []
+            }));
           } catch (err) {
             console.warn(`assigned jobs outside the pipeline not listed: ${err instanceof Error ? err.message : String(err)}`);
           }

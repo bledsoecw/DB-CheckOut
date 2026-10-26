@@ -649,7 +649,7 @@ test("the queue lists a job still in production when a work area's close-out is 
             tasks: {
               nextPage: null,
               nodes: [
-                { id: "t1", name: "Final inspection — Gutters", isToDo: true, taskType: { id: TASK_TYPES.inspection }, job: { id: "jProd" }, assignedMemberships: { nodes: me } },
+                { id: "t1", name: "Final inspection — Gutters", isToDo: true, startDate: "2026-10-27", endDate: "2026-10-27", taskType: { id: TASK_TYPES.inspection }, job: { id: "jProd" }, assignedMemberships: { nodes: me } },
                 { id: "t2", name: "REPORT: old", isToDo: true, taskType: { id: TASK_TYPES.punchList }, job: { id: "jDone" }, assignedMemberships: { nodes: me } },
                 { id: "t3", name: "REPORT: ridge", isToDo: true, taskType: { id: TASK_TYPES.punchList }, job: { id: "jFI" }, assignedMemberships: { nodes: me } },
               ],
@@ -674,4 +674,9 @@ test("the queue lists a job still in production when a work area's close-out is 
     ["jFI", "Final Inspection", true, 1],
     ["jProd", "Production", true, 0],
   ], "the gutters job is theirs; a completed job's stale to-do is not listed");
+  // Each of their jobs carries the days its work is booked for, so the phone
+  // can file it under its day.
+  const booked = Object.fromEntries((JSON.parse(call.out.body) as Array<{ id: string; booked?: unknown }>).map((j) => [j.id, j.booked]));
+  assert.deepEqual(booked["jProd"], [{ start: "2026-10-27", end: "2026-10-27", kind: "inspection" }]);
+  assert.deepEqual(booked["jFI"], []);
 });
