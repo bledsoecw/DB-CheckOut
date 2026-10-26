@@ -302,10 +302,12 @@ interface FakeJob {
   status: string;
   jobType?: string;
   projectTypes?: string[];
-  punch: Array<{ id: string; name: string; progress: number | null; description?: string }>;
+  punch: Array<{ id: string; name: string; progress: number | null; description?: string; createdAt?: string }>;
   milestones: Array<{ id: string; name: string; progress: number | null; typeId: string | null; description?: string; subtasks: Array<{ name: string; isComplete: boolean }> }>;
   /** Comments already on a task or the job, by id — what a reference lookup finds. */
   comments?: Record<string, string[]>;
+  /** When each of those comments was posted, by id, in the same order (absent = not known). */
+  commentTimes?: Record<string, string[]>;
   files?: Record<string, Array<{ id: string; name: string; description: string }>>;
 }
 
@@ -323,9 +325,12 @@ function fakePave(job: FakeJob): Fake {
   const posted: Array<Record<string, unknown>> = [];
   const linked: unknown[] = [];
   const reads: string[] = [];
-  const refHit = (id: string, where: unknown) => {
+  /** The comments a `like` lookup finds, with what a review-summary lookup asks for. */
+  const matching = (id: string, where: unknown) => {
     const marker = /%(.+)%/.exec(JSON.stringify(where))?.[1];
-    return (job.comments?.[id] ?? []).some((m) => marker && m.includes(marker));
+    return (job.comments?.[id] ?? [])
+      .map((message, i) => ({ id: `existing-${i}`, message, createdAt: job.commentTimes?.[id]?.[i] ?? null }))
+      .filter((c) => marker && c.message.includes(marker));
   };
   const client: PaveClient = {
     async query<T>(q: PaveQuery): Promise<T> {
@@ -352,7 +357,7 @@ function fakePave(job: FakeJob): Fake {
         if ("comments" in task) {
           const c = task["comments"] as Record<string, unknown>;
           const where = (c["$"] as Record<string, unknown>)["where"];
-          if (where) return { task: { comments: { nodes: refHit(id, where) ? [{ id: "existing" }] : [] } } } as T;
+          if (where) return { task: { comments: { nodes: matching(id, where) } } } as T;
           return { task: { comments: { nodes: (job.comments?.[id] ?? []).map((message) => ({ message })) } } } as T;
         }
         return { task: { description: null } } as T;
@@ -360,7 +365,7 @@ function fakePave(job: FakeJob): Fake {
       const jobQ = q["job"] as Record<string, unknown>;
       if ("comments" in jobQ) {
         const where = ((jobQ["comments"] as Record<string, unknown>)["$"] as Record<string, unknown>)["where"];
-        return { job: { comments: { nodes: refHit("job1", where) ? [{ id: "existing" }] : [] } } } as T;
+        return { job: { comments: { nodes: matching("job1", where) } } } as T;
       }
       if (!("tasks" in jobQ)) {
         reads.push("basics");
@@ -513,6 +518,60 @@ test("a replay of the same finished repairs costs one lookup: no files read, no 
   assert.equal(again.posted.length, 0);
   assert.ok(!again.reads.some((r) => r.startsWith("files:")), "no repair's files read");
   assert.equal(board.asks.length, 0);
+});
+
+test("a second punch round: the summary lists only the new repairs, says how many were reviewed before, and links only their photos", async () => {
+  // 25-0001 on 26 Oct 2026: sixteen repairs reviewed, a clean re-inspection
+  // summary at 18:20:55, then the PM put the gutters on a punch list and the
+  // crew cleared them. The summary that went out listed all seventeen.
+  const earlier = "🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed\n\nDB CheckOut ref: pmi-70dd90df";
+  const fake = fakePave({
+    ...ROOF,
+    status: STATUS.punchList,
+    punch: [
+      { id: "r1", name: "REPORT: Gutter", progress: 1, createdAt: "2026-10-13T17:03:48Z" },
+      { id: "r2", name: "Carl Test — Fix 1", progress: 1, createdAt: "2026-10-13T17:03:49Z" },
+      { id: "r3", name: "Carl Test — The gutters are still clogged", progress: 1, createdAt: "2026-10-26T18:25:05Z", description: "Clear them\n\n✔ Done — Cleared — Carl Bledsoe" },
+    ],
+    milestones: template({ progress: 1, description: INSPECTED }, [{ name: "REPORT: Gutter", isComplete: true }]),
+    comments: { pmr: [earlier] },
+    commentTimes: { pmr: ["2026-10-26T18:20:55Z"] },
+    files: {
+      r1: [{ id: "a1", name: "AFTER 2026-10-13 19:38 — Yahir", description: "x" }],
+      r3: [{ id: "a3", name: "AFTER 2026-10-26 18:26 — Carl", description: "x" }],
+    },
+  });
+  await applyPipeline(fake.client, "job1", fakeBoard());
+  assert.equal(fake.posted.length, 1);
+  assert.match(
+    String(fake.posted[0]["message"]),
+    /^🔍 READY FOR PM REVIEW — 1 repair finished\n2 repairs from earlier rounds already reviewed — not repeated here\.\n1\. Carl Test — The gutters are still clogged — Cleared — Carl Bledsoe\n/,
+  );
+  assert.deepEqual(fake.linked, [[{ _type: "file", id: "a3" }]], "this round's after photo only");
+  assert.ok(!fake.reads.includes("files:r1") && !fake.reads.includes("files:r2"), "an earlier round's files are not even read");
+});
+
+test("a replay of a second round finds its own summary: nothing posted twice", async () => {
+  const punch = [
+    { id: "r1", name: "REPORT: Gutter", progress: 1, createdAt: "2026-10-13T17:03:48Z" },
+    { id: "r3", name: "Carl Test — The gutters", progress: 1, createdAt: "2026-10-26T18:25:05Z" },
+  ];
+  const milestones = template({ progress: 1, description: INSPECTED }, [{ name: "REPORT: Gutter", isComplete: true }]);
+  const earlier = "🔍 READY FOR PM REVIEW — 1 repair finished\n1. REPORT: Gutter\n\nDB CheckOut ref: pmr-0000aaaa";
+  const first = fakePave({ ...ROOF, status: STATUS.punchList, punch, milestones, comments: { pmr: [earlier] }, commentTimes: { pmr: ["2026-10-14T12:00:00Z"] } });
+  await applyPipeline(first.client, "job1", fakeBoard());
+  const posted = String(first.posted[0]["message"]);
+  const again = fakePave({
+    ...ROOF,
+    status: STATUS.punchList,
+    punch,
+    milestones,
+    comments: { pmr: [posted, earlier] },
+    commentTimes: { pmr: ["2026-10-26T18:26:49Z", "2026-10-14T12:00:00Z"] },
+  });
+  await applyPipeline(again.client, "job1", fakeBoard());
+  assert.equal(again.posted.length, 0);
+  assert.ok(!again.reads.some((r) => r.startsWith("files:")), "no repair's files read");
 });
 
 test("an approved area is not told again, and an untagged repair on one area is that area's", async () => {

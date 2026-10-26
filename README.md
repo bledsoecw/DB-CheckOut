@@ -46,8 +46,13 @@ repair work — wired into JobTread and the DB Production board.
    Each finished repair posts a **message on its own to-do** — "✔ REPAIR
    DONE — <the crew's note>", who finished it — with its before and after
    photos linked. When the **last repair on a work area** closes, one
-   summary — every finished repair, its note, who did it, each after photo
-   linked — is posted for **that area's reviewer**; a clean inspection
+   summary — every finished repair of **this round**, its note, who did
+   it, each after photo linked — is posted for **that area's reviewer**.
+   A round starts after the review summary that came before it (Carl, 26
+   Oct 2026: a second punch list sent the PM all seventeen repairs again
+   for the one he had just asked for); earlier rounds get one line, "16
+   repairs from earlier rounds already reviewed — not repeated here", and
+   their photos are not linked again (`currentRound` in `jt.ts`). A clean inspection
    posts the same kind of summary (who inspected, how the checklist came
    out, what was fixed on site, the crew's notes, the visit photos). The
    roof's go on the template's **"PM punch review"** task; any other

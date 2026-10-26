@@ -1077,9 +1077,14 @@ const areaLine = (label?: string | null): string[] => (label ? [`Work area: ${la
 /** The memberships a summary is tagged to: its reviewer, when JobTread knows who that is. */
 const tagsFor = (reviewer: Reviewer | null): string[] => (reviewer?.membershipId ? [reviewer.membershipId] : []);
 
-/** The summary the PM reads when an area's repairs are all finished: every repair, its note, who did it. */
-export function pmReviewSummary(done: PunchTask[], photosLinked: number, area?: string | null): string {
+/**
+ * The summary the PM reads when an area's repairs are all finished: every
+ * repair in THIS round, its note, who did it. `earlier` counts the repairs
+ * of rounds the PM has already reviewed — said in one line, never listed again.
+ */
+export function pmReviewSummary(done: PunchTask[], photosLinked: number, area?: string | null, earlier = 0): string {
   const head = `🔍 READY FOR PM REVIEW — ${done.length} repair${done.length === 1 ? "" : "s"} finished`;
+  const before = earlier > 0 ? [`${earlier} repair${earlier === 1 ? "" : "s"} from earlier rounds already reviewed — not repeated here.`] : [];
   const lines = done.map((t, i) => `${i + 1}. ${t.name} — ${doneLine(t.description) ?? "closed in JobTread, no finish note"}`);
   const photos =
     photosLinked === 0
@@ -1087,7 +1092,64 @@ export function pmReviewSummary(done: PunchTask[], photosLinked: number, area?: 
       : photosLinked < done.length
         ? `After photos for ${photosLinked} of the ${done.length} are linked here; every repair's own message carries its before and after.`
         : "The after photos are linked here; each repair's own message carries its before and after.";
-  return [head, ...areaLine(area), ...lines, "", photos, REVIEW_ASK].join("\n").slice(0, 3900);
+  return [head, ...areaLine(area), ...before, ...lines, "", photos, REVIEW_ASK].join("\n").slice(0, 3900);
+}
+
+/** The head every review summary starts with — the repairs one and the clean-inspection one. */
+export const REVIEW_HEAD = "READY FOR PM REVIEW";
+
+/**
+ * Which repairs a review summary is about (Carl, 26 Oct 2026: *"When the PM
+ * scheduled another punch list, and the worker sends back photos and report,
+ * only those photos and report should come through on the activity for the
+ * PM to review, not the entire history of punch list items that he already
+ * reviewed"*). An earlier review summary closes a round: it was posted only
+ * once every repair asked for before it was finished, and it put them in
+ * front of the PM. So this round is the repairs asked for AFTER the latest
+ * summary that came before the newest repair — not after the latest summary
+ * of all, or this round's own summary, once posted, would leave it empty and
+ * a replay could not find it again. No earlier summary: every repair. A
+ * repair with no creation time is kept, the safe direction.
+ */
+export function currentRound<T extends { createdAt?: string | null }>(
+  repairs: readonly T[],
+  summaryTimes: readonly (string | null | undefined)[],
+): { round: T[]; earlier: number } {
+  const asked = repairs.map((t) => Date.parse(t.createdAt ?? "")).filter((n) => !Number.isNaN(n));
+  if (asked.length === 0) return { round: [...repairs], earlier: 0 };
+  const newest = Math.max(...asked);
+  const closes = summaryTimes.map((s) => Date.parse(s ?? "")).filter((n) => !Number.isNaN(n) && n < newest);
+  if (closes.length === 0) return { round: [...repairs], earlier: 0 };
+  const after = Math.max(...closes);
+  const round = repairs.filter((t) => {
+    const at = Date.parse(t.createdAt ?? "");
+    return Number.isNaN(at) || at > after;
+  });
+  return { round, earlier: repairs.length - round.length };
+}
+
+/**
+ * The review summaries already on this target, newest first. On the job's
+ * own thread (an area with no task of its own) only this area's — every
+ * job-level summary names its area on a "Work area:" line.
+ */
+export async function listReviewSummaries(
+  pave: PaveClient,
+  target: MessageTarget,
+  area?: string | null,
+): Promise<Array<{ id: string; message: string; createdAt: string | null }>> {
+  const res = await pave.query<Record<string, { comments: { nodes: Array<{ id: string; message: string | null; createdAt: string | null }> } } | null>>({
+    [target.type]: {
+      $: { id: target.id },
+      comments: {
+        $: { size: 20, where: [["message"], "like", `%${REVIEW_HEAD}%`], sortBy: [{ field: "createdAt", order: "desc" }] },
+        nodes: { id: {}, message: {}, createdAt: {} },
+      },
+    },
+  });
+  const all = (res[target.type]?.comments?.nodes ?? []).map((c) => ({ id: c.id, message: c.message ?? "", createdAt: c.createdAt ?? null }));
+  if (target.type !== "job") return all;
+  return all.filter((c) => (area ? c.message.includes(`Work area: ${area}`) : !c.message.includes("Work area:")));
 }
 
 /**
@@ -1111,11 +1173,13 @@ function fnv(text: string): string {
 }
 
 /**
- * Post the summary for one area's finished repairs and link each repair's
- * after photo, tagging the area's reviewer so JobTread notifies him. The
- * reference is checked FIRST: this runs on every webhook event of a job in
- * close-out, and the same finished set must cost one lookup, not a read of
- * every repair's files.
+ * Post the summary for one area's finished repairs — this round's only
+ * (`currentRound`) — and link their after photos, tagging the area's
+ * reviewer so JobTread notifies him. One lookup comes FIRST: the review
+ * summaries already on the target, which say both where the round starts
+ * and whether this round's summary is already there. This runs on every
+ * webhook event of a job in close-out, and the same finished set must cost
+ * that one lookup, not a read of every repair's files.
  */
 export async function postPmReviewSummary(
   pave: PaveClient,
@@ -1125,11 +1189,15 @@ export async function postPmReviewSummary(
   area?: string | null,
 ): Promise<string | null> {
   if (!target) return null;
-  const done = punchTasks.filter((t) => t.progress >= 1);
+  const finished = punchTasks.filter((t) => t.progress >= 1);
+  if (finished.length === 0) return null;
+  const summaries = await listReviewSummaries(pave, target, area);
+  const { round: done, earlier } = currentRound(finished, summaries.map((s) => s.createdAt));
   if (done.length === 0) return null;
   const ref = summaryRef(done);
-  const already = await findCommentByRef(pave, target, ref);
-  if (already) return already;
+  const marker = clientRefMarker(ref);
+  const already = marker ? summaries.find((s) => s.message.includes(marker)) : undefined;
+  if (already) return already.id;
   const who = typeof reviewer === "function" ? await reviewer() : reviewer;
   const afters: string[] = [];
   for (const t of done) {
@@ -1137,7 +1205,7 @@ export async function postPmReviewSummary(
     const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
     if (after) afters.push(after);
   }
-  const commentId = await postMessage(pave, target, pmReviewSummary(done, afters.length, area), ref, tagsFor(who));
+  const commentId = await postMessage(pave, target, pmReviewSummary(done, afters.length, area, earlier), ref, tagsFor(who));
   if (!commentId) return null;
   for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
   return commentId;

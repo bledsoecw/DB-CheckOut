@@ -38,6 +38,7 @@ import {
   postRepairDone,
   doneLine,
   pmReviewSummary,
+  currentRound,
   summaryRef,
   clientRefMarker,
   inspectorOf,
@@ -1151,6 +1152,29 @@ test("pmReviewSummary lists every finished repair, its note and who, and says wh
   );
   assert.match(pmReviewSummary(done, 1), /After photos for 1 of the 2 are linked here/);
   assert.match(pmReviewSummary([done[0]], 0), /^🔍 READY FOR PM REVIEW — 1 repair finished\n[\s\S]*No after photos to link here/);
+});
+
+test("pmReviewSummary says how many repairs earlier rounds had, in one line, without listing them", () => {
+  const done = [doneTask("c", "Carl Test — The gutters", "x\n\n✔ Done — Cleared — Carl Bledsoe")];
+  assert.equal(
+    pmReviewSummary(done, 1, null, 16).split("\n").slice(0, 3).join("\n"),
+    "🔍 READY FOR PM REVIEW — 1 repair finished\n16 repairs from earlier rounds already reviewed — not repeated here.\n1. Carl Test — The gutters — Cleared — Carl Bledsoe",
+  );
+  assert.match(pmReviewSummary(done, 1, "Gutters", 1), /^🔍 READY FOR PM REVIEW — 1 repair finished\nWork area: Gutters\n1 repair from earlier rounds already reviewed/);
+  assert.ok(!pmReviewSummary(done, 1).includes("earlier rounds"), "a first round says nothing about earlier ones");
+});
+
+test("currentRound: the repairs asked for after the summary that closed the last round", () => {
+  const at = (id: string, createdAt: string | null) => ({ id, createdAt });
+  // 25-0001, 26 Oct 2026: summaries at 11:59 and 18:20; the gutters asked for at 18:25.
+  const repairs = [at("old1", "2026-09-08T17:59:36Z"), at("old2", "2026-10-13T20:21:10Z"), at("gutters", "2026-10-26T18:25:05Z")];
+  const summaries = ["2026-10-26T18:26:49Z", "2026-10-26T18:20:55Z", "2026-10-26T11:59:05Z"];
+  assert.deepEqual(currentRound(repairs, summaries), { round: [repairs[2]], earlier: 2 }, "the 18:26 summary is this round's own and closes nothing");
+  assert.deepEqual(currentRound(repairs, []), { round: repairs, earlier: 0 }, "no summary yet: every repair");
+  assert.deepEqual(currentRound(repairs, [null, "not a date"]), { round: repairs, earlier: 0 });
+  assert.deepEqual(currentRound([at("a", null), at("b", null)], summaries).earlier, 0, "no creation times: nothing can be called earlier");
+  const mixed = [at("old", "2026-10-13T20:21:10Z"), at("unknown", null), at("new", "2026-10-26T18:25:05Z")];
+  assert.deepEqual(currentRound(mixed, summaries).round.map((r) => r.id), ["unknown", "new"], "a repair with no time is kept");
 });
 
 test("summaryRef is the same for the same repairs in any order, different for another set, and a valid reference", () => {

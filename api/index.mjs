@@ -888,11 +888,40 @@ var REVIEW_ASK = "Check the work, then approve it on the Production Board (Close
 var PUNCH_ASK = "Book the repair day on the Production Board (Close-out). Assigned repairs are already on their phones in Close Out.";
 var areaLine = (label) => label ? [`Work area: ${label}`] : [];
 var tagsFor = (reviewer) => reviewer?.membershipId ? [reviewer.membershipId] : [];
-function pmReviewSummary(done, photosLinked, area) {
+function pmReviewSummary(done, photosLinked, area, earlier = 0) {
   const head = `\u{1F50D} READY FOR PM REVIEW \u2014 ${done.length} repair${done.length === 1 ? "" : "s"} finished`;
+  const before = earlier > 0 ? [`${earlier} repair${earlier === 1 ? "" : "s"} from earlier rounds already reviewed \u2014 not repeated here.`] : [];
   const lines = done.map((t, i) => `${i + 1}. ${t.name} \u2014 ${doneLine(t.description) ?? "closed in JobTread, no finish note"}`);
   const photos = photosLinked === 0 ? "No after photos to link here; each repair's own messages carry what it has." : photosLinked < done.length ? `After photos for ${photosLinked} of the ${done.length} are linked here; every repair's own message carries its before and after.` : "The after photos are linked here; each repair's own message carries its before and after.";
-  return [head, ...areaLine(area), ...lines, "", photos, REVIEW_ASK].join("\n").slice(0, 3900);
+  return [head, ...areaLine(area), ...before, ...lines, "", photos, REVIEW_ASK].join("\n").slice(0, 3900);
+}
+var REVIEW_HEAD = "READY FOR PM REVIEW";
+function currentRound(repairs, summaryTimes) {
+  const asked = repairs.map((t) => Date.parse(t.createdAt ?? "")).filter((n) => !Number.isNaN(n));
+  if (asked.length === 0) return { round: [...repairs], earlier: 0 };
+  const newest = Math.max(...asked);
+  const closes = summaryTimes.map((s) => Date.parse(s ?? "")).filter((n) => !Number.isNaN(n) && n < newest);
+  if (closes.length === 0) return { round: [...repairs], earlier: 0 };
+  const after = Math.max(...closes);
+  const round = repairs.filter((t) => {
+    const at = Date.parse(t.createdAt ?? "");
+    return Number.isNaN(at) || at > after;
+  });
+  return { round, earlier: repairs.length - round.length };
+}
+async function listReviewSummaries(pave, target, area) {
+  const res = await pave.query({
+    [target.type]: {
+      $: { id: target.id },
+      comments: {
+        $: { size: 20, where: [["message"], "like", `%${REVIEW_HEAD}%`], sortBy: [{ field: "createdAt", order: "desc" }] },
+        nodes: { id: {}, message: {}, createdAt: {} }
+      }
+    }
+  });
+  const all = (res[target.type]?.comments?.nodes ?? []).map((c) => ({ id: c.id, message: c.message ?? "", createdAt: c.createdAt ?? null }));
+  if (target.type !== "job") return all;
+  return all.filter((c) => area ? c.message.includes(`Work area: ${area}`) : !c.message.includes("Work area:"));
 }
 function summaryRef(done) {
   return `pmr-${fnv(done.map((t) => t.id).sort().join(","))}`;
@@ -907,11 +936,15 @@ function fnv(text) {
 }
 async function postPmReviewSummary(pave, punchTasks, target, reviewer, area) {
   if (!target) return null;
-  const done = punchTasks.filter((t) => t.progress >= 1);
+  const finished = punchTasks.filter((t) => t.progress >= 1);
+  if (finished.length === 0) return null;
+  const summaries = await listReviewSummaries(pave, target, area);
+  const { round: done, earlier } = currentRound(finished, summaries.map((s) => s.createdAt));
   if (done.length === 0) return null;
   const ref = summaryRef(done);
-  const already = await findCommentByRef(pave, target, ref);
-  if (already) return already;
+  const marker = clientRefMarker(ref);
+  const already = marker ? summaries.find((s) => s.message.includes(marker)) : void 0;
+  if (already) return already.id;
   const who = typeof reviewer === "function" ? await reviewer() : reviewer;
   const afters = [];
   for (const t of done) {
@@ -919,7 +952,7 @@ async function postPmReviewSummary(pave, punchTasks, target, reviewer, area) {
     const after = pickRepairPhotos(await listTaskFiles(pave, t.id)).after;
     if (after) afters.push(after);
   }
-  const commentId = await postMessage(pave, target, pmReviewSummary(done, afters.length, area), ref, tagsFor(who));
+  const commentId = await postMessage(pave, target, pmReviewSummary(done, afters.length, area, earlier), ref, tagsFor(who));
   if (!commentId) return null;
   for (const fileId of afters) await attachFileToComment(pave, commentId, fileId);
   return commentId;
