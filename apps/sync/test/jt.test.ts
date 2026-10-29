@@ -13,6 +13,8 @@ import {
   postTaskMessage,
   syncInspectionChecklist,
   visitNotesMessage,
+  closeAreaInspection,
+  areaChecklistMessage,
   completeTask,
   createReportTask,
   findFileByRef,
@@ -49,6 +51,7 @@ import {
 import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
 import {
   ANSWER,
+  AREA_CHECKLISTS,
   CLEANUP_ITEMS,
   CUSTOM_FIELDS,
   INSPECTION_ITEMS,
@@ -207,6 +210,35 @@ test("the description gets the stamp only; the free-text notes become one task m
     "Inspector notes: Two boots resealed\nCleanup notes: Magnet run twice\n— Alberto Gonzalez via DB CheckOut",
   );
   assert.equal(visitNotesMessage({ inspection: {}, cleanup: {} }, "x"), null);
+});
+
+test("the final notes ride the notes message last (DB Crew T2.27)", () => {
+  assert.equal(
+    visitNotesMessage({ inspection: {}, cleanup: {}, notes: { inspection: "Good", final: " Site is clean, homeowner happy " } }, "Yahir Gonzalez"),
+    "Inspector notes: Good\nFinal notes: Site is clean, homeowner happy\n— Yahir Gonzalez via DB CheckOut",
+  );
+});
+
+test("a gutters inspection writes its own checklist onto its task, keeps the office's lines, and posts its notes (DB Crew T2.27)", async () => {
+  const items = AREA_CHECKLISTS.gutters;
+  const { client, queries } = fakePave((q) => {
+    if ("task" in q) return { task: { description: "Final inspection of the gutters", subtasks: [{ name: "Office: check the downspout at the deck", isComplete: false }] } };
+    if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
+    return {};
+  });
+  const answers = { inspection: Object.fromEntries(items.slice(0, 8).map((i) => [i.key, ANSWER.ok])), cleanup: { [items[8].key]: ANSWER.ok, [items[9].key]: ANSWER.action, [items[10].key]: ANSWER.na } };
+  await closeAreaInspection(client, "fg1", "All hung right", "Yahir Gonzalez", "ca1", {
+    items,
+    visit: { inspection: answers.inspection, cleanup: answers.cleanup, notes: { inspection: "Seams good", cleanup: "" }, findings: [{ itemKey: items[9].key, fixedOnSite: false, location: "", note: "", photos: 1 }] },
+  });
+  const up = queries.find((q) => "updateTask" in q) as { updateTask: { $: { subtasks: { name: string; isComplete: boolean }[]; progress: number; description: string } } };
+  assert.equal(up.updateTask.$.progress, 1);
+  assert.match(up.updateTask.$.description, /✔ Inspected by Yahir Gonzalez — via DB CheckOut/);
+  assert.deepEqual(up.updateTask.$.subtasks.map((st) => [st.name.split(".")[0], st.isComplete]),
+    [["G1", true], ["G2", true], ["G3", true], ["G4", true], ["G5", true], ["G6", true], ["G7", true], ["G8", true], ["Gutter cleanup 1", true], ["Gutter cleanup 2", false], ["Gutter cleanup 3", true], ["Office: check the downspout at the deck", false]]);
+  const msg = queries.find((q) => "createComment" in q) as { createComment: { $: { message: string } } };
+  assert.equal(msg.createComment.$.message.split("\n\nDB CheckOut ref:")[0], "Inspection notes: Seams good\nFinal notes: All hung right\n— Yahir Gonzalez via DB CheckOut");
+  assert.equal(areaChecklistMessage({ inspection: {}, cleanup: {} }, "", "x"), null);
 });
 
 test("findingMessage leads with the checklist line, then the finding and the rest of the report", () => {
@@ -1118,9 +1150,19 @@ test("pickRepairPhotos finds this repair's photos by its reference, else the new
     { id: "f2", name: "AFTER 2026-10-13 19:38 — C", description: "Uploaded from DB CheckOut by C · DB CheckOut ref: crt7.a", createdAt: null },
     { id: "f1", name: "BEFORE (from phone, taken 2026-10-13 12:44) — C", description: "… · DB CheckOut ref: crt7.b", createdAt: null },
   ];
-  assert.deepEqual(pickRepairPhotos(files, "crt7"), { before: "f1", after: "f2" }, "by reference, not the newest AFTER");
-  assert.deepEqual(pickRepairPhotos(files), { before: "f1", after: "f3" }, "no reference: the newest of each");
-  assert.deepEqual(pickRepairPhotos([], "crt7"), { before: undefined, after: undefined });
+  assert.deepEqual(pickRepairPhotos(files, "crt7"), { before: "f1", after: "f2", more: [] }, "by reference, not the newest AFTER");
+  assert.deepEqual(pickRepairPhotos(files), { before: "f1", after: "f3", more: [] }, "no reference: the newest of each");
+  assert.deepEqual(pickRepairPhotos([], "crt7"), { before: undefined, after: undefined, more: [] });
+});
+
+test("pickRepairPhotos finds the photos taken during the repair (DB Crew T2.27) by reference only", () => {
+  const files = [
+    { id: "m1", name: "REPAIR 2026-10-29 14:02 — C", description: "… · DB CheckOut ref: crt7.m1", createdAt: null },
+    { id: "m0", name: "REPAIR 2026-10-29 14:01 — C", description: "… · DB CheckOut ref: crt7.m0", createdAt: null },
+    { id: "mx", name: "REPAIR 2026-10-29 13:00 — B", description: "… · DB CheckOut ref: other.m0", createdAt: null },
+  ];
+  assert.deepEqual(pickRepairPhotos(files, "crt7").more, ["m0", "m1"], "in the order they were taken, this repair's only");
+  assert.deepEqual(pickRepairPhotos(files).more, [], "no reference: none guessed");
 });
 
 test("doneLine reads the finish line completeTask wrote", () => {

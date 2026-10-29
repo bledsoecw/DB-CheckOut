@@ -36,6 +36,7 @@ import {
   areaTagLine,
   jobAreas,
   lineArea,
+  areaFormKey,
   usesRoofForm,
   type AreaKey,
   type Reviewer,
@@ -417,7 +418,7 @@ export function closeoutAreas(
       key: area,
       label: AREA_LABEL[area],
       line: isLine,
-      form: usesRoofForm(area, line) ? "roof" : "notes",
+      form: areaFormKey(area, line),
       inspectionTaskId: task?.id ?? null,
       inspectionDate: task?.startDate ?? null,
       assigneeNames: (task?.assignees ?? []).map((a) => a.name ?? "").filter((n) => n.length > 0),
@@ -799,7 +800,8 @@ export function findPipelineTask(
 export interface VisitChecklists {
   inspection: Record<string, string>;
   cleanup: Record<string, string>;
-  notes?: { inspection?: string; attic?: string; cleanup?: string };
+  /** `final`: the crew's closing notes on the visit (DB Crew T2.27 — required on the phone). */
+  notes?: { inspection?: string; attic?: string; cleanup?: string; final?: string };
   findings?: ChecklistFinding[];
 }
 
@@ -808,7 +810,7 @@ export const CHECKLIST_STAMP = "via DB CheckOut";
 /** The line close-inspection writes; its presence is what "the inspection is closed" means. */
 export const INSPECTED_STAMP = "✔ Inspected by ";
 /** Written into a REPORT task so its checklist item can be ticked when the work is done. */
-const ITEM_MARKER = /DB CheckOut item: ([A-Z]?\d+)/;
+const ITEM_MARKER = /DB CheckOut item: ([A-Z]{0,2}\d+)/;
 
 const oneLine = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -825,10 +827,14 @@ const oneLine = (text: string, max: number): string => {
  * punch work has since closed — a replayed close must not untick it).
  * A reported ACTION stays unticked until its punch task closes.
  */
-export function checklistSubtasks(visit: VisitChecklists, current: Subtask[] = []): Subtask[] {
+export function checklistSubtasks(
+  visit: VisitChecklists,
+  current: Subtask[] = [],
+  list: ReadonlyArray<{ key: string; subtask: string }> = CHECKLIST_ITEMS,
+): Subtask[] {
   const answered = { ...visit.cleanup, ...visit.inspection };
   const findingsFor = (key: string) => (visit.findings ?? []).filter((f) => f.itemKey === key);
-  return CHECKLIST_ITEMS.map((item) => {
+  return list.map((item) => {
     const findings = findingsFor(item.key);
     const answer = answered[item.key];
     const already = current.find((s) => s.name === item.subtask)?.isComplete === true;
@@ -853,6 +859,7 @@ export function visitNotesMessage(visit: VisitChecklists, byName: string): strin
   if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
   if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
   if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
+  if (notes.final?.trim()) lines.push(`Final notes: ${notes.final.trim()}`);
   if (lines.length === 0) return null;
   lines.push(`— ${byName} via DB CheckOut`);
   return lines.join("\n");
@@ -1026,13 +1033,23 @@ export async function listTaskFiles(pave: PaveClient, taskId: string): Promise<T
  * ".a", so those are found exactly; otherwise — a photo added another way —
  * the newest file named BEFORE / AFTER.
  */
-export function pickRepairPhotos(files: TaskFile[], ref?: string): { before?: string; after?: string } {
+/** How many of a repair's extra photos (DB Crew T2.27) its done message links. */
+export const REPAIR_MORE_MAX = 8;
+
+export function pickRepairPhotos(files: TaskFile[], ref?: string): { before?: string; after?: string; more: string[] } {
   const byRef = (suffix: string) => {
     const marker = ref ? clientRefMarker(`${ref}${suffix}`) : null;
     return marker ? files.find((f) => (f.description ?? "").includes(marker))?.id : undefined;
   };
   const byName = (word: string) => files.find((f) => f.name.toUpperCase().startsWith(word))?.id;
-  return { before: byRef(".b") ?? byName("BEFORE"), after: byRef(".a") ?? byName("AFTER") };
+  // The extra photos the crew took during the repair ride as ".m0", ".m1"…
+  // after the send's reference — only by reference, never guessed by name.
+  const more: string[] = [];
+  for (let i = 0; i < REPAIR_MORE_MAX; i++) {
+    const id = byRef(`.m${i}`);
+    if (id) more.push(id);
+  }
+  return { before: byRef(".b") ?? byName("BEFORE"), after: byRef(".a") ?? byName("AFTER"), more };
 }
 
 /**
@@ -1050,7 +1067,7 @@ export async function postRepairDone(
   if (!commentId) return { commentId, photos: 0 };
   const picked = pickRepairPhotos(await listTaskFiles(pave, taskId), clientRef);
   let photos = 0;
-  for (const fileId of [picked.before, picked.after]) {
+  for (const fileId of [picked.before, picked.after, ...picked.more]) {
     if (!fileId) continue;
     await attachFileToComment(pave, commentId, fileId);
     photos++;
@@ -1512,18 +1529,46 @@ export async function closeAreaInspection(
   notes: string | undefined,
   byName: string,
   clientRef?: string,
+  checklist?: { items: ReadonlyArray<{ key: string; subtask: string }>; visit: VisitChecklists },
 ): Promise<void> {
-  const res = await pave.query<{ task: { description: string | null } | null }>({
-    task: { $: { id: taskId }, description: {} },
+  const res = await pave.query<{
+    task: { description: string | null; subtasks: Array<{ name?: string | null; isComplete?: boolean | null }> | null } | null;
+  }>({
+    task: { $: { id: taskId }, description: {}, subtasks: { name: {}, isComplete: {} } },
   });
   const stamp = `${INSPECTED_STAMP}${byName} — ${CHECKLIST_STAMP}`;
   const existing = res.task?.description ?? "";
   const description = existing.includes(stamp) ? existing : existing ? `${existing}\n\n${stamp}` : stamp;
+  // A checklist area (DB Crew T2.27) writes its list onto its own task, the
+  // way close-inspection writes the roof's: the area's items in order, then
+  // anything the office keeps on that task, untouched.
+  let subtasks: Subtask[] | undefined;
+  if (checklist) {
+    const current: Subtask[] = (res.task?.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true }));
+    const written = checklistSubtasks(checklist.visit, current, checklist.items);
+    const ours = new Set(written.map((st) => st.name));
+    subtasks = [...written, ...current.filter((st) => !ours.has(st.name))];
+  }
   await pave.query({
-    updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) } },
+    updateTask: {
+      $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096), ...(subtasks ? { subtasks } : {}) },
+    },
   });
-  const message = areaNotesMessage(notes, byName);
+  const message = checklist ? areaChecklistMessage(checklist.visit, notes, byName) : areaNotesMessage(notes, byName);
   if (message) await postTaskMessage(pave, taskId, message, clientRef ? `${clientRef}.notes` : undefined);
+}
+
+/** A checklist area's notes as one task message: each section's note, then the final notes. */
+export function areaChecklistMessage(visit: VisitChecklists, finalNotes: string | undefined, byName: string): string | null {
+  const n = visit.notes ?? {};
+  const lines: string[] = [];
+  if (n.inspection?.trim()) lines.push(`Inspection notes: ${n.inspection.trim()}`);
+  if (n.cleanup?.trim()) lines.push(`Cleanup notes: ${n.cleanup.trim()}`);
+  const fin = (finalNotes ?? n.final)?.trim();
+  if (fin) lines.push(`Final notes: ${fin}`);
+  if (lines.length === 0) return null;
+  lines.push(`— ${byName} via DB CheckOut`);
+  return lines.join("\n");
 }
 
 /**
@@ -1737,8 +1782,8 @@ export async function completeTask(pave: PaveClient, taskId: string, note?: stri
 }
 
 export interface PhotoUpload {
-  /** BEFORE / AFTER a repair, or the photo on a problem REPORT. */
-  label: "BEFORE" | "AFTER" | "REPORT" | "INSPECTION";
+  /** BEFORE / AFTER a repair, more taken DURING it (REPAIR, DB Crew T2.27), or the photo on a problem REPORT. */
+  label: "BEFORE" | "AFTER" | "REPAIR" | "REPORT" | "INSPECTION";
   data: Buffer;
   contentType: string;
   /** Attach to this punch task; without it the photo lands on the job. */

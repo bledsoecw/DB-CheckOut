@@ -72,6 +72,18 @@ export function usesRoofForm(area: AreaKey, line: AreaKey | null): boolean {
   return area === line && ROOFS.includes(area);
 }
 
+/**
+ * Which form an area's crew inspection draws: the roof's eight checks on the
+ * line roof, the gutters' and the siding's own checklists (DB Crew T2.27) on
+ * theirs, and notes and photos on a second roof — a metal or low-slope roof
+ * that is not the line's.
+ */
+export function areaFormKey(area: AreaKey, line: AreaKey | null): "roof" | "gutters" | "siding" | "notes" {
+  if (usesRoofForm(area, line)) return "roof";
+  if (area === "gutters" || area === "siding") return area;
+  return "notes";
+}
+
 /** "Final inspection" for the line's area, "Final inspection — Gutters" for the rest. */
 export function areaInspectionName(area: AreaKey, line: AreaKey | null): string {
   return area === line ? "Final inspection" : `Final inspection — ${AREA_LABEL[area]}`;

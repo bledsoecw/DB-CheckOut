@@ -90,8 +90,25 @@ repair work — wired into JobTread and the DB Production board.
    a phone release — but a new form needs its write path in close-inspection
    too, and until it has one close-inspection refuses it (400, *"The walk form
    is not written to JobTread yet — ask the office."*) rather than writing it
-   as the roof's. Only the roof form exists today; `jobFormKey()` answers
-   `roof` for every job.
+   as the roof's. `jobFormKey()` answers `roof` for every job's line.
+11. **The gutters and the siding have their own checklists** (DB Crew T2.27,
+   29 Oct 2026: *"create check lists for gutter and siding final
+   inspections"*). `GUTTERS_FORM` (G1–G8, then cleanup GC1–GC3) and
+   `SIDING_FORM` (S1–S8, then SC1–SC3) sit beside the roof's in
+   `CLOSEOUT_FORMS`, their items in `packages/shared/src/jobtread.ts` and their
+   short labels in `FIELD_LABELS`. A job's `areas[].form` names the one each
+   area draws (`areaFormKey`): `roof` on the line roof, `gutters` / `siding`
+   on theirs, `notes` on a second roof. `close-area-inspection` takes `form`,
+   `answers`, `sectionNotes` and `findings` beside `notes` (the final notes),
+   writes the area's items as the checklist of its own inspection task — the
+   office's own lines on that task kept after them — stamps it, and posts the
+   section notes and the final notes as one message (`areaChecklistMessage`).
+   A form that is not the area's is a 400; a phone that sends none is written
+   as notes and photos, as before. The close-inspection's `notes.final` is
+   the roof's final notes ("Final notes: …" on the notes message). A repair's
+   extra photos come as `REPAIR` (`PHOTO_LABELS`) with the send's reference
+   `.m0`, `.m1`…, and its done message links them after the before and after.
+   The items are a first draft for the office to reword here.
 
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:

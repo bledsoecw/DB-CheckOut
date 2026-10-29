@@ -26,9 +26,21 @@ test("the magnet sweep is the customer's lawn, not the shop's yard", () => {
   assert.equal(ROOF_FORM.sections[1].items[0].en, "Magnet sweep — driveway, walks & lawn");
 });
 
-test("only the roof form is written to JobTread yet, and it is every job's", () => {
-  assert.deepEqual(Object.keys(CLOSEOUT_FORMS), ["roof"]);
+test("the roof's form is every job's line inspection; the gutters and the siding have their own (T2.27)", () => {
+  assert.deepEqual(Object.keys(CLOSEOUT_FORMS), ["roof", "gutters", "siding"]);
   assert.equal(jobFormKey(), "roof");
+});
+
+test("the gutters' and the siding's checklists: inspection then cleanup, every item labelled both ways, keys unique", () => {
+  for (const key of ["gutters", "siding"]) {
+    const f = CLOSEOUT_FORMS[key];
+    assert.deepEqual(f.sections.map((x) => x.key), ["inspection", "cleanup"]);
+    for (const sec of f.sections) for (const it of sec.items) assert.ok(it.en && it.es && it.n, `${key} ${it.key} labelled`);
+  }
+  const keys = Object.values(CLOSEOUT_FORMS).flatMap((f) => f.sections.flatMap((x) => x.items.map((i) => i.key)));
+  assert.equal(new Set(keys).size, keys.length);
+  assert.deepEqual(CLOSEOUT_FORMS.gutters.sections[0].items.map((i) => i.n), ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"]);
+  assert.deepEqual(CLOSEOUT_FORMS.siding.sections[1].items.map((i) => i.n), ["SC1", "SC2", "SC3"]);
 });
 
 const SECRET = "forms-test-secret";

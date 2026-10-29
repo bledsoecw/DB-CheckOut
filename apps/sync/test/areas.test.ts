@@ -87,7 +87,7 @@ test("the job's areas, as the phone draws them", () => {
   );
   assert.deepEqual(areas, [
     { key: "shingle", label: "Shingle roof", line: true, form: "roof", inspectionTaskId: "fi", inspectionDate: "2026-10-20", assigneeNames: [], mine: false, inspected: true, openRepairs: 1 },
-    { key: "gutters", label: "Gutters", line: false, form: "notes", inspectionTaskId: "fg", inspectionDate: "2026-10-27", assigneeNames: ["Yahir Gonzalez"], mine: true, inspected: false, openRepairs: 1 },
+    { key: "gutters", label: "Gutters", line: false, form: "gutters", inspectionTaskId: "fg", inspectionDate: "2026-10-27", assigneeNames: ["Yahir Gonzalez"], mine: true, inspected: false, openRepairs: 1 },
   ]);
   assert.deepEqual(closeoutAreas({ jobType: "Construction", projectTypes: ["C-Additions"] }, [], [], undefined), []);
 });

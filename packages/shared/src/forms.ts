@@ -19,7 +19,7 @@
  * A NEW form needs its write path too: close-inspection refuses a form it
  * does not know how to write rather than writing it as the roof's.
  */
-import { CLEANUP_ITEMS, INSPECTION_ITEMS } from "./jobtread";
+import { CLEANUP_ITEMS, GUTTER_CLEANUP_ITEMS, GUTTER_ITEMS, INSPECTION_ITEMS, SIDING_CLEANUP_ITEMS, SIDING_ITEMS } from "./jobtread";
 import { FIELD_LABELS, UI } from "./i18n";
 import type { CloseoutForm } from "./types";
 
@@ -35,10 +35,29 @@ export const ROOF_FORM: CloseoutForm = {
   ],
 };
 
-/** Every form close-inspection knows how to write. */
-export const CLOSEOUT_FORMS: Readonly<Record<string, CloseoutForm>> = { roof: ROOF_FORM };
+/** The gutters' and the siding's own (DB Crew T2.27), written by close-area-inspection. */
+export const GUTTERS_FORM: CloseoutForm = {
+  key: "gutters",
+  sections: [
+    { key: "inspection", label: { es: UI.inspection.es, en: UI.inspection.en }, items: items(GUTTER_ITEMS) },
+    { key: "cleanup", label: { es: UI.cleanup.es, en: UI.cleanup.en }, items: items(GUTTER_CLEANUP_ITEMS) },
+  ],
+};
+export const SIDING_FORM: CloseoutForm = {
+  key: "siding",
+  sections: [
+    { key: "inspection", label: { es: UI.inspection.es, en: UI.inspection.en }, items: items(SIDING_ITEMS) },
+    { key: "cleanup", label: { es: UI.cleanup.es, en: UI.cleanup.en }, items: items(SIDING_CLEANUP_ITEMS) },
+  ],
+};
 
-/** The form a job's crew inspection uses. Only the roof's is written yet. */
+/** Every form this server knows how to write. */
+export const CLOSEOUT_FORMS: Readonly<Record<string, CloseoutForm>> = { roof: ROOF_FORM, gutters: GUTTERS_FORM, siding: SIDING_FORM };
+
+/** The forms a work area's own inspection (close-area-inspection) writes. */
+export const AREA_FORM_KEYS: readonly string[] = ["gutters", "siding"];
+
+/** The form the job's line inspection uses (close-inspection). Only the roof's is written there. */
 export function jobFormKey(): string {
   return "roof";
 }

@@ -133,10 +133,11 @@ export interface CloseoutArea {
   line: boolean;
   /**
    * How the crew inspects it: "roof" is the eight roof checks plus cleanup,
-   * sent through close-inspection; "notes" is notes and photos, sent through
-   * close-area-inspection.
+   * sent through close-inspection; "gutters" and "siding" are those areas'
+   * own checklists (DB Crew T2.27), and "notes" is notes and photos — both
+   * sent through close-area-inspection.
    */
-  form: "roof" | "notes";
+  form: "roof" | "gutters" | "siding" | "notes";
   /** Its inspection task in JobTread, when the PM has booked one. */
   inspectionTaskId: string | null;
   /** The day it is booked for. */
@@ -242,10 +243,15 @@ export interface ChecklistFinding {
  */
 export interface CloseAreaInspectionRequest {
   area: string;
-  /** What the inspector saw (English). */
+  /** What the inspector saw, or their final notes on a checklist area (English). */
   notes?: string;
   /** Findings this visit still needing a return trip — the reports can land after this. */
   problemsReported: number;
+  /** The area's checklist (DB Crew T2.27): which form, its answers by section, each section's note. */
+  form?: string;
+  answers?: Record<string, Record<string, string>>;
+  sectionNotes?: Record<string, string>;
+  findings?: Array<{ itemKey: string; fixedOnSite?: boolean; location?: string; note?: string; photos?: number }>;
 }
 
 /**

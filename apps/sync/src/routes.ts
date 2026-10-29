@@ -17,7 +17,7 @@ import {
   type SessionUser,
 } from "./auth";
 import { PaveError, type PaveClient } from "./pave";
-import { isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import { AREA_CHECKLISTS, isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
 import { CLOSEOUT_FORMS } from "../../../packages/shared/src/forms";
 import {
@@ -46,7 +46,7 @@ import {
   type VisitChecklists,
 } from "./jt";
 import { afterInspection, afterRepair, applyPipeline, areaInspectionTaskOf } from "./pipeline";
-import { areaInspectionName, fallbackRepairCrew, isAreaKey, jobAreas, lineArea, AREA_LABEL, type AreaKey } from "./areas";
+import { areaFormKey, areaInspectionName, fallbackRepairCrew, isAreaKey, jobAreas, lineArea, AREA_LABEL, type AreaKey } from "./areas";
 import type { BoardClient } from "./board";
 import { summarizeScope, transcribeNote, translateTexts, TRANSLATE_LIMITS } from "./translate";
 
@@ -179,12 +179,12 @@ export function parseVisit(body: Partial<CloseInspectionRequest> & { answers?: u
   return {
     inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
     cleanup: nested ? stringMap(answers["cleanup"]) : {},
-    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"] },
+    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"], final: notes["final"] },
     findings,
   };
 }
 
-const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
+const PHOTO_LABELS = new Set(["BEFORE", "AFTER", "REPAIR", "REPORT", "INSPECTION"]);
 
 /**
  * Accepts a recording data URI; returns base64 + audio mime type, or a reason.
@@ -520,9 +520,20 @@ export function createHandler(deps: RouterDeps) {
           const notes = typeof body.notes === "string" ? body.notes.slice(0, 4000) : undefined;
           const line = lineArea(areas);
           const ref = clientRef(req);
+          // The area's own checklist (DB Crew T2.27), when the phone sends one
+          // and it is the form this area draws; an older phone's notes and
+          // photos are written exactly as before.
+          const formKey = typeof body.form === "string" ? body.form : null;
+          if (formKey && formKey !== areaFormKey(area, line)) {
+            return json(res, 400, { error: `The ${area} inspection is not the ${formKey} form` });
+          }
+          const items = formKey && formKey in AREA_CHECKLISTS ? AREA_CHECKLISTS[formKey as keyof typeof AREA_CHECKLISTS] : null;
+          const checklist = items
+            ? { items, visit: parseVisit({ answers: body.answers ?? {}, notes: body.sectionNotes ?? {}, findings: body.findings ?? [] } as never) }
+            : undefined;
           let taskId = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line)?.id;
           if (!taskId) taskId = await createAreaInspection(deps.pave, jobId, area, line, ref);
-          await closeAreaInspection(deps.pave, taskId, notes, session.name, ref);
+          await closeAreaInspection(deps.pave, taskId, notes, session.name, ref, checklist);
           const outcome = await afterInspection(deps.pave, deps.board, { jobId, area, problemsReported, actor: session.name });
           return json(res, 200, { completedTaskId: taskId, flipped: outcome.flipped, sentTo: outcome.reviewer });
         }
@@ -629,7 +640,7 @@ export function createHandler(deps: RouterDeps) {
           };
           const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
           if (!PHOTO_LABELS.has(label)) {
-            return json(res, 400, { error: "label must be BEFORE, AFTER, REPORT or INSPECTION" });
+            return json(res, 400, { error: "label must be BEFORE, AFTER, REPAIR, REPORT or INSPECTION" });
           }
           const photo = decodePhoto(body.imageBase64);
           if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });

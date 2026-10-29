@@ -15,7 +15,7 @@ test("parseVisit reads the app's close-inspection body: both checklists and the 
   });
   assert.deepEqual(visit.inspection, { [INSPECTION_ITEMS[0].key]: ANSWER.ok });
   assert.deepEqual(visit.cleanup, { [CLEANUP_ITEMS[0].key]: ANSWER.action });
-  assert.deepEqual(visit.notes, { inspection: "Clean pass", attic: "", cleanup: "Magnet run" });
+  assert.deepEqual(visit.notes, { inspection: "Clean pass", attic: "", cleanup: "Magnet run", final: undefined });
 });
 
 test("parseVisit reads the findings and drops malformed ones", () => {
@@ -38,7 +38,7 @@ test("parseVisit still accepts the flat inspection map older app builds queued i
   const visit = parseVisit({ answers: { [INSPECTION_ITEMS[2].key]: ANSWER.na, junk: 42 } as never });
   assert.deepEqual(visit.inspection, { [INSPECTION_ITEMS[2].key]: ANSWER.na });
   assert.deepEqual(visit.cleanup, {});
-  assert.deepEqual(visit.notes, { inspection: undefined, attic: undefined, cleanup: undefined });
+  assert.deepEqual(visit.notes, { inspection: undefined, attic: undefined, cleanup: undefined, final: undefined });
 });
 
 test("parseVisit tolerates a missing or malformed body", () => {

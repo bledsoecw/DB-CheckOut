@@ -109,12 +109,66 @@ export const CHECKLIST_ITEMS: ReadonlyArray<{ key: string; code: string; subtask
   ...CLEANUP_ITEMS,
 ];
 
+/**
+ * The gutters' and the siding's own final inspections (DB Crew T2.27, Carl
+ * 29 Oct 2026: "create check lists for gutter and siding final
+ * inspections"). Drafted off the roof's form and the trades' own close-out
+ * points; rewording one is a change here and a deploy, never an app release.
+ * The keys are this server's own — no JobTread form carries them — and the
+ * code rides a REPORT task ("DB CheckOut item: G3") as the roof's do. Each
+ * is written as the checklist of the area's own inspection task, "Final
+ * inspection — Gutters", the one the board books.
+ */
+export const GUTTER_ITEMS = [
+  { key: "gut-pitch", code: "G1", subtask: "G1. Gutters straight and pitched to the downspouts — no standing water" },
+  { key: "gut-hang", code: "G2", subtask: "G2. Hangers tight, about every 2 feet — nothing sagging or pulling off the fascia" },
+  { key: "gut-seal", code: "G3", subtask: "G3. Seams, end caps and miters sealed — no drips" },
+  { key: "gut-edge", code: "G4", subtask: "G4. Water lands in the gutter — drip edge over it, nothing running behind" },
+  { key: "gut-down", code: "G5", subtask: "G5. Downspouts strapped, elbows and extensions on — water carried away from the house" },
+  { key: "gut-guard", code: "G6", subtask: "G6. Gutter guards in and secure, if sold" },
+  { key: "gut-look", code: "G7", subtask: "G7. No dents or scratches; color matches the order" },
+  { key: "gut-water", code: "G8", subtask: "G8. Water test — hose run, flows to every downspout, no leaks" },
+] as const;
+export const GUTTER_CLEANUP_ITEMS = [
+  { key: "gut-c-scrap", code: "GC1", subtask: "Gutter cleanup 1. Old gutters, cut-offs and screws picked up and hauled off" },
+  { key: "gut-c-mag", code: "GC2", subtask: "Gutter cleanup 2. Magnet sweep — driveway, beds and lawn" },
+  { key: "gut-c-dmg", code: "GC3", subtask: "Gutter cleanup 3. No ladder marks or damage — siding, plants, lawn" },
+] as const;
+export const SIDING_ITEMS = [
+  { key: "sid-lock", code: "S1", subtask: "S1. Panels level and locked in — no waves, gaps or buckling" },
+  { key: "sid-nail", code: "S2", subtask: "S2. Nailed in the slot, not tight — panels move side to side" },
+  { key: "sid-start", code: "S3", subtask: "S3. Starter and bottom course straight" },
+  { key: "sid-trim", code: "S4", subtask: "S4. Corners, J-channel and window and door trim tight and sealed" },
+  { key: "sid-block", code: "S5", subtask: "S5. Lights, outlets, faucets and vents on mounting blocks, trimmed out" },
+  { key: "sid-soffit", code: "S6", subtask: "S6. Soffit and fascia secure; vented soffit where it should be" },
+  { key: "sid-caulk", code: "S7", subtask: "S7. Caulk neat and complete — no open joints" },
+  { key: "sid-look", code: "S8", subtask: "S8. No cracks, dents or scratches; color matches the order" },
+] as const;
+export const SIDING_CLEANUP_ITEMS = [
+  { key: "sid-c-scrap", code: "SC1", subtask: "Siding cleanup 1. Old siding, cut-offs and nails picked up and hauled off" },
+  { key: "sid-c-mag", code: "SC2", subtask: "Siding cleanup 2. Magnet sweep — driveway, beds and lawn" },
+  { key: "sid-c-clean", code: "SC3", subtask: "Siding cleanup 3. Windows, doors and walls wiped down — ready for the homeowner" },
+] as const;
+
+/** Each area checklist in JobTread order: the inspection items, then its cleanup. */
+export const AREA_CHECKLISTS: Readonly<Record<"gutters" | "siding", ReadonlyArray<{ key: string; code: string; subtask: string }>>> = {
+  gutters: [...GUTTER_ITEMS, ...GUTTER_CLEANUP_ITEMS],
+  siding: [...SIDING_ITEMS, ...SIDING_CLEANUP_ITEMS],
+};
+
+/** Every item on every form — what a REPORT, a photo's name or a finding is looked up in. */
+const ALL_CHECKLIST_ITEMS: ReadonlyArray<{ key: string; code: string; subtask: string }> = [
+  ...CHECKLIST_ITEMS,
+  ...AREA_CHECKLISTS.gutters,
+  ...AREA_CHECKLISTS.siding,
+];
+
 export function checklistItemByKey(key: string | undefined): { key: string; code: string; subtask: string } | undefined {
-  return key ? CHECKLIST_ITEMS.find((item) => item.key === key) : undefined;
+  return key ? ALL_CHECKLIST_ITEMS.find((item) => item.key === key) : undefined;
 }
 
 export function checklistItemByCode(code: string | undefined): { key: string; code: string; subtask: string } | undefined {
-  return code ? CHECKLIST_ITEMS.find((item) => item.code === code) : undefined;
+  return code ? ALL_CHECKLIST_ITEMS.find((item) => item.code === code) : undefined;
 }
 
 export const INSPECTION_CHECKLIST = {

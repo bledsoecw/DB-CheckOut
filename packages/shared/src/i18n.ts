@@ -33,6 +33,30 @@ export const FIELD_LABELS: Record<string, Bi> = {
   "22PdEQhB6rSU": { es: "Sin daños — siding, ventanas, AC, plantas", en: "No damage — siding, windows, AC, plants" },
   "22PdEQhB6rSV": { es: "Listo para que lo vea el cliente", en: "Ready for the homeowner to view" },
   "22PdEQhB6rSW": { es: "Notas", en: "Notes" },
+  // Gutters' final inspection (DB Crew T2.27)
+  "gut-pitch": { es: "Canales derechos y con caída a las bajantes", en: "Gutters straight, pitched to the downspouts" },
+  "gut-hang": { es: "Ganchos firmes, cada 2 pies más o menos", en: "Hangers tight, about every 2 feet" },
+  "gut-seal": { es: "Uniones, tapas y esquinas selladas", en: "Seams, end caps & miters sealed" },
+  "gut-edge": { es: "El agua cae en el canal — drip edge encima", en: "Water lands in the gutter — drip edge over it" },
+  "gut-down": { es: "Bajantes sujetas, codos y extensiones puestos", en: "Downspouts strapped, elbows & extensions on" },
+  "gut-guard": { es: "Protectores puestos y firmes, si se vendieron", en: "Gutter guards in & secure, if sold" },
+  "gut-look": { es: "Sin golpes ni rayones; el color es el del pedido", en: "No dents or scratches; color matches" },
+  "gut-water": { es: "Prueba de agua — corre a cada bajante, sin fugas", en: "Water test — flows to every downspout, no leaks" },
+  "gut-c-scrap": { es: "Canales viejos, recortes y tornillos recogidos", en: "Old gutters, cut-offs & screws hauled off" },
+  "gut-c-mag": { es: "Barrido con imán — entrada, jardineras y pasto", en: "Magnet sweep — driveway, beds & lawn" },
+  "gut-c-dmg": { es: "Sin marcas de escalera ni daños", en: "No ladder marks or damage" },
+  // Siding's final inspection (DB Crew T2.27)
+  "sid-lock": { es: "Paneles nivelados y trabados — sin ondas ni huecos", en: "Panels level & locked — no waves or gaps" },
+  "sid-nail": { es: "Clavado en la ranura, sin apretar — el panel se mueve", en: "Nailed in the slot, not tight — panels move" },
+  "sid-start": { es: "Arranque e hilada de abajo derechos", en: "Starter & bottom course straight" },
+  "sid-trim": { es: "Esquinas, J-channel y molduras firmes y selladas", en: "Corners, J-channel & trim tight, sealed" },
+  "sid-block": { es: "Luces, contactos, llaves y ventilas con su base", en: "Lights, outlets, faucets & vents on blocks" },
+  "sid-soffit": { es: "Soffit y fascia firmes; soffit ventilado donde va", en: "Soffit & fascia secure; vented where needed" },
+  "sid-caulk": { es: "Sellador limpio y completo — sin juntas abiertas", en: "Caulk neat & complete — no open joints" },
+  "sid-look": { es: "Sin grietas, golpes ni rayones; el color del pedido", en: "No cracks, dents or scratches; color matches" },
+  "sid-c-scrap": { es: "Siding viejo, recortes y clavos recogidos", en: "Old siding, cut-offs & nails hauled off" },
+  "sid-c-mag": { es: "Barrido con imán — entrada, jardineras y pasto", en: "Magnet sweep — driveway, beds & lawn" },
+  "sid-c-clean": { es: "Ventanas, puertas y paredes limpias — listo para el cliente", en: "Windows, doors & walls wiped — ready to view" },
 };
 
 /** Answer button labels (canonical value -> display). */
