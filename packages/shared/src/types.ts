@@ -151,8 +151,32 @@ export interface CloseoutArea {
   openRepairs: number;
 }
 
+/** A Close Out form, as data (forms.ts): sections of items answered OK · N/A · Fix. */
+export interface CloseoutFormItem {
+  /** The stable id an answer is stored under. */
+  key: string;
+  /** The short code written into a REPORT task ("1", "C3"). */
+  n: string;
+  es: string;
+  en: string;
+}
+export interface CloseoutFormSection {
+  /** "inspection", "cleanup" — what the answers and the note are keyed by. */
+  key: string;
+  label: { es: string; en: string };
+  items: CloseoutFormItem[];
+}
+export interface CloseoutForm {
+  key: string;
+  sections: CloseoutFormSection[];
+}
+
 export interface JobDetail extends QueueJob {
   punchTasks: PunchTask[];
+  /** The forms this job's inspection draws (T2.25) — the phone draws these, not its own copy. */
+  forms: Record<string, CloseoutForm>;
+  /** Which of `forms` the crew inspection uses. */
+  jobForm: string;
   /** The job's work areas, in order — empty on a job that is not roofing. */
   areas: CloseoutArea[];
   /** Open punch items on this job, whoever they belong to. */
@@ -169,6 +193,8 @@ export interface JobDetail extends QueueJob {
  * is what moves the job on.
  */
 export interface CloseInspectionRequest {
+  /** The form the answers are for (T2.25); absent reads as "roof". */
+  form?: string;
   /** Canonical answers keyed by checklist item key (INSPECTION_ITEMS / CLEANUP_ITEMS). */
   answers: {
     inspection: Record<string, Answer>;

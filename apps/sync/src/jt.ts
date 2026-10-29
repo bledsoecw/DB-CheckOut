@@ -27,6 +27,7 @@ import type {
   QueueJob,
   ScopeDocument,
 } from "../../../packages/shared/src/types";
+import { CLOSEOUT_FORMS, jobFormKey } from "../../../packages/shared/src/forms";
 import {
   AREA_LABEL,
   areaInspectionName,
@@ -336,6 +337,10 @@ export async function getJob(
     areas,
     soldScope,
     openPunchTotal: open.length,
+    // The form the crew answers, as data: the phone draws this, not a copy
+    // of its own (T2.25).
+    forms: { ...CLOSEOUT_FORMS },
+    jobForm: jobFormKey(),
   };
 }
 

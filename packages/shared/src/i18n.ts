@@ -27,7 +27,7 @@ export const FIELD_LABELS: Record<string, Bi> = {
   "22PdEQfPnVqr": { es: "Limitación de acceso / condiciones existentes", en: "Access limitation / existing conditions" },
   "22PdEQfPnVqs": { es: "Notas", en: "Notes" },
   // DB Site Cleanup
-  "22PdEQhB6rSR": { es: "Barrido con imán — entrada, banquetas y jardín", en: "Magnet sweep — driveway, walks & yard" },
+  "22PdEQhB6rSR": { es: "Barrido con imán — entrada, banquetas y jardín", en: "Magnet sweep — driveway, walks & lawn" },
   "22PdEQhB6rSS": { es: "Materiales, lonas y basura recogidos", en: "Materials, tarps & trash removed" },
   "22PdEQhB6rST": { es: "Canales y bajantes limpios y conectados", en: "Gutters & downspouts clean, reconnected" },
   "22PdEQhB6rSU": { es: "Sin daños — siding, ventanas, AC, plantas", en: "No damage — siding, windows, AC, plants" },

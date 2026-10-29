@@ -79,6 +79,20 @@ repair work — wired into JobTread and the DB Production board.
    Punch List → PM Review when the last repair closes, PM Review → Job
    Completed when the sales rep ticks "Final check-off".
 
+10. **The form is the server's** (29 Oct 2026). The job detail carries
+   `forms` and `jobForm` (`packages/shared/src/forms.ts`); DB Crew draws the
+   job's form — sections of OK · N/A · Fix items, one note a section — and the
+   close sends `form` with the answers and notes by section. The roof form is
+   built from `INSPECTION_ITEMS` / `CLEANUP_ITEMS` and `FIELD_LABELS`, so the
+   checklist close-inspection writes and the items the crew answers cannot
+   disagree. Rewording an item, or adding a form (the construction
+   walk-through, to be written with Neal), is a change here and a deploy, not
+   a phone release — but a new form needs its write path in close-inspection
+   too, and until it has one close-inspection refuses it (400, *"The walk form
+   is not written to JobTread yet — ask the office."*) rather than writing it
+   as the roof's. Only the roof form exists today; `jobFormKey()` answers
+   `roof` for every job.
+
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:
 the task types on it are load-bearing, not decoration.

@@ -19,6 +19,7 @@ import {
 import { PaveError, type PaveClient } from "./pave";
 import { isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
+import { CLOSEOUT_FORMS } from "../../../packages/shared/src/forms";
 import {
   attachFileToComment,
   checklistItemTitle,
@@ -473,6 +474,11 @@ export function createHandler(deps: RouterDeps) {
         // this (see PipelineInput).
         if (parts[2] === "close-inspection") {
           const body = (await readBody(req)) as Partial<CloseInspectionRequest> & { answers?: unknown };
+          // A form this server cannot write yet is refused, never written as
+          // the roof's (T2.25): the phone draws any form it is sent.
+          if (body.form != null && !Object.prototype.hasOwnProperty.call(CLOSEOUT_FORMS, String(body.form))) {
+            return json(res, 400, { error: `The ${String(body.form)} form is not written to JobTread yet — ask the office.` });
+          }
           const problemsReported =
             typeof body.problemsReported === "number" && body.problemsReported > 0
               ? Math.floor(body.problemsReported)
