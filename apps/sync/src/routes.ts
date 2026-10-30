@@ -1,21 +1,16 @@
 /**
- * HTTP API for the mobile app. Plain node:http — no framework.
+ * HTTP API behind DB Crew's Close Out tab. Plain node:http — no framework.
  *
- * Auth: Google Workspace sign-in. POST /auth/google exchanges a verified
- * Google ID token for a long-lived session token (see auth.ts); every
- * protected route requires it as `Authorization: Bearer <token>` and knows
- * who the signed-in person is. The JobTread webhook endpoint is separate
- * and validated by its own secret in the URL path.
+ * Auth: one door. DB Crew's Apps Script verifies the person's Google sign-in
+ * and role, then calls with `Authorization: Bearer <CREW_APP_SECRET>` plus
+ * X-Acting-Email / X-Acting-Name (see actingUser). The retired Expo app's own
+ * Google sign-in and session tokens were removed on 30 Oct 2026. The
+ * JobTread webhook endpoint is separate and validated by its own secret in
+ * the URL path.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  assertAllowedIdentity,
-  mintSession,
-  verifyGoogleCredential,
-  verifySession,
-  type SessionUser,
-} from "./auth";
+import { assertAllowedIdentity, type SessionUser } from "./auth";
 import { PaveError, type PaveClient } from "./pave";
 import { AREA_CHECKLISTS, isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
@@ -52,10 +47,8 @@ import { summarizeScope, transcribeNote, translateTexts, TRANSLATE_LIMITS } from
 
 export interface RouterDeps {
   pave: PaveClient;
-  sessionSecret: string;
   geminiApiKey: string;
   geminiModel: string;
-  googleClientId: string;
   workspaceDomain: string;
   allowedEmails: string[];
   webhookSecret: string;
@@ -64,8 +57,8 @@ export interface RouterDeps {
    * for the person named in X-Acting-Email / X-Acting-Name — the Apps Script
    * has already verified that person's Google token and gates them by role,
    * the way the Production Board trusts the same deployment on its own
-   * /api/crew routes. Empty disables the door: a bearer that is not a session
-   * token is then simply unauthorized.
+   * /api/crew routes. It is the only door: empty, every protected route
+   * answers 401.
    */
   crewAppSecret: string;
   /**
@@ -74,9 +67,17 @@ export interface RouterDeps {
    * reviewer. Absent: fallback reviewers, and the board's hourly sweep.
    */
   board?: BoardClient | null;
-  /** Injectable for tests; defaults to the real Google JWKS verification. */
-  verifyGoogle?: (credential: string, clientId: string) => Promise<Record<string, unknown>>;
 }
+
+/**
+ * What this bundle was built from (scripts/build-api.mjs bakes it in):
+ * `source` is the fingerprint of the server's source files, `on` says who
+ * built it ("vercel" on a deploy, "local" for the committed copy) and
+ * `commit` is Vercel's commit for a Vercel build. Run from source (tests,
+ * `npm start`) there is no bundle, and it says so.
+ */
+declare const __CLOSEOUT_BUILD__: { source: string; on: string; commit: string | null } | undefined;
+const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : { source: null, on: "source", commit: null };
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -95,30 +96,27 @@ const headerValue = (req: IncomingMessage, name: string): string => {
 };
 
 /**
- * Who this request acts for. Either the app's own session token, or — when
- * the bearer is the Crew App's shared secret — the person that deployment
- * names in its headers. The named person still has to pass the same domain /
- * allow-list gate a sign-in does, so the secret can never act for an
+ * Who this request acts for: the person DB Crew's Apps Script names in its
+ * headers, when the bearer is its shared secret. The named person still has
+ * to pass the domain / allow-list gate, so the secret can never act for an
  * outsider; and a wrong secret is never a hint, it reads exactly like no
- * token at all.
+ * token at all. Anything else — no bearer, a wrong one, a session token from
+ * the retired app — is nobody.
  */
-export function actingUser(req: IncomingMessage, deps: Pick<RouterDeps, "sessionSecret" | "crewAppSecret" | "workspaceDomain" | "allowedEmails">): SessionUser | null {
+export function actingUser(req: IncomingMessage, deps: Pick<RouterDeps, "crewAppSecret" | "workspaceDomain" | "allowedEmails">): SessionUser | null {
   const bearer = bearerToken(req);
-  if (!bearer) return null;
-  if (deps.crewAppSecret && bearer === deps.crewAppSecret) {
-    const email = headerValue(req, "x-acting-email").toLowerCase();
-    if (!email) return null;
-    try {
-      return assertAllowedIdentity(
-        { email, email_verified: true, name: headerValue(req, "x-acting-name") || undefined },
-        deps.workspaceDomain,
-        deps.allowedEmails,
-      );
-    } catch {
-      return null;
-    }
+  if (!bearer || !deps.crewAppSecret || bearer !== deps.crewAppSecret) return null;
+  const email = headerValue(req, "x-acting-email").toLowerCase();
+  if (!email) return null;
+  try {
+    return assertAllowedIdentity(
+      { email, email_verified: true, name: headerValue(req, "x-acting-name") || undefined },
+      deps.workspaceDomain,
+      deps.allowedEmails,
+    );
+  } catch {
+    return null;
   }
-  return deps.sessionSecret ? verifySession(deps.sessionSecret, bearer) : null;
 }
 
 function clientRef(req: IncomingMessage): string | undefined {
@@ -287,38 +285,15 @@ export function createHandler(deps: RouterDeps) {
       if (req.method === "GET" && url.pathname === "/health") {
         return json(res, 200, {
           ok: true,
-          signIn: Boolean(deps.googleClientId && deps.sessionSecret),
           gemini: Boolean(deps.geminiApiKey),
           webhook: Boolean(deps.webhookSecret),
           crewApp: Boolean(deps.crewAppSecret),
           board: Boolean(deps.board),
+          build: BUILD,
+          deployed: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7) || null,
         });
       }
 
-      // Which sign-in method the app should offer (the client id is public).
-      if (req.method === "GET" && url.pathname === "/auth/config") {
-        return json(res, 200, { googleClientId: deps.googleClientId || null });
-      }
-
-      // Google ID token -> our own long-lived session token.
-      if (req.method === "POST" && url.pathname === "/auth/google") {
-        if (!deps.googleClientId || !deps.sessionSecret) {
-          return json(res, 501, { error: "Google sign-in is not configured on the server" });
-        }
-        const body = (await readBody(req)) as { credential?: unknown };
-        if (typeof body.credential !== "string" || !body.credential) {
-          return json(res, 400, { error: "credential is required" });
-        }
-        try {
-          const verify = deps.verifyGoogle ?? verifyGoogleCredential;
-          const payload = await verify(body.credential, deps.googleClientId);
-          const user = assertAllowedIdentity(payload, deps.workspaceDomain, deps.allowedEmails);
-          const token = mintSession(deps.sessionSecret, user);
-          return json(res, 200, { token, name: user.name, email: user.email });
-        } catch {
-          return json(res, 401, { error: "This Google account is not allowed" });
-        }
-      }
 
       // JobTread webhook: POST /webhooks/jobtread/<WEBHOOK_SECRET>
       // On any job/task event the checklists are kept in step and a work
@@ -349,8 +324,8 @@ export function createHandler(deps: RouterDeps) {
         return json(res, 200, { ok: true, flipped });
       }
 
-      // Everything below requires a signed-in session — the app's own, or
-      // DB Crew acting for its signed-in person (see actingUser).
+      // Everything below acts for a person: DB Crew's, through its shared
+      // secret (see actingUser).
       const session: SessionUser | null = actingUser(req, deps);
       if (!session) return json(res, 401, { error: "Unauthorized" });
 

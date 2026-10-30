@@ -51,19 +51,20 @@ test("parseVisit tolerates a missing or malformed body", () => {
 // --------------------------------------------------------------------------
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mintSession } from "../src/auth";
 import { createHandler, describeWebhook, extractJobId, type RouterDeps } from "../src/routes";
 import type { PaveClient, PaveQuery } from "../src/pave";
 
-const SECRET = "routes-test-secret";
-const TOKEN = mintSession(SECRET, { email: "yahirgonzalez@deitemeyerbrothers.com", name: "Yahir Gonzalez" });
+// How DB Crew calls: its shared secret and the person it acts for. A test
+// that sends its own authorization sends its own person too (or none).
+const CREW = "routes-test-crew-secret";
+const AS_YAHIR = { authorization: `Bearer ${CREW}`, "x-acting-email": "yahirgonzalez@deitemeyerbrothers.com", "x-acting-name": "Yahir Gonzalez" };
 
 function fakeHttp(method: string, path: string, headers: Record<string, string> = {}, body?: unknown) {
   const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
   const req = {
     method,
     url: path,
-    headers: { authorization: `Bearer ${TOKEN}`, ...headers },
+    headers: { ...(headers.authorization ? {} : AS_YAHIR), ...headers },
     async *[Symbol.asyncIterator]() {
       yield* chunks;
     },
@@ -89,14 +90,12 @@ function routerDeps(responder: (q: PaveQuery) => unknown, queries: PaveQuery[]):
   };
   return {
     pave,
-    sessionSecret: SECRET,
     geminiApiKey: "",
     geminiModel: "gemini-test",
-    googleClientId: "client-id",
     workspaceDomain: "deitemeyerbrothers.com",
     allowedEmails: [],
     webhookSecret: "",
-    crewAppSecret: "",
+    crewAppSecret: CREW,
   };
 }
 
@@ -104,7 +103,7 @@ function routerDeps(responder: (q: PaveQuery) => unknown, queries: PaveQuery[]):
 // DB Crew acting for its signed-in person
 // --------------------------------------------------------------------------
 
-test("the Crew App's shared secret acts for the person it names, on the same gate a sign-in passes", async () => {
+test("the Crew App's shared secret acts for the person it names, behind the domain / allow-list gate", async () => {
   const queries: PaveQuery[] = [];
   const deps = { ...routerDeps(() => ({ customField: { customFieldValues: { nodes: [], nextPage: null } } }), queries), crewAppSecret: "crew-secret" };
   const handle = createHandler(deps);
@@ -132,10 +131,7 @@ test("the Crew App's shared secret acts for the person it names, on the same gat
   h = asCrew("alberto@deitemeyerbrothers.com");
   await off(h.req, h.res);
   assert.equal(h.out.status, 401, "unset, the door does not exist");
-
-  h = fakeHttp("GET", "/queue");
-  await handle(h.req, h.res);
-  assert.equal(h.out.status, 200, "the app's own session still works beside it");
+  // It is the only door: the retired app's session tokens are refused (auth.test.ts).
 });
 
 const PIXEL = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";

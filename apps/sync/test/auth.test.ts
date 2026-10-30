@@ -1,29 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { assertAllowedIdentity, mintSession, SESSION_TTL_SECONDS, verifySession } from "../src/auth";
+import { createHmac } from "node:crypto";
+import { assertAllowedIdentity } from "../src/auth";
 import { createHandler, decodePhoto, type RouterDeps } from "../src/routes";
 import type { PaveClient, PaveQuery } from "../src/pave";
 
-const SECRET = "test-secret";
+const CREW = "crew-app-test-secret";
 const USER = { email: "yahir@deitemeyerbrothers.com", name: "Yahir Gonzalez" };
-
-test("session tokens round-trip and carry the user", () => {
-  const token = mintSession(SECRET, USER);
-  assert.deepEqual(verifySession(SECRET, token), USER);
-});
-
-test("session tokens expire, reject tampering and wrong secrets", () => {
-  const token = mintSession(SECRET, USER);
-  const afterExpiry = Date.now() + (SESSION_TTL_SECONDS + 60) * 1000;
-  assert.equal(verifySession(SECRET, token, afterExpiry), null);
-  assert.equal(verifySession("other-secret", token), null);
-  const [h, p] = token.split(".");
-  const forged = Buffer.from(JSON.stringify({ iss: "db-checkout", sub: "x@y.com", exp: 9e9 })).toString("base64url");
-  assert.equal(verifySession(SECRET, `${h}.${forged}.${token.split(".")[2]}`), null);
-  assert.equal(verifySession(SECRET, `${h}.${p}`), null);
-  assert.equal(verifySession(SECRET, ""), null);
-});
+/** How DB Crew's Apps Script calls: the shared secret and the person. */
+const AS_YAHIR = { authorization: `Bearer ${CREW}`, "x-acting-email": USER.email, "x-acting-name": USER.name };
 
 test("assertAllowedIdentity accepts the Workspace domain and the allow-list only", () => {
   const base = { email_verified: true, name: "Alberto Gonzalez" };
@@ -90,23 +76,20 @@ function deps(queries: PaveQuery[]): RouterDeps {
   };
   return {
     pave,
-    sessionSecret: SECRET,
     geminiApiKey: "",
     geminiModel: "gemini-test",
-    googleClientId: "client-id.apps.googleusercontent.com",
     workspaceDomain: "deitemeyerbrothers.com",
     allowedEmails: [],
     webhookSecret: "hook-secret",
-    crewAppSecret: "",
+    crewAppSecret: CREW,
   };
 }
 
-test("auth config is public, everything else requires a session", async () => {
+test("everything but /health needs DB Crew's secret and a person", async () => {
   const handle = createHandler(deps([]));
-  const cfg = fakeHttp("GET", "/auth/config");
-  await handle(cfg.req, cfg.res);
-  assert.equal(cfg.out.status, 200);
-  assert.deepEqual(JSON.parse(cfg.out.body), { googleClientId: "client-id.apps.googleusercontent.com" });
+  const health = fakeHttp("GET", "/health");
+  await handle(health.req, health.res);
+  assert.equal(health.out.status, 200);
 
   const noAuth = fakeHttp("GET", "/queue");
   await handle(noAuth.req, noAuth.res);
@@ -115,38 +98,50 @@ test("auth config is public, everything else requires a session", async () => {
   const badToken = fakeHttp("GET", "/queue", { authorization: "Bearer nope" });
   await handle(badToken.req, badToken.res);
   assert.equal(badToken.out.status, 401);
+
+  const asYahir = fakeHttp("GET", "/queue", AS_YAHIR);
+  await handle(asYahir.req, asYahir.res);
+  assert.notEqual(asYahir.out.status, 401, "DB Crew acting for Yahir gets in");
 });
 
-test("POST /auth/google verifies, gates the domain, and mints a session", async () => {
-  const d = deps([]);
-  d.verifyGoogle = async () => ({
-    email: USER.email,
-    email_verified: true,
-    name: USER.name,
-    hd: "deitemeyerbrothers.com",
-  });
-  const handle = createHandler(d);
-  const login = fakeHttp("POST", "/auth/google", {}, { credential: "fake-google-jwt" });
-  await handle(login.req, login.res);
-  assert.equal(login.out.status, 200);
-  const granted = JSON.parse(login.out.body) as { token: string; name: string };
-  assert.equal(granted.name, USER.name);
-  assert.deepEqual(verifySession(SECRET, granted.token), USER);
-
-  d.verifyGoogle = async () => ({ email: "stranger@gmail.com", email_verified: true });
-  const denied = fakeHttp("POST", "/auth/google", {}, { credential: "fake-google-jwt" });
-  await createHandler(d)(denied.req, denied.res);
-  assert.equal(denied.out.status, 401);
+// The retired Expo app's door (30 Oct 2026, DB Crew T2.29): no sign-in, no
+// session tokens. A token it minted is refused whatever it carries.
+test("the retired app's sign-in is gone and its session tokens are refused", async () => {
+  const handle = createHandler(deps([]));
+  for (const [method, path] of [["GET", "/auth/config"], ["POST", "/auth/google"]] as const) {
+    const h = fakeHttp(method, path, {}, method === "POST" ? { credential: "fake-google-jwt" } : undefined);
+    await handle(h.req, h.res);
+    assert.equal(h.out.status, 401, `${path} is not a door any more`);
+    assert.doesNotMatch(h.out.body, /token|googleClientId/);
+  }
+  // A well-formed session token the old server would have accepted.
+  const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url");
+  const head = b64({ alg: "HS256", typ: "JWT" });
+  const body = b64({ iss: "db-checkout", sub: USER.email, name: USER.name, iat: 1, exp: 9e9 });
+  const sig = createHmac("sha256", "any-old-secret").update(`${head}.${body}`).digest("base64url");
+  const old = fakeHttp("GET", "/queue", { authorization: `Bearer ${head}.${body}.${sig}` });
+  await handle(old.req, old.res);
+  assert.equal(old.out.status, 401);
 });
 
-test("reports are stamped with the signed-in name, not the client's claim", async () => {
+test("/health says what the server was built from, and no longer offers sign-in", async () => {
+  const handle = createHandler(deps([]));
+  const h = fakeHttp("GET", "/health");
+  await handle(h.req, h.res);
+  const body = JSON.parse(h.out.body) as Record<string, unknown>;
+  assert.equal(body["signIn"], undefined);
+  assert.equal(body["crewApp"], true);
+  // Run from source there is no bundle, and it says so.
+  assert.deepEqual(body["build"], { source: null, on: "source", commit: null });
+});
+
+test("reports are stamped with the acted-for name, not the client's claim", async () => {
   const queries: PaveQuery[] = [];
   const handle = createHandler(deps(queries));
-  const token = mintSession(SECRET, USER);
   const call = fakeHttp(
     "POST",
     "/jobs/job1/reports",
-    { authorization: `Bearer ${token}` },
+    AS_YAHIR,
     { location: "Rear slope", englishNote: "Boot cracked.", reportedBy: "Spoofed Name" },
   );
   await handle(call.req, call.res);
@@ -175,8 +170,7 @@ test("POST /translate is gated on auth and configuration", async () => {
   await handle(noAuth.req, noAuth.res);
   assert.equal(noAuth.out.status, 401);
 
-  const token = mintSession(SECRET, USER);
-  const unconfigured = fakeHttp("POST", "/translate", { authorization: `Bearer ${token}` }, { texts: ["Hello"] });
+  const unconfigured = fakeHttp("POST", "/translate", AS_YAHIR, { texts: ["Hello"] });
   await handle(unconfigured.req, unconfigured.res);
   assert.equal(unconfigured.out.status, 501);
 });

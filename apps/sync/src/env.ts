@@ -1,10 +1,6 @@
 export interface Env {
   jtGrantKey: string;
-  /** Signs the app's session tokens. Sign-in is disabled until this is set. */
-  sessionSecret: string;
-  /** Google OAuth web client id (public). Sign-in is disabled until set. */
-  googleClientId: string;
-  /** Workspace domain whose accounts may sign in. */
+  /** Workspace domain whose accounts DB Crew may act for. */
   workspaceDomain: string;
   /** Extra allowed accounts outside the domain (comma-separated env var). */
   allowedEmails: string[];
@@ -39,8 +35,6 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   }
   return {
     jtGrantKey,
-    sessionSecret: source.SESSION_SECRET ?? "",
-    googleClientId: source.GOOGLE_CLIENT_ID ?? "",
     workspaceDomain: (source.GOOGLE_WORKSPACE_DOMAIN ?? "deitemeyerbrothers.com").toLowerCase(),
     allowedEmails: (source.GOOGLE_ALLOWED_EMAILS ?? "")
       .split(",")

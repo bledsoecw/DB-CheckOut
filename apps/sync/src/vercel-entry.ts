@@ -5,9 +5,11 @@
  * apps/sync/src/routes.ts sees the original URL and dispatches as usual.
  * Locally you can still run the plain Node server (apps/sync/src/index.ts).
  *
- * Required Vercel environment variables: JT_GRANT_KEY, SESSION_SECRET,
- * GOOGLE_CLIENT_ID. Optional: GOOGLE_WORKSPACE_DOMAIN (defaults to
- * deitemeyerbrothers.com), GOOGLE_ALLOWED_EMAILS, WEBHOOK_SECRET.
+ * Required Vercel environment variables: JT_GRANT_KEY, CREW_APP_SECRET (the
+ * only way in — DB Crew's Apps Script). Optional: GOOGLE_WORKSPACE_DOMAIN
+ * (defaults to deitemeyerbrothers.com), GOOGLE_ALLOWED_EMAILS, WEBHOOK_SECRET,
+ * BOARD_URL + CLOSEOUT_HOOK_SECRET, GEMINI_API_KEY. SESSION_SECRET and
+ * GOOGLE_CLIENT_ID belonged to the retired app's sign-in and are not read.
  *
  * Any startup/config error is returned as JSON (message + presence booleans,
  * never secret values) instead of Vercel's opaque crash page.
@@ -33,10 +35,8 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
       void ensureWebhook(pave, env.publicUrl, env.webhookSecret).catch(() => {});
       handler = createHandler({
         pave,
-        sessionSecret: env.sessionSecret,
         geminiApiKey: env.geminiApiKey,
         geminiModel: env.geminiModel,
-        googleClientId: env.googleClientId,
         workspaceDomain: env.workspaceDomain,
         allowedEmails: env.allowedEmails,
         webhookSecret: env.webhookSecret,
@@ -58,8 +58,7 @@ export default async function entry(req: IncomingMessage, res: ServerResponse): 
         diagnostics: {
           node: process.version,
           hasJtGrantKey: Boolean(process.env.JT_GRANT_KEY),
-          hasSessionSecret: Boolean(process.env.SESSION_SECRET),
-          hasGoogleClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+          hasCrewAppSecret: Boolean(process.env.CREW_APP_SECRET),
         },
       }),
     );

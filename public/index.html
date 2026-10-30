@@ -1,46 +1,40 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <title>DB Close Out</title>
-    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
-    <style id="expo-reset">
-      /* These styles make the body full-height */
-      html,
-      body {
-        height: 100%;
-      }
-      /* These styles disable body scrolling if you are using <ScrollView> */
-      body {
-        overflow: hidden;
-      }
-      /* These styles make the root element full-height */
-      #root {
-        display: flex;
-        height: 100%;
-        flex: 1;
-      }
-    </style>
-  <meta name="theme-color" content="#143A75">
-<style id="dbco-lock">body{position:fixed;inset:0;width:100%;overscroll-behavior:none}</style>
-<link rel="manifest" href="/manifest.json">
-<link rel="apple-touch-icon" href="/app-icon.png">
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0e1113">
+<title>Close Out está en DB Crew · Close Out is in DB Crew</title>
 <link rel="icon" type="image/png" href="/app-icon.png">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="DB Close Out">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<style>
+  :root { --bg: #0e1113; --surf: #181c20; --line: rgba(255,255,255,.16); --fg: #ffffff; --mut: rgba(255,255,255,.76); --go: #3cc84a; --goink: #0e1113; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: max(28px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 40px max(20px, env(safe-area-inset-left)); display: grid; gap: 22px; }
+  img { width: 72px; height: 72px; border-radius: 16px; }
+  section { display: grid; gap: 6px; }
+  h1 { margin: 0; font-size: 1.6rem; line-height: 1.15; text-transform: uppercase; letter-spacing: .01em; }
+  p { margin: 0; color: var(--mut); }
+  .en { border-top: 1px solid var(--line); padding-top: 18px; }
+  a.go { display: flex; align-items: center; justify-content: center; min-height: 64px; border-radius: 8px; background: var(--go); color: var(--goink); font-weight: 800; font-size: 1.15rem; text-decoration: none; text-transform: uppercase; letter-spacing: .02em; }
+  a.go:focus-visible { outline: 3px solid #ffffff; outline-offset: 3px; }
+  .url { font-family: ui-monospace, Menlo, monospace; font-size: .95rem; color: var(--fg); user-select: all; }
+</style>
 </head>
-
-  <body>
-    <!-- Use static rendering with Expo Router to support running without JavaScript. -->
-    <noscript>
-      You need to enable JavaScript to run this app.
-    </noscript>
-    <!-- The root element for your Expo app. -->
-    <div id="root"></div>
-  <script src="/_expo/static/js/web/AppEntry-43530334f46d58c090a1999c33f986a4.js" defer></script>
-<script>if ("serviceWorker" in navigator) { window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); }); }</script>
+<body>
+<main>
+  <img src="/app-icon.png" alt="">
+  <section lang="es">
+    <h1>Close Out ahora está en DB Crew</h1>
+    <p>Abre DB Crew y toca la pestaña Close Out. Esta app ya no se usa; puedes quitarla de tu pantalla de inicio.</p>
+  </section>
+  <section class="en" lang="en">
+    <h1>Close Out is in DB Crew now</h1>
+    <p>Open DB Crew and tap the Close Out tab. This app is no longer used; you can remove it from your home screen.</p>
+  </section>
+  <a class="go" href="https://db-crews.web.app/">Abrir DB Crew · Open DB Crew</a>
+  <p>DB Crew: <span class="url">db-crews.web.app</span></p>
+</main>
 </body>
 </html>

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { CLOSEOUT_FORMS, ROOF_FORM, jobFormKey } from "../../../packages/shared/src/forms";
 import { CLEANUP_ITEMS, INSPECTION_ITEMS } from "../../../packages/shared/src/jobtread";
-import { mintSession } from "../src/auth";
 import { createHandler, type RouterDeps } from "../src/routes";
 
 // Close Out's forms are data the phone draws (T2.25): the roof form here IS
@@ -43,11 +42,11 @@ test("the gutters' and the siding's checklists: inspection then cleanup, every i
   assert.deepEqual(CLOSEOUT_FORMS.siding.sections[1].items.map((i) => i.n), ["SC1", "SC2", "SC3"]);
 });
 
-const SECRET = "forms-test-secret";
-const TOKEN = mintSession(SECRET, { email: "yahirgonzalez@deitemeyerbrothers.com", name: "Yahir Gonzalez" });
+const CREW = "forms-test-crew-secret";
+const AS_YAHIR = { authorization: `Bearer ${CREW}`, "x-acting-email": "yahirgonzalez@deitemeyerbrothers.com", "x-acting-name": "Yahir Gonzalez" };
 function post(path: string, body: unknown) {
   const chunks = [Buffer.from(JSON.stringify(body))];
-  const req = { method: "POST", url: path, headers: { authorization: `Bearer ${TOKEN}` }, async *[Symbol.asyncIterator]() { yield* chunks; } } as unknown as IncomingMessage;
+  const req = { method: "POST", url: path, headers: AS_YAHIR, async *[Symbol.asyncIterator]() { yield* chunks; } } as unknown as IncomingMessage;
   const out = { status: 0, body: "" };
   const res = { writeHead(s: number) { out.status = s; }, end(t?: string) { out.body = t ?? ""; } } as unknown as ServerResponse;
   return { req, res, out };
@@ -57,8 +56,8 @@ test("close-inspection refuses a form it cannot write, rather than writing it as
   const queries: unknown[] = [];
   const deps: RouterDeps = {
     pave: { async query<T>(q: unknown): Promise<T> { queries.push(q); return {} as T; } },
-    sessionSecret: SECRET, geminiApiKey: "", geminiModel: "gemini-test", googleClientId: "client-id",
-    workspaceDomain: "deitemeyerbrothers.com", allowedEmails: [], webhookSecret: "", crewAppSecret: "",
+    geminiApiKey: "", geminiModel: "gemini-test",
+    workspaceDomain: "deitemeyerbrothers.com", allowedEmails: [], webhookSecret: "", crewAppSecret: CREW,
   };
   const { req, res, out } = post("/jobs/22PJOB/close-inspection", { form: "walkthrough", answers: { walkthrough: {} } });
   await createHandler(deps)(req, res);

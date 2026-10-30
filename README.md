@@ -144,14 +144,22 @@ Tests & typecheck (no JT key needed): `npm install && npm test && npm run typech
 
 Production deploys build from the `main` branch.
 
-**Deploying to Vercel:** the repo is Vercel-ready — `api/index.ts` wraps
-the same router as a serverless function and `vercel.json` routes every
-path to it. In Vercel: Add New Project → import this repo → framework
-preset "Other", no build command → set env vars `JT_GRANT_KEY`,
-`SESSION_SECRET`, `GOOGLE_CLIENT_ID` (and optionally
-`GOOGLE_WORKSPACE_DOMAIN`, `GOOGLE_ALLOWED_EMAILS`, `WEBHOOK_SECRET`;
-paste values only in Vercel's dashboard, never in the repo) → Deploy.
-The JobTread webhook URL is then
+**Deploying to Vercel:** `api/index.mjs` is the router bundled into one
+file (`npm run build:api`, esbuild) and `vercel.json` routes the API paths to
+it. **Vercel runs `npm run build:api` as the build command on every deploy**,
+so a deploy carries the source it was made from. Until 30 Oct 2026 the build
+command was empty and Vercel shipped the committed bundle as it was: nobody
+rebuilt it after 26 Oct, and the next two commits (the form sent with each
+job; gutter and siding checklists, repair photos, final notes) passed their
+tests and never went live. Two guards now: the bundle carries a fingerprint of
+its source, which `GET /health` reports as `build` (`source`, `on` —
+`"vercel"` when Vercel built it — and `commit`) beside `deployed` (Vercel's
+commit); and `test/bundle.test.ts` fails when the committed copy is older than
+the source, so rebuild and commit it with any change under `apps/sync/src`
+or `packages/shared/src`. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`
+(and optionally `GOOGLE_WORKSPACE_DOMAIN`, `GOOGLE_ALLOWED_EMAILS`,
+`WEBHOOK_SECRET`; paste values only in Vercel's dashboard, never in the repo).
+The JobTread webhook URL is
 `https://<project>.vercel.app/webhooks/jobtread/<WEBHOOK_SECRET>`.
 
 **The Production Board** is asked after every close (`src/board.ts`):
@@ -166,27 +174,30 @@ crew sends can fail over it. `GET /health` reports it as `board`.
 **The crew's face is DB Crew now (Oct 2026).** The inspection, cleanup,
 report and repair screens were redrawn inside DB Crew
 (`bledsoecw/db-crew-app`, the former DB Time Clock), so the service crew has
-one app, and this repo is the SERVER behind that tab. The Expo app under
-`apps/mobile` still builds and still works, but it is no longer what gets
-installed on a phone. DB Crew's Apps Script calls this server for the
-signed-in person with a shared secret: set `CREW_APP_SECRET` in Vercel (same
-value as that script's `CLOSEOUT_SECRET` property) and every protected route
-accepts `Authorization: Bearer <that secret>` plus `X-Acting-Email` /
-`X-Acting-Name`, the person being gated by the same domain / allow-list rule a
-sign-in passes. Unset, the door does not exist. `GET /health` reports it as
-`crewApp`. `POST /translate` also takes `to: "en"` now, which is how a note
+one app, and this repo is the SERVER behind that tab. DB Crew's Apps Script
+calls this server for the signed-in person with a shared secret: set
+`CREW_APP_SECRET` in Vercel (same value as that script's `CLOSEOUT_SECRET`
+property) and every protected route accepts `Authorization: Bearer <that
+secret>` plus `X-Acting-Email` / `X-Acting-Name`, the person being gated by
+the domain / allow-list rule (`GOOGLE_ALLOWED_EMAILS` for accounts off the
+domain). **It is the only way in.** Unset, every protected route answers 401.
+`GET /health` reports it as `crewApp`. `POST /translate` also takes `to: "en"` now, which is how a note
 dictated in Spanish on that app becomes the English the office reads.
 
-**Sign-in** is Google Workspace: the gate screen shows a Sign in with
-Google button (accounts on the company domain, plus any addresses in
-`GOOGLE_ALLOWED_EMAILS`). The server verifies the Google ID token and
-mints its own ~monthly session token, and every report and punch
-completion is stamped with the signed-in person's name in JobTread.
+**The old app's sign-in is gone (30 Oct 2026).** The retired Expo app signed
+in with Google and got a month-long session token from `/auth/google`; that
+door stayed open after the app was retired, outside DB Crew's role check and
+DB Hub's Off switch. The routes, the session tokens and the web build are
+removed. `public/` is a notice in Spanish and English that Close Out is in DB
+Crew, with a service worker that clears the old app's caches off any phone that
+installed it and unregisters itself. `SESSION_SECRET` and `GOOGLE_CLIENT_ID`
+are no longer read and can be deleted from Vercel. Every report and punch
+completion is still stamped with the acted-for person's name in JobTread.
 
-**Crew app** (`apps/mobile`) — one Expo codebase, two targets: an
-internal **web app** (the DB pattern — deploy the static export to
-Vercel, crew adds it to their home screen) and, if ever needed, native
-iOS/Android builds via the same code. Run it:
+**Retired crew app** (`apps/mobile`) — kept as source only; nothing builds or
+serves it (the `build:web` script that copied it into `public/` is gone). It was
+one Expo codebase, two targets: an internal **web app** and, if ever needed,
+native iOS/Android builds via the same code. Run it:
 
 ```
 cd apps/mobile && npm install
@@ -247,9 +258,8 @@ Key design decisions:
 - **Offline-first** — everything saves locally (IndexedDB, so a visit
   full of photos fits; `apps/mobile/src/storage.ts`) and syncs when
   signal returns; the app says so in plain words ("Sin señal, no pasa
-  nada"). A service worker generated at build time
-  (`scripts/fix-web-html.mjs` → `public/sw.js`) caches the app shell, so
-  a cold open with no signal still opens the app.
+  nada"). The retired web build's service worker cached the app shell;
+  `public/sw.js` is now the worker that removes it.
 - **Photo gates** — cleanup proof photos and AFTER photos on repairs
   are required before items can close.
 - **Photos from the phone's own gallery** (DB Crew T2.9, Carl 13 Oct

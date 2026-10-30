@@ -1,4 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source fe1dbffda4aa
+
+// <define:__CLOSEOUT_BUILD__>
+var define_CLOSEOUT_BUILD_default = { source: "fe1dbffda4aa", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -8,8 +11,6 @@ function loadEnv(source = process.env) {
   }
   return {
     jtGrantKey,
-    sessionSecret: source.SESSION_SECRET ?? "",
-    googleClientId: source.GOOGLE_CLIENT_ID ?? "",
     workspaceDomain: (source.GOOGLE_WORKSPACE_DOMAIN ?? "deitemeyerbrothers.com").toLowerCase(),
     allowedEmails: (source.GOOGLE_ALLOWED_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
     webhookSecret: source.WEBHOOK_SECRET ?? "",
@@ -61,95 +62,6 @@ function createPaveClient(grantKey, fetchImpl = fetch) {
 }
 
 // apps/sync/src/auth.ts
-import {
-  createHmac,
-  createPublicKey,
-  timingSafeEqual,
-  verify as verifySignature
-} from "node:crypto";
-var SESSION_ISSUER = "db-checkout";
-var SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
-var b64json = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-function parseB64Json(part) {
-  try {
-    const parsed = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
-    return typeof parsed === "object" && parsed !== null ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function sessionSignature(secret, signingInput) {
-  return createHmac("sha256", secret).update(signingInput).digest();
-}
-function mintSession(secret, user, nowMs = Date.now()) {
-  const iat = Math.floor(nowMs / 1e3);
-  const header = b64json({ alg: "HS256", typ: "JWT" });
-  const payload = b64json({
-    iss: SESSION_ISSUER,
-    sub: user.email,
-    name: user.name,
-    iat,
-    exp: iat + SESSION_TTL_SECONDS
-  });
-  const signature = sessionSignature(secret, `${header}.${payload}`).toString("base64url");
-  return `${header}.${payload}.${signature}`;
-}
-function verifySession(secret, token, nowMs = Date.now()) {
-  const parts = token.split(".");
-  if (parts.length !== 3 || !secret) return null;
-  const expected = sessionSignature(secret, `${parts[0]}.${parts[1]}`);
-  const actual = Buffer.from(parts[2], "base64url");
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
-  const payload = parseB64Json(parts[1]);
-  if (!payload || payload["iss"] !== SESSION_ISSUER) return null;
-  if (typeof payload["exp"] !== "number" || payload["exp"] * 1e3 <= nowMs) return null;
-  const email = payload["sub"];
-  if (typeof email !== "string" || !email) return null;
-  return { email, name: typeof payload["name"] === "string" ? payload["name"] : email };
-}
-var GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
-var GOOGLE_ISSUERS = /* @__PURE__ */ new Set(["https://accounts.google.com", "accounts.google.com"]);
-var JWKS_TTL_MS = 60 * 60 * 1e3;
-var jwksCache = null;
-async function googleKeys(fetchImpl, forceRefresh) {
-  const now = Date.now();
-  if (!forceRefresh && jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
-  const res = await fetchImpl(GOOGLE_JWKS_URL);
-  if (!res.ok) throw new Error(`Google JWKS fetch failed: ${res.status}`);
-  const body = await res.json();
-  jwksCache = { keys: body.keys ?? [], fetchedAt: now };
-  return jwksCache.keys;
-}
-async function verifyGoogleCredential(credential, clientId, fetchImpl = fetch, nowMs = Date.now()) {
-  const parts = credential.split(".");
-  if (parts.length !== 3) throw new Error("Malformed credential");
-  const header = parseB64Json(parts[0]);
-  const payload = parseB64Json(parts[1]);
-  if (!header || !payload) throw new Error("Malformed credential");
-  if (header["alg"] !== "RS256") throw new Error("Unexpected algorithm");
-  const kid = header["kid"];
-  let keys = await googleKeys(fetchImpl, false);
-  let jwk = keys.find((k) => k.kid === kid);
-  if (!jwk) {
-    keys = await googleKeys(fetchImpl, true);
-    jwk = keys.find((k) => k.kid === kid);
-  }
-  if (!jwk) throw new Error("Unknown signing key");
-  const publicKey = createPublicKey({ key: jwk, format: "jwk" });
-  const ok = verifySignature(
-    "RSA-SHA256",
-    Buffer.from(`${parts[0]}.${parts[1]}`),
-    publicKey,
-    Buffer.from(parts[2], "base64url")
-  );
-  if (!ok) throw new Error("Bad signature");
-  if (!GOOGLE_ISSUERS.has(String(payload["iss"]))) throw new Error("Bad issuer");
-  if (payload["aud"] !== clientId) throw new Error("Bad audience");
-  if (typeof payload["exp"] !== "number" || payload["exp"] * 1e3 <= nowMs) {
-    throw new Error("Credential expired");
-  }
-  return payload;
-}
 function assertAllowedIdentity(payload, workspaceDomain, allowedEmails) {
   const email = String(payload["email"] ?? "").toLowerCase();
   if (!email || payload["email_verified"] !== true) throw new Error("Email not verified");
@@ -209,8 +121,47 @@ var CHECKLIST_ITEMS = [
   ...INSPECTION_ITEMS,
   ...CLEANUP_ITEMS
 ];
+var GUTTER_ITEMS = [
+  { key: "gut-pitch", code: "G1", subtask: "G1. Gutters straight and pitched to the downspouts \u2014 no standing water" },
+  { key: "gut-hang", code: "G2", subtask: "G2. Hangers tight, about every 2 feet \u2014 nothing sagging or pulling off the fascia" },
+  { key: "gut-seal", code: "G3", subtask: "G3. Seams, end caps and miters sealed \u2014 no drips" },
+  { key: "gut-edge", code: "G4", subtask: "G4. Water lands in the gutter \u2014 drip edge over it, nothing running behind" },
+  { key: "gut-down", code: "G5", subtask: "G5. Downspouts strapped, elbows and extensions on \u2014 water carried away from the house" },
+  { key: "gut-guard", code: "G6", subtask: "G6. Gutter guards in and secure, if sold" },
+  { key: "gut-look", code: "G7", subtask: "G7. No dents or scratches; color matches the order" },
+  { key: "gut-water", code: "G8", subtask: "G8. Water test \u2014 hose run, flows to every downspout, no leaks" }
+];
+var GUTTER_CLEANUP_ITEMS = [
+  { key: "gut-c-scrap", code: "GC1", subtask: "Gutter cleanup 1. Old gutters, cut-offs and screws picked up and hauled off" },
+  { key: "gut-c-mag", code: "GC2", subtask: "Gutter cleanup 2. Magnet sweep \u2014 driveway, beds and lawn" },
+  { key: "gut-c-dmg", code: "GC3", subtask: "Gutter cleanup 3. No ladder marks or damage \u2014 siding, plants, lawn" }
+];
+var SIDING_ITEMS = [
+  { key: "sid-lock", code: "S1", subtask: "S1. Panels level and locked in \u2014 no waves, gaps or buckling" },
+  { key: "sid-nail", code: "S2", subtask: "S2. Nailed in the slot, not tight \u2014 panels move side to side" },
+  { key: "sid-start", code: "S3", subtask: "S3. Starter and bottom course straight" },
+  { key: "sid-trim", code: "S4", subtask: "S4. Corners, J-channel and window and door trim tight and sealed" },
+  { key: "sid-block", code: "S5", subtask: "S5. Lights, outlets, faucets and vents on mounting blocks, trimmed out" },
+  { key: "sid-soffit", code: "S6", subtask: "S6. Soffit and fascia secure; vented soffit where it should be" },
+  { key: "sid-caulk", code: "S7", subtask: "S7. Caulk neat and complete \u2014 no open joints" },
+  { key: "sid-look", code: "S8", subtask: "S8. No cracks, dents or scratches; color matches the order" }
+];
+var SIDING_CLEANUP_ITEMS = [
+  { key: "sid-c-scrap", code: "SC1", subtask: "Siding cleanup 1. Old siding, cut-offs and nails picked up and hauled off" },
+  { key: "sid-c-mag", code: "SC2", subtask: "Siding cleanup 2. Magnet sweep \u2014 driveway, beds and lawn" },
+  { key: "sid-c-clean", code: "SC3", subtask: "Siding cleanup 3. Windows, doors and walls wiped down \u2014 ready for the homeowner" }
+];
+var AREA_CHECKLISTS = {
+  gutters: [...GUTTER_ITEMS, ...GUTTER_CLEANUP_ITEMS],
+  siding: [...SIDING_ITEMS, ...SIDING_CLEANUP_ITEMS]
+};
+var ALL_CHECKLIST_ITEMS = [
+  ...CHECKLIST_ITEMS,
+  ...AREA_CHECKLISTS.gutters,
+  ...AREA_CHECKLISTS.siding
+];
 function checklistItemByKey(key) {
-  return key ? CHECKLIST_ITEMS.find((item) => item.key === key) : void 0;
+  return key ? ALL_CHECKLIST_ITEMS.find((item) => item.key === key) : void 0;
 }
 var INSPECTION_CHECKLIST = {
   /** Item keys in crew order; derived so the app and the subtasks can never drift apart. */
@@ -258,6 +209,136 @@ function isRoofingJob(job) {
   return job.jobType === "Roofing" || job.projectTypes.some((t) => t.startsWith("R-"));
 }
 
+// packages/shared/src/i18n.ts
+var FIELD_LABELS = {
+  // DB Final Roofing Inspection
+  "22PdEQfPnVqh": { es: "Tejas parejas, sin clavos expuestos", en: "Shingles flat \u2014 no exposed nails" },
+  "22PdEQfPnVqi": { es: "Drip edge y bordes firmes", en: "Starter & drip edge secure" },
+  "22PdEQfPnVqj": { es: "Caballete completo, valles limpios", en: "Ridge caps seated \u2014 valleys clean" },
+  "22PdEQfPnVqk": { es: "Botas y ventilas bien selladas", en: "Pipe boots & vents sealed" },
+  "22PdEQfPnVqm": { es: "Flashing en paredes completo", en: "Step & wall flashing complete" },
+  "22PdEQfPnVqn": { es: "Chimenea y tragaluz con flashing", en: "Chimney & skylight flashed" },
+  "22PdEQfPnVqp": { es: "Techo limpio, sin exceso de sellador", en: "Roof clean \u2014 sealant used right" },
+  "22PdEQfPnVqq": { es: "Revisi\xF3n del \xE1tico \u2014 puntos de fuga", en: "Attic spot check \u2014 leak-prone areas" },
+  "22PdEQfPnVqr": { es: "Limitaci\xF3n de acceso / condiciones existentes", en: "Access limitation / existing conditions" },
+  "22PdEQfPnVqs": { es: "Notas", en: "Notes" },
+  // DB Site Cleanup
+  "22PdEQhB6rSR": { es: "Barrido con im\xE1n \u2014 entrada, banquetas y jard\xEDn", en: "Magnet sweep \u2014 driveway, walks & lawn" },
+  "22PdEQhB6rSS": { es: "Materiales, lonas y basura recogidos", en: "Materials, tarps & trash removed" },
+  "22PdEQhB6rST": { es: "Canales y bajantes limpios y conectados", en: "Gutters & downspouts clean, reconnected" },
+  "22PdEQhB6rSU": { es: "Sin da\xF1os \u2014 siding, ventanas, AC, plantas", en: "No damage \u2014 siding, windows, AC, plants" },
+  "22PdEQhB6rSV": { es: "Listo para que lo vea el cliente", en: "Ready for the homeowner to view" },
+  "22PdEQhB6rSW": { es: "Notas", en: "Notes" },
+  // Gutters' final inspection (DB Crew T2.27)
+  "gut-pitch": { es: "Canales derechos y con ca\xEDda a las bajantes", en: "Gutters straight, pitched to the downspouts" },
+  "gut-hang": { es: "Ganchos firmes, cada 2 pies m\xE1s o menos", en: "Hangers tight, about every 2 feet" },
+  "gut-seal": { es: "Uniones, tapas y esquinas selladas", en: "Seams, end caps & miters sealed" },
+  "gut-edge": { es: "El agua cae en el canal \u2014 drip edge encima", en: "Water lands in the gutter \u2014 drip edge over it" },
+  "gut-down": { es: "Bajantes sujetas, codos y extensiones puestos", en: "Downspouts strapped, elbows & extensions on" },
+  "gut-guard": { es: "Protectores puestos y firmes, si se vendieron", en: "Gutter guards in & secure, if sold" },
+  "gut-look": { es: "Sin golpes ni rayones; el color es el del pedido", en: "No dents or scratches; color matches" },
+  "gut-water": { es: "Prueba de agua \u2014 corre a cada bajante, sin fugas", en: "Water test \u2014 flows to every downspout, no leaks" },
+  "gut-c-scrap": { es: "Canales viejos, recortes y tornillos recogidos", en: "Old gutters, cut-offs & screws hauled off" },
+  "gut-c-mag": { es: "Barrido con im\xE1n \u2014 entrada, jardineras y pasto", en: "Magnet sweep \u2014 driveway, beds & lawn" },
+  "gut-c-dmg": { es: "Sin marcas de escalera ni da\xF1os", en: "No ladder marks or damage" },
+  // Siding's final inspection (DB Crew T2.27)
+  "sid-lock": { es: "Paneles nivelados y trabados \u2014 sin ondas ni huecos", en: "Panels level & locked \u2014 no waves or gaps" },
+  "sid-nail": { es: "Clavado en la ranura, sin apretar \u2014 el panel se mueve", en: "Nailed in the slot, not tight \u2014 panels move" },
+  "sid-start": { es: "Arranque e hilada de abajo derechos", en: "Starter & bottom course straight" },
+  "sid-trim": { es: "Esquinas, J-channel y molduras firmes y selladas", en: "Corners, J-channel & trim tight, sealed" },
+  "sid-block": { es: "Luces, contactos, llaves y ventilas con su base", en: "Lights, outlets, faucets & vents on blocks" },
+  "sid-soffit": { es: "Soffit y fascia firmes; soffit ventilado donde va", en: "Soffit & fascia secure; vented where needed" },
+  "sid-caulk": { es: "Sellador limpio y completo \u2014 sin juntas abiertas", en: "Caulk neat & complete \u2014 no open joints" },
+  "sid-look": { es: "Sin grietas, golpes ni rayones; el color del pedido", en: "No cracks, dents or scratches; color matches" },
+  "sid-c-scrap": { es: "Siding viejo, recortes y clavos recogidos", en: "Old siding, cut-offs & nails hauled off" },
+  "sid-c-mag": { es: "Barrido con im\xE1n \u2014 entrada, jardineras y pasto", en: "Magnet sweep \u2014 driveway, beds & lawn" },
+  "sid-c-clean": { es: "Ventanas, puertas y paredes limpias \u2014 listo para el cliente", en: "Windows, doors & walls wiped \u2014 ready to view" }
+};
+var UI = {
+  myJobs: { es: "Mis trabajos", en: "My jobs" },
+  jobsToday: { es: "trabajos hoy", en: "jobs today" },
+  offlineSaved: { es: "Sin se\xF1al \u2014 todo se guarda", en: "No signal \u2014 everything is saved" },
+  offlineDetail: { es: "Se env\xEDa solo cuando haya se\xF1al", en: "Sends by itself when there's signal" },
+  directions: { es: "C\xF3mo llegar", en: "Directions" },
+  start: { es: "Empezar", en: "Start" },
+  continue_: { es: "Continuar", en: "Continue" },
+  inspection: { es: "Inspecci\xF3n", en: "Inspection" },
+  cleanup: { es: "Limpieza", en: "Cleanup" },
+  reportProblem: { es: "Reportar problema", en: "Report a problem" },
+  repairs: { es: "Reparaciones", en: "Repairs" },
+  mine: { es: "M\xEDos", en: "Mine" },
+  everyone: { es: "Todos", en: "Everyone" },
+  forYou: { es: "para ti", en: "for you" },
+  assignedTo: { es: "Para", en: "For" },
+  nothingForYou: {
+    es: "Nada para ti en este trabajo. Toca Todos para ver el resto.",
+    en: "Nothing here is yours. Tap Everyone to see the rest."
+  },
+  seeRepairs: { es: "Ver reparaciones", en: "See the repairs" },
+  tapAndSpeak: { es: "Toca y habla", en: "Tap & speak" },
+  tapToStop: { es: "toca para terminar", en: "tap to stop" },
+  speakAnyLanguage: { es: "Espa\xF1ol o ingl\xE9s, como salga", en: "Spanish or English, either way" },
+  heard: { es: "SE ESCUCH\xD3", en: "HEARD" },
+  englishNote: { es: "Nota en ingl\xE9s para la oficina", en: "English note for the office" },
+  whereIsIt: { es: "\xBFD\xF3nde est\xE1?", en: "Where is it?" },
+  front: { es: "Frente", en: "Front" },
+  back: { es: "Atr\xE1s", en: "Back" },
+  left: { es: "Izquierda", en: "Left" },
+  right: { es: "Derecha", en: "Right" },
+  sendReport: { es: "Enviar reporte", en: "Send report" },
+  pmAssigns: { es: "El PM lo ve en JobTread y asigna la reparaci\xF3n", en: "The PM sees it in JobTread & assigns the repair" },
+  takePhoto: { es: "Tomar foto", en: "Take a photo" },
+  photoRequired: { es: "FOTO OBLIGATORIA", en: "PHOTO REQUIRED" },
+  beforePhoto: { es: "ANTES", en: "BEFORE" },
+  afterPhoto: { es: "Foto de DESPU\xC9S", en: "AFTER photo" },
+  afterPhotoRequired: { es: "Obligatoria para terminar", en: "Required to finish" },
+  whatToDo: { es: "QU\xC9 HACER", en: "WHAT TO DO" },
+  bring: { es: "Lleva", en: "Bring" },
+  done: { es: "Terminado", en: "Done" },
+  pmChecks: { es: "El PM lo revisa y lo cierra en JobTread", en: "The PM checks it & closes it in JobTread" },
+  allDone: { es: "Todo listo", en: "All done" },
+  checkAndSend: { es: "Revisa y manda", en: "Check & send" },
+  sendToJobTread: { es: "Enviar a JobTread", en: "Send to JobTread" },
+  problemsReported: { es: "problemas reportados", en: "problems reported" },
+  finish: { es: "Terminar", en: "Finish" },
+  finishAndSend: { es: "Terminar y enviar", en: "Finish & send" },
+  itemsLeft: { es: "puntos faltan", en: "items left" },
+  assignedToYou: { es: "Te lo asign\xF3", en: "Assigned to you by" },
+  queueNote: { es: "Solo aparecen trabajos listos para revisar", en: "Only jobs ready to inspect show here" },
+  addNote: { es: "Agregar nota", en: "Add a note" },
+  seeDamageReport: { es: "\xBFVes un da\xF1o? Rep\xF3rtalo con foto", en: "See damage? Report it with a photo" }
+};
+
+// packages/shared/src/forms.ts
+function items(list) {
+  return list.map((i) => ({ key: i.key, n: i.code, es: FIELD_LABELS[i.key]?.es ?? "", en: FIELD_LABELS[i.key]?.en ?? "" }));
+}
+var ROOF_FORM = {
+  key: "roof",
+  sections: [
+    { key: "inspection", label: { es: UI.inspection.es, en: UI.inspection.en }, items: items(INSPECTION_ITEMS) },
+    { key: "cleanup", label: { es: UI.cleanup.es, en: UI.cleanup.en }, items: items(CLEANUP_ITEMS) }
+  ]
+};
+var GUTTERS_FORM = {
+  key: "gutters",
+  sections: [
+    { key: "inspection", label: { es: UI.inspection.es, en: UI.inspection.en }, items: items(GUTTER_ITEMS) },
+    { key: "cleanup", label: { es: UI.cleanup.es, en: UI.cleanup.en }, items: items(GUTTER_CLEANUP_ITEMS) }
+  ]
+};
+var SIDING_FORM = {
+  key: "siding",
+  sections: [
+    { key: "inspection", label: { es: UI.inspection.es, en: UI.inspection.en }, items: items(SIDING_ITEMS) },
+    { key: "cleanup", label: { es: UI.cleanup.es, en: UI.cleanup.en }, items: items(SIDING_CLEANUP_ITEMS) }
+  ]
+};
+var CLOSEOUT_FORMS = { roof: ROOF_FORM, gutters: GUTTERS_FORM, siding: SIDING_FORM };
+function jobFormKey() {
+  return "roof";
+}
+
 // apps/sync/src/areas.ts
 var AREA_ORDER = ["shingle", "metal", "flat", "siding", "gutters"];
 var AREA_LABEL = {
@@ -293,6 +374,11 @@ function lineArea(areas) {
 }
 function usesRoofForm(area, line) {
   return area === line && ROOFS.includes(area);
+}
+function areaFormKey(area, line) {
+  if (usesRoofForm(area, line)) return "roof";
+  if (area === "gutters" || area === "siding") return area;
+  return "notes";
 }
 function areaInspectionName(area, line) {
   return area === line ? "Final inspection" : `Final inspection \u2014 ${AREA_LABEL[area]}`;
@@ -390,10 +476,10 @@ async function listDocumentLines(pave, documentId) {
         }
       }
     });
-    const items = res.document?.costItems;
-    lines.push(...toScopeLines(items?.nodes ?? []));
-    if (!items?.nextPage) break;
-    page = items.nextPage;
+    const items2 = res.document?.costItems;
+    lines.push(...toScopeLines(items2?.nodes ?? []));
+    if (!items2?.nextPage) break;
+    page = items2.nextPage;
   }
   return lines;
 }
@@ -492,7 +578,11 @@ async function getJob(pave, jobId, viewer) {
     punchTasks: punchTasks.map((t) => ({ ...t, area: keys.length ? areaOfPunch(t, keys) : null })),
     areas,
     soldScope,
-    openPunchTotal: open.length
+    openPunchTotal: open.length,
+    // The form the crew answers, as data: the phone draws this, not a copy
+    // of its own (T2.25).
+    forms: { ...CLOSEOUT_FORMS },
+    jobForm: jobFormKey()
   };
 }
 async function listInspectionTasks(pave, jobId) {
@@ -531,7 +621,7 @@ function closeoutAreas(job, punch, inspections, viewer) {
       key: area,
       label: AREA_LABEL[area],
       line: isLine,
-      form: usesRoofForm(area, line) ? "roof" : "notes",
+      form: areaFormKey(area, line),
       inspectionTaskId: task?.id ?? null,
       inspectionDate: task?.startDate ?? null,
       assigneeNames: (task?.assignees ?? []).map((a) => a.name ?? "").filter((n) => n.length > 0),
@@ -742,15 +832,15 @@ function findPipelineTask(tasks, spec) {
 }
 var CHECKLIST_STAMP = "via DB CheckOut";
 var INSPECTED_STAMP = "\u2714 Inspected by ";
-var ITEM_MARKER = /DB CheckOut item: ([A-Z]?\d+)/;
+var ITEM_MARKER = /DB CheckOut item: ([A-Z]{0,2}\d+)/;
 var oneLine = (text, max) => {
   const flat2 = text.replace(/\s+/g, " ").trim();
   return flat2.length > max ? `${flat2.slice(0, max - 1)}\u2026` : flat2;
 };
-function checklistSubtasks(visit, current = []) {
+function checklistSubtasks(visit, current = [], list = CHECKLIST_ITEMS) {
   const answered = { ...visit.cleanup, ...visit.inspection };
   const findingsFor = (key) => (visit.findings ?? []).filter((f) => f.itemKey === key);
-  return CHECKLIST_ITEMS.map((item) => {
+  return list.map((item) => {
     const findings = findingsFor(item.key);
     const answer = answered[item.key];
     const already = current.find((s) => s.name === item.subtask)?.isComplete === true;
@@ -767,6 +857,7 @@ function visitNotesMessage(visit, byName) {
   if (notes.inspection?.trim()) lines.push(`Inspector notes: ${notes.inspection.trim()}`);
   if (notes.attic?.trim()) lines.push(`Attic access limitation / existing conditions: ${notes.attic.trim()}`);
   if (notes.cleanup?.trim()) lines.push(`Cleanup notes: ${notes.cleanup.trim()}`);
+  if (notes.final?.trim()) lines.push(`Final notes: ${notes.final.trim()}`);
   if (lines.length === 0) return null;
   lines.push(`\u2014 ${byName} via DB CheckOut`);
   return lines.join("\n");
@@ -858,20 +949,26 @@ async function listTaskFiles(pave, taskId) {
   });
   return res.task?.files.nodes ?? [];
 }
+var REPAIR_MORE_MAX = 8;
 function pickRepairPhotos(files, ref) {
   const byRef = (suffix) => {
     const marker = ref ? clientRefMarker(`${ref}${suffix}`) : null;
     return marker ? files.find((f) => (f.description ?? "").includes(marker))?.id : void 0;
   };
   const byName = (word) => files.find((f) => f.name.toUpperCase().startsWith(word))?.id;
-  return { before: byRef(".b") ?? byName("BEFORE"), after: byRef(".a") ?? byName("AFTER") };
+  const more = [];
+  for (let i = 0; i < REPAIR_MORE_MAX; i++) {
+    const id = byRef(`.m${i}`);
+    if (id) more.push(id);
+  }
+  return { before: byRef(".b") ?? byName("BEFORE"), after: byRef(".a") ?? byName("AFTER"), more };
 }
 async function postRepairDone(pave, taskId, note, byName, clientRef2) {
   const commentId = await postTaskMessage(pave, taskId, repairDoneMessage(note, byName), clientRef2);
   if (!commentId) return { commentId, photos: 0 };
   const picked = pickRepairPhotos(await listTaskFiles(pave, taskId), clientRef2);
   let photos = 0;
-  for (const fileId of [picked.before, picked.after]) {
+  for (const fileId of [picked.before, picked.after, ...picked.more]) {
     if (!fileId) continue;
     await attachFileToComment(pave, commentId, fileId);
     photos++;
@@ -1115,20 +1212,40 @@ function areaNotesMessage(notes, byName) {
   return said ? `Inspector notes: ${said}
 \u2014 ${byName} via DB CheckOut` : null;
 }
-async function closeAreaInspection(pave, taskId, notes, byName, clientRef2) {
+async function closeAreaInspection(pave, taskId, notes, byName, clientRef2, checklist) {
   const res = await pave.query({
-    task: { $: { id: taskId }, description: {} }
+    task: { $: { id: taskId }, description: {}, subtasks: { name: {}, isComplete: {} } }
   });
   const stamp = `${INSPECTED_STAMP}${byName} \u2014 ${CHECKLIST_STAMP}`;
   const existing = res.task?.description ?? "";
   const description = existing.includes(stamp) ? existing : existing ? `${existing}
 
 ${stamp}` : stamp;
+  let subtasks;
+  if (checklist) {
+    const current = (res.task?.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true }));
+    const written = checklistSubtasks(checklist.visit, current, checklist.items);
+    const ours = new Set(written.map((st) => st.name));
+    subtasks = [...written, ...current.filter((st) => !ours.has(st.name))];
+  }
   await pave.query({
-    updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) } }
+    updateTask: {
+      $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096), ...subtasks ? { subtasks } : {} }
+    }
   });
-  const message = areaNotesMessage(notes, byName);
+  const message = checklist ? areaChecklistMessage(checklist.visit, notes, byName) : areaNotesMessage(notes, byName);
   if (message) await postTaskMessage(pave, taskId, message, clientRef2 ? `${clientRef2}.notes` : void 0);
+}
+function areaChecklistMessage(visit, finalNotes, byName) {
+  const n = visit.notes ?? {};
+  const lines = [];
+  if (n.inspection?.trim()) lines.push(`Inspection notes: ${n.inspection.trim()}`);
+  if (n.cleanup?.trim()) lines.push(`Cleanup notes: ${n.cleanup.trim()}`);
+  const fin = (finalNotes ?? n.final)?.trim();
+  if (fin) lines.push(`Final notes: ${fin}`);
+  if (lines.length === 0) return null;
+  lines.push(`\u2014 ${byName} via DB CheckOut`);
+  return lines.join("\n");
 }
 async function syncInspectionChecklist(pave, task, punchTasks) {
   if (!task || task.subtasks.length === 0) return "none";
@@ -1682,6 +1799,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 }
 
 // apps/sync/src/routes.ts
+var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -1694,21 +1812,18 @@ var headerValue = (req, name) => {
 };
 function actingUser(req, deps) {
   const bearer = bearerToken(req);
-  if (!bearer) return null;
-  if (deps.crewAppSecret && bearer === deps.crewAppSecret) {
-    const email = headerValue(req, "x-acting-email").toLowerCase();
-    if (!email) return null;
-    try {
-      return assertAllowedIdentity(
-        { email, email_verified: true, name: headerValue(req, "x-acting-name") || void 0 },
-        deps.workspaceDomain,
-        deps.allowedEmails
-      );
-    } catch {
-      return null;
-    }
+  if (!bearer || !deps.crewAppSecret || bearer !== deps.crewAppSecret) return null;
+  const email = headerValue(req, "x-acting-email").toLowerCase();
+  if (!email) return null;
+  try {
+    return assertAllowedIdentity(
+      { email, email_verified: true, name: headerValue(req, "x-acting-name") || void 0 },
+      deps.workspaceDomain,
+      deps.allowedEmails
+    );
+  } catch {
+    return null;
   }
-  return deps.sessionSecret ? verifySession(deps.sessionSecret, bearer) : null;
 }
 function clientRef(req) {
   const header = req.headers["x-client-ref"];
@@ -1753,11 +1868,11 @@ function parseVisit(body) {
   return {
     inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
     cleanup: nested ? stringMap(answers["cleanup"]) : {},
-    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"] },
+    notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"], final: notes["final"] },
     findings
   };
 }
-var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPORT", "INSPECTION"]);
+var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPAIR", "REPORT", "INSPECTION"]);
 function decodeAudio(audioBase64) {
   if (typeof audioBase64 !== "string" || !audioBase64) {
     return { error: "audioBase64 must be a data URI string" };
@@ -1820,33 +1935,13 @@ function createHandler(deps) {
       if (req.method === "GET" && url.pathname === "/health") {
         return json(res, 200, {
           ok: true,
-          signIn: Boolean(deps.googleClientId && deps.sessionSecret),
           gemini: Boolean(deps.geminiApiKey),
           webhook: Boolean(deps.webhookSecret),
           crewApp: Boolean(deps.crewAppSecret),
-          board: Boolean(deps.board)
+          board: Boolean(deps.board),
+          build: BUILD,
+          deployed: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7) || null
         });
-      }
-      if (req.method === "GET" && url.pathname === "/auth/config") {
-        return json(res, 200, { googleClientId: deps.googleClientId || null });
-      }
-      if (req.method === "POST" && url.pathname === "/auth/google") {
-        if (!deps.googleClientId || !deps.sessionSecret) {
-          return json(res, 501, { error: "Google sign-in is not configured on the server" });
-        }
-        const body = await readBody(req);
-        if (typeof body.credential !== "string" || !body.credential) {
-          return json(res, 400, { error: "credential is required" });
-        }
-        try {
-          const verify = deps.verifyGoogle ?? verifyGoogleCredential;
-          const payload = await verify(body.credential, deps.googleClientId);
-          const user = assertAllowedIdentity(payload, deps.workspaceDomain, deps.allowedEmails);
-          const token = mintSession(deps.sessionSecret, user);
-          return json(res, 200, { token, name: user.name, email: user.email });
-        } catch {
-          return json(res, 401, { error: "This Google account is not allowed" });
-        }
       }
       if (req.method === "POST" && parts[0] === "webhooks" && parts[1] === "jobtread") {
         if (!deps.webhookSecret || parts[2] !== deps.webhookSecret) {
@@ -1947,6 +2042,9 @@ function createHandler(deps) {
         }
         if (parts[2] === "close-inspection") {
           const body = await readBody(req);
+          if (body.form != null && !Object.prototype.hasOwnProperty.call(CLOSEOUT_FORMS, String(body.form))) {
+            return json(res, 400, { error: `The ${String(body.form)} form is not written to JobTread yet \u2014 ask the office.` });
+          }
           const problemsReported = typeof body.problemsReported === "number" && body.problemsReported > 0 ? Math.floor(body.problemsReported) : 0;
           const milestones = await listPipelineTasks(deps.pave, jobId);
           const task = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
@@ -1971,9 +2069,15 @@ function createHandler(deps) {
           const notes = typeof body.notes === "string" ? body.notes.slice(0, 4e3) : void 0;
           const line = lineArea(areas);
           const ref = clientRef(req);
+          const formKey = typeof body.form === "string" ? body.form : null;
+          if (formKey && formKey !== areaFormKey(area, line)) {
+            return json(res, 400, { error: `The ${area} inspection is not the ${formKey} form` });
+          }
+          const items2 = formKey && formKey in AREA_CHECKLISTS ? AREA_CHECKLISTS[formKey] : null;
+          const checklist = items2 ? { items: items2, visit: parseVisit({ answers: body.answers ?? {}, notes: body.sectionNotes ?? {}, findings: body.findings ?? [] }) } : void 0;
           let taskId = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line)?.id;
           if (!taskId) taskId = await createAreaInspection(deps.pave, jobId, area, line, ref);
-          await closeAreaInspection(deps.pave, taskId, notes, session.name, ref);
+          await closeAreaInspection(deps.pave, taskId, notes, session.name, ref, checklist);
           const outcome = await afterInspection(deps.pave, deps.board, { jobId, area, problemsReported, actor: session.name });
           return json(res, 200, { completedTaskId: taskId, flipped: outcome.flipped, sentTo: outcome.reviewer });
         }
@@ -2041,7 +2145,7 @@ function createHandler(deps) {
           const body = await readBody(req);
           const label = typeof body.label === "string" ? body.label.toUpperCase() : "";
           if (!PHOTO_LABELS.has(label)) {
-            return json(res, 400, { error: "label must be BEFORE, AFTER, REPORT or INSPECTION" });
+            return json(res, 400, { error: "label must be BEFORE, AFTER, REPAIR, REPORT or INSPECTION" });
           }
           const photo = decodePhoto(body.imageBase64);
           if (!photo) return json(res, 400, { error: "imageBase64 must be an image under 4MB" });
@@ -2261,10 +2365,8 @@ async function entry(req, res) {
       });
       handler = createHandler({
         pave,
-        sessionSecret: env.sessionSecret,
         geminiApiKey: env.geminiApiKey,
         geminiModel: env.geminiModel,
-        googleClientId: env.googleClientId,
         workspaceDomain: env.workspaceDomain,
         allowedEmails: env.allowedEmails,
         webhookSecret: env.webhookSecret,
@@ -2286,8 +2388,7 @@ async function entry(req, res) {
         diagnostics: {
           node: process.version,
           hasJtGrantKey: Boolean(process.env.JT_GRANT_KEY),
-          hasSessionSecret: Boolean(process.env.SESSION_SECRET),
-          hasGoogleClientId: Boolean(process.env.GOOGLE_CLIENT_ID)
+          hasCrewAppSecret: Boolean(process.env.CREW_APP_SECRET)
         }
       })
     );

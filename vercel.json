@@ -1,10 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "",
+  "buildCommand": "npm run build:api",
   "outputDirectory": "public",
   "rewrites": [
     { "source": "/health", "destination": "/api" },
-    { "source": "/auth/:rest*", "destination": "/api" },
     { "source": "/translate", "destination": "/api" },
     { "source": "/transcribe", "destination": "/api" },
     { "source": "/queue", "destination": "/api" },
