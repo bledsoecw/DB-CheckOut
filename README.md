@@ -191,7 +191,7 @@ DB Hub's Off switch. The routes, the session tokens and the web build are
 removed. `public/` is a notice in Spanish and English that Close Out is in DB
 Crew, with a service worker that clears the old app's caches off any phone that
 installed it and unregisters itself. `SESSION_SECRET` and `GOOGLE_CLIENT_ID`
-are no longer read and can be deleted from Vercel. Every report and punch
+are no longer read and were deleted from Vercel on 30 Oct 2026. Every report and punch
 completion is still stamped with the acted-for person's name in JobTread.
 
 **Retired crew app** (`apps/mobile`) — kept as source only; nothing builds or
