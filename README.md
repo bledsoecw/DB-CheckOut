@@ -156,7 +156,11 @@ its source, which `GET /health` reports as `build` (`source`, `on` —
 `"vercel"` when Vercel built it — and `commit`) beside `deployed` (Vercel's
 commit); and `test/bundle.test.ts` fails when the committed copy is older than
 the source, so rebuild and commit it with any change under `apps/sync/src`
-or `packages/shared/src`. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`
+or `packages/shared/src`. `/health` also reports `contract`
+(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026): what DB Crew's phone
+can count on this server for. DB Crew's Diagnostics shows it beside the
+build and warns while it is below the phone's `CO_CONTRACT_NEED`, so raise it
+in the change that gives the phone something new to depend on. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`
 (and optionally `GOOGLE_WORKSPACE_DOMAIN`, `GOOGLE_ALLOWED_EMAILS`,
 `WEBHOOK_SECRET`; paste values only in Vercel's dashboard, never in the repo).
 The JobTread webhook URL is

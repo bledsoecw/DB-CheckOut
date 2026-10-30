@@ -78,6 +78,15 @@ export interface RouterDeps {
  */
 declare const __CLOSEOUT_BUILD__: { source: string; on: string; commit: string | null } | undefined;
 const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : { source: null, on: "source", commit: null };
+/**
+ * What DB Crew's phone can count on this server for (DB Crew T2.30): the
+ * phone carries the level it needs and its Diagnostics warns while the server
+ * reports less. Raise it in the same change that gives the phone something
+ * new to depend on — a route, a field it reads, a rule it relies on — and
+ * raise `CO_CONTRACT_NEED` in DB Crew's index.html when the phone starts
+ * using it. 1 = everything through the 30 Oct 2026 deploy.
+ */
+const PHONE_CONTRACT = 1;
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -291,6 +300,7 @@ export function createHandler(deps: RouterDeps) {
           board: Boolean(deps.board),
           build: BUILD,
           deployed: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7) || null,
+          contract: PHONE_CONTRACT,
         });
       }
 

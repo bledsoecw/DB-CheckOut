@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source fe1dbffda4aa
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source d6a0b17cca5b
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "fe1dbffda4aa", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "d6a0b17cca5b", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -1800,6 +1800,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 
 // apps/sync/src/routes.ts
 var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
+var PHONE_CONTRACT = 1;
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -1940,7 +1941,8 @@ function createHandler(deps) {
           crewApp: Boolean(deps.crewAppSecret),
           board: Boolean(deps.board),
           build: BUILD,
-          deployed: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7) || null
+          deployed: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7) || null,
+          contract: PHONE_CONTRACT
         });
       }
       if (req.method === "POST" && parts[0] === "webhooks" && parts[1] === "jobtread") {
