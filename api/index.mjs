@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source d6a0b17cca5b
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source d0b195b48064
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "d6a0b17cca5b", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "d0b195b48064", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -200,6 +200,7 @@ var PIPELINE_TASKS = {
    */
   pmPunchReview: { name: "PM punch review", typeId: TASK_TYPES.general }
 };
+var FINAL_INSPECTION_NOTE = "Complete the quality inspection and document results and photos. If repairs are needed, complete Punch list and PM punch review before Final check-off.";
 var PUNCH_CREW = [
   { name: "Alberto Gonzalez", membershipId: "22PdPUpWzpHy" },
   { name: "Yahir Gonzalez", membershipId: "22PdPTwMdkzj" }
@@ -1362,6 +1363,17 @@ DB CheckOut item: ${item.code}`);
   });
   return res.createTask.createdTask?.id ?? "";
 }
+async function readRepairTask(pave, taskId) {
+  const res = await pave.query({
+    task: { $: { id: taskId }, id: {}, isToDo: {}, progress: {}, taskType: { id: {} }, job: { id: {} } }
+  });
+  const t = res.task;
+  if (!t) return null;
+  return { id: t.id, jobId: t.job?.id ?? null, isToDo: t.isToDo === true, typeId: t.taskType?.id ?? null, progress: t.progress ?? 0 };
+}
+function isRepairTask(task) {
+  return task.typeId === TASK_TYPES.punchList && task.isToDo;
+}
 async function completeTask(pave, taskId, note) {
   const trimmed = note?.trim();
   if (!trimmed) {
@@ -1800,7 +1812,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 
 // apps/sync/src/routes.ts
 var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
-var PHONE_CONTRACT = 1;
+var PHONE_CONTRACT = 2;
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -2048,13 +2060,19 @@ function createHandler(deps) {
             return json(res, 400, { error: `The ${String(body.form)} form is not written to JobTread yet \u2014 ask the office.` });
           }
           const problemsReported = typeof body.problemsReported === "number" && body.problemsReported > 0 ? Math.floor(body.problemsReported) : 0;
+          const ref = clientRef(req);
           const milestones = await listPipelineTasks(deps.pave, jobId);
-          const task = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
-          if (task) {
-            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name, clientRef(req));
+          let taskId = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)?.id ?? null;
+          let made = false;
+          if (!taskId) {
+            const basics = await getJobBasics(deps.pave, jobId);
+            if (!basics) return json(res, 404, { error: "JobTread has no job with that id" });
+            taskId = await createFinalInspection(deps.pave, jobId, ref);
+            made = true;
           }
+          await closeInspectionTask(deps.pave, taskId, parseVisit(body), session.name, ref);
           const outcome = await afterInspection(deps.pave, deps.board, { jobId, area: null, problemsReported, actor: session.name });
-          return json(res, 200, { completedTaskId: task?.id ?? null, flipped: outcome.flipped, sentTo: outcome.reviewer });
+          return json(res, 200, { completedTaskId: taskId, made, flipped: outcome.flipped, sentTo: outcome.reviewer });
         }
         if (parts[2] === "close-area-inspection") {
           const body = await readBody(req);
@@ -2200,6 +2218,13 @@ function createHandler(deps) {
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = await readBody(req);
+        const task = await readRepairTask(deps.pave, parts[1]);
+        if (!task) {
+          return json(res, 410, { error: "That repair is no longer in JobTread \u2014 it was taken off or moved. Ask your PM.", gone: true });
+        }
+        if (!isRepairTask(task) || body.jobId && task.jobId && task.jobId !== body.jobId) {
+          return json(res, 422, { error: "That task is not a repair on this job \u2014 nothing was marked done." });
+        }
         const note = body.note?.trim() ? `${body.note.trim()} \u2014 ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
         try {
@@ -2213,9 +2238,40 @@ function createHandler(deps) {
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (isGone(err)) return json(res, 410, { error: message, gone: true });
       return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
   };
+}
+function isGone(err) {
+  return err instanceof PaveError && /could not find|was not found|does not exist/i.test(err.body);
+}
+async function createFinalInspection(pave, jobId, ref) {
+  const marker = ref ? clientRefMarker(`${ref}.task`) : null;
+  if (marker && ref) {
+    const existing = await findTaskByRef(pave, jobId, `${ref}.task`);
+    if (existing) return existing;
+  }
+  const description = [
+    FINAL_INSPECTION_NOTE,
+    "Made by DB CheckOut: the job had no Final inspection task when the crew sent theirs.",
+    ...marker ? [marker] : []
+  ].join("\n\n");
+  const res = await pave.query({
+    createTask: {
+      $: {
+        targetType: "job",
+        targetId: jobId,
+        taskTypeId: TASK_TYPES.inspection,
+        name: PIPELINE_TASKS.finalInspection.name,
+        description
+      },
+      createdTask: { id: {} }
+    }
+  });
+  const id = res.createTask.createdTask?.id;
+  if (!id) throw new Error("JobTread did not create the Final inspection task");
+  return id;
 }
 async function createAreaInspection(pave, jobId, area, line, ref) {
   const marker = ref ? clientRefMarker(`${ref}.task`) : null;

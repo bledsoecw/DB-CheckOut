@@ -109,6 +109,19 @@ repair work — wired into JobTread and the DB Production board.
    extra photos come as `REPAIR` (`PHOTO_LABELS`) with the send's reference
    `.m0`, `.m1`…, and its done message links them after the before and after.
    The items are a first draft for the office to reword here.
+12. **Nothing the crew sends is answered OK and lost** (DB Crew T2.33, audit
+   D22/D23/D38, 2 Nov 2026). An inspection sent for a job with no
+   "Final inspection" task — the template loader is off since mid-September,
+   and the board makes the line only for a shingle roof or when somebody is
+   put on it — is recorded on one made then (`createFinalInspection` in
+   `routes.ts`: named, typed and described as the board makes it, found again
+   by the send's reference on a re-send), and the answer always names the
+   task in `completedTaskId`; a job JobTread does not have is a 404. Done
+   reads the task first (`readRepairTask`): one JobTread no longer has is
+   **410 Gone** with `gone: true`, and a task that is not a Punch List to-do
+   on the job the phone names is 422 and is never ticked. Any JobTread
+   "Could not find …" is 410 too (`isGone`); other JobTread trouble stays a
+   502, which the phone retries.
 
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:
@@ -157,7 +170,7 @@ its source, which `GET /health` reports as `build` (`source`, `on` —
 commit); and `test/bundle.test.ts` fails when the committed copy is older than
 the source, so rebuild and commit it with any change under `apps/sync/src`
 or `packages/shared/src`. `/health` also reports `contract`
-(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026): what DB Crew's phone
+(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33): what DB Crew's phone
 can count on this server for. DB Crew's Diagnostics shows it beside the
 build and warns while it is below the phone's `CO_CONTRACT_NEED`, so raise it
 in the change that gives the phone something new to depend on. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`

@@ -1761,6 +1761,37 @@ export async function createReportTask(
  * app-side). An optional note (materials, time, what was done) is appended
  * to the task description so the correction is documented on the job.
  */
+/** A task as the Done route checks it: is it still there, is it a repair, and on which job. */
+export interface RepairTaskInfo {
+  id: string;
+  jobId: string | null;
+  isToDo: boolean;
+  typeId: string | null;
+  progress: number;
+}
+
+/**
+ * The task a phone is about to mark Done, or null when JobTread no longer has
+ * it (deleted, or the id was never real). JobTread answers a read of a missing
+ * task with `task: null` rather than an error (checked live, 2 Nov 2026), which
+ * is what lets the Done route say "gone" instead of "JobTread is down".
+ */
+export async function readRepairTask(pave: PaveClient, taskId: string): Promise<RepairTaskInfo | null> {
+  const res = await pave.query<{
+    task: { id: string; isToDo?: boolean | null; progress?: number | null; taskType?: { id: string } | null; job?: { id: string } | null } | null;
+  }>({
+    task: { $: { id: taskId }, id: {}, isToDo: {}, progress: {}, taskType: { id: {} }, job: { id: {} } },
+  });
+  const t = res.task;
+  if (!t) return null;
+  return { id: t.id, jobId: t.job?.id ?? null, isToDo: t.isToDo === true, typeId: t.taskType?.id ?? null, progress: t.progress ?? 0 };
+}
+
+/** A punch item the phone lists, and so may finish: a Punch List-typed to-do (`listPunchTasks`'s own rule). */
+export function isRepairTask(task: RepairTaskInfo): boolean {
+  return task.typeId === TASK_TYPES.punchList && task.isToDo;
+}
+
 export async function completeTask(pave: PaveClient, taskId: string, note?: string): Promise<void> {
   const trimmed = note?.trim();
   if (!trimmed) {

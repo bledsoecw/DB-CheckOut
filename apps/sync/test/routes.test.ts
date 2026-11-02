@@ -398,6 +398,7 @@ test("finishing a repair posts its note as a message on the to-do, with its phot
           { id: "fb", name: "BEFORE 2026-10-13 19:37 — Carl Bledsoe", description: "DB CheckOut ref: 1758400000000-ab12cd.b", createdAt: null },
         ] } } };
       }
+      if (task && "isToDo" in task) return { task: { id: "pt1", isToDo: true, progress: 0, taskType: { id: TASK_TYPES.punchList }, job: { id: "job1" } } };
       if (task) return { task: { description: "Reseal the boot" } };
       if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
       if ("comment" in q) return { comment: { files: { nodes: [] } } };
@@ -437,6 +438,11 @@ function areaResponder(job: AreaJob) {
       if ("comments" in task) return { task: { comments: { nodes: [] } } };
       if ("files" in task) return { task: { files: { nodes: [] } } };
       const id = (task["$"] as Record<string, unknown>)["id"];
+      if ("isToDo" in task) {
+        return String(id).startsWith("pt")
+          ? { task: { id, isToDo: true, progress: 0, taskType: { id: TASK_TYPES.punchList }, job: { id: "job1" } } }
+          : { task: null };
+      }
       return { task: { description: job.tasks.find((t) => t.id === id)?.description ?? null } };
     }
     if ("job" in q) {
@@ -675,4 +681,112 @@ test("the queue lists a job still in production when a work area's close-out is 
   const booked = Object.fromEntries((JSON.parse(call.out.body) as Array<{ id: string; booked?: unknown }>).map((j) => [j.id, j.booked]));
   assert.deepEqual(booked["jProd"], [{ start: "2026-10-27", end: "2026-10-27", kind: "inspection" }]);
   assert.deepEqual(booked["jFI"], []);
+});
+
+// --------------------------------------------------------------------------
+// Nothing the crew sends is answered OK and lost (DB Crew audit, 2 Nov 2026)
+// --------------------------------------------------------------------------
+
+test("an inspection for a job with no Final inspection task is recorded on one made for it (D22)", async () => {
+  const queries: PaveQuery[] = [];
+  const job: AreaJob = { status: "Final Inspection", projectTypes: ["R-Shingles"], tasks: [] };
+  const handle = createHandler(routerDeps(areaResponder(job), queries));
+  const call = fakeHttp("POST", "/jobs/job1/close-inspection", { "x-client-ref": "1758400000000-ab12cd" }, {
+    answers: { inspection: { a1: "ok" }, cleanup: {} },
+    notes: { inspection: "Ridge vent seated", cleanup: "" },
+    problemsReported: 0,
+  });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  const answer = JSON.parse(call.out.body) as Record<string, unknown>;
+  assert.equal(answer["completedTaskId"], "new-task", "the answer names the task the visit is on");
+  assert.equal(answer["made"], true);
+  const made = dollarOf(queries.find((q) => "createTask" in q), "createTask");
+  assert.equal(made["name"], "Final inspection");
+  assert.equal(made["taskTypeId"], TASK_TYPES.inspection);
+  assert.equal(made["isToDo"], undefined, "a scheduled line, like the template's and the board's");
+  assert.match(String(made["description"]), /^Complete the quality inspection and document results and photos\./);
+  assert.match(String(made["description"]), /DB CheckOut ref: 1758400000000-ab12cd\.task$/, "a re-send finds the line it made");
+  const written = queries.filter((q) => "updateTask" in q).map((q) => dollarOf(q, "updateTask"));
+  assert.ok(written.some((w) => w["id"] === "new-task" && Array.isArray(w["subtasks"])), "the checklist is written onto the new line");
+});
+
+test("a re-sent inspection finds the Final inspection line its first send made, never a second (D22)", async () => {
+  const queries: PaveQuery[] = [];
+  const base = areaResponder({ status: "Final Inspection", projectTypes: ["R-Shingles"], tasks: [] });
+  const handle = createHandler(
+    routerDeps((q) => {
+      const jobQ = q["job"] as Record<string, unknown> | undefined;
+      if (jobQ && "tasks" in jobQ && JSON.stringify(jobQ).includes("1758400000000-ab12cd.task")) {
+        return { job: { tasks: { nodes: [{ id: "made-before" }] } } };
+      }
+      return base(q);
+    }, queries),
+  );
+  const call = fakeHttp("POST", "/jobs/job1/close-inspection", { "x-client-ref": "1758400000000-ab12cd" }, { answers: { inspection: {}, cleanup: {} }, problemsReported: 0 });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200);
+  assert.equal(JSON.parse(call.out.body).completedTaskId, "made-before");
+  assert.ok(!queries.some((q) => "createTask" in q), "no second line");
+});
+
+test("an inspection for a job JobTread does not have is refused, never answered OK (D22)", async () => {
+  const handle = createHandler(
+    routerDeps((q) => {
+      const jobQ = q["job"] as Record<string, unknown> | undefined;
+      if (jobQ && "tasks" in jobQ) return { job: null };
+      if (jobQ) return { job: null };
+      return {};
+    }, []),
+  );
+  const call = fakeHttp("POST", "/jobs/gone1/close-inspection", {}, { answers: { inspection: {}, cleanup: {} }, problemsReported: 0 });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 404);
+});
+
+test("Done on a repair JobTread no longer has is 410 Gone, and nothing is written (D23)", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(routerDeps(areaResponder(McCOY), queries));
+  const call = fakeHttp("POST", "/tasks/deleted1/complete", {}, { jobId: "job1", note: "Resealed" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 410);
+  assert.equal(JSON.parse(call.out.body).gone, true);
+  assert.ok(!queries.some((q) => "updateTask" in q || "createComment" in q));
+});
+
+test("Done on a task that is not a repair on that job is refused, and never ticked (D38)", async () => {
+  for (const [label, task] of [
+    ["a scheduled task", { id: "fi", isToDo: false, progress: 0, taskType: { id: TASK_TYPES.inspection }, job: { id: "job1" } }],
+    ["another job's repair", { id: "px", isToDo: true, progress: 0, taskType: { id: TASK_TYPES.punchList }, job: { id: "job2" } }],
+  ] as const) {
+    const queries: PaveQuery[] = [];
+    const handle = createHandler(
+      routerDeps((q) => {
+        const t = q["task"] as Record<string, unknown> | undefined;
+        if (t && "isToDo" in t) return { task };
+        return {};
+      }, queries),
+    );
+    const call = fakeHttp("POST", `/tasks/${task.id}/complete`, {}, { jobId: "job1", note: "x" });
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, 422, label);
+    assert.ok(!queries.some((q) => "updateTask" in q), `${label}: nothing ticked`);
+  }
+});
+
+test("JobTread saying it cannot find a record is 410 Gone; other refusals stay 502 (D23)", async () => {
+  const { PaveError } = await import("../src/pave");
+  for (const [body, want] of [
+    ['{"errors":[{"message":"Could not find task with ID 22PZZZZZZZZZ"}]}', 410],
+    ['{"errors":[{"message":"Too many requests"}]}', 502],
+  ] as const) {
+    const handle = createHandler(
+      routerDeps(() => {
+        throw new PaveError(400, body);
+      }, []),
+    );
+    const call = fakeHttp("POST", "/jobs/job1/close-area-inspection", {}, { area: "gutters", problemsReported: 0 });
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, want, body);
+  }
 });

@@ -257,6 +257,17 @@ export const PIPELINE_TASKS = {
 
 export type PipelineTaskKey = keyof typeof PIPELINE_TASKS;
 
+/**
+ * The template's own description of its "Final inspection" line, word for word
+ * as the Production Board writes it on a line it has to create
+ * (`FINAL_INSPECTION_NOTE` in the board's ids.ts). Close Out writes it too, on
+ * the line it makes when an inspection arrives for a job that has none (DB
+ * Crew audit D22, 2 Nov 2026): the answers must be recorded somewhere.
+ */
+export const FINAL_INSPECTION_NOTE =
+  "Complete the quality inspection and document results and photos. If repairs " +
+  "are needed, complete Punch list and PM punch review before Final check-off.";
+
 // ---------------------------------------------------------------------------
 // The punch crew
 // ---------------------------------------------------------------------------

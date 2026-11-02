@@ -12,7 +12,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { assertAllowedIdentity, type SessionUser } from "./auth";
 import { PaveError, type PaveClient } from "./pave";
-import { AREA_CHECKLISTS, isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import { AREA_CHECKLISTS, FINAL_INSPECTION_NOTE, isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
 import { CLOSEOUT_FORMS } from "../../../packages/shared/src/forms";
 import {
@@ -31,11 +31,13 @@ import {
   getJobBasics,
   postTaskMessage,
   postRepairDone,
+  isRepairTask,
   listAssignedWorkByJob,
   listJobsByIds,
   listPipelineJobs,
   listPipelineTasks,
   listSoldScope,
+  readRepairTask,
   uploadPhoto,
   type PhotoUpload,
   type VisitChecklists,
@@ -83,10 +85,14 @@ const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : {
  * phone carries the level it needs and its Diagnostics warns while the server
  * reports less. Raise it in the same change that gives the phone something
  * new to depend on — a route, a field it reads, a rule it relies on — and
- * raise `CO_CONTRACT_NEED` in DB Crew's index.html when the phone starts
- * using it. 1 = everything through the 30 Oct 2026 deploy.
+ * raise `CO_CONTRACT_NEED` in DB Crew's app.js when the phone starts
+ * using it. 1 = everything through the 30 Oct 2026 deploy. 2 (DB Crew T2.33,
+ * audit D22/D23/D38) = an inspection is always recorded on a task, one being
+ * made when the job has none, and the answer names it; a repair is checked
+ * before it is marked Done; and a task or job JobTread no longer has is
+ * answered 410 Gone rather than 502, so the phone stops retrying it.
  */
-const PHONE_CONTRACT = 1;
+const PHONE_CONTRACT = 2;
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -468,19 +474,27 @@ export function createHandler(deps: RouterDeps) {
             typeof body.problemsReported === "number" && body.problemsReported > 0
               ? Math.floor(body.problemsReported)
               : 0;
+          const ref = clientRef(req);
           const milestones = await listPipelineTasks(deps.pave, jobId);
-          const task = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection);
-          // No task means the job never got the template — nothing to
-          // complete, and the pipeline will leave the status alone. The PM
-          // advances it from the board exactly as they did before.
-          if (task) {
-            await closeInspectionTask(deps.pave, task.id, parseVisit(body), session.name, clientRef(req));
+          let taskId = findPipelineTask(milestones, PIPELINE_TASKS.finalInspection)?.id ?? null;
+          // No "Final inspection" task — the template loader has been off
+          // since mid-September, and the board makes the line only for a
+          // shingle roof or when somebody is put on it. The visit is recorded
+          // on one made now, rather than answered OK and written nowhere while
+          // the phone clears it (DB Crew audit D22, 2 Nov 2026).
+          let made = false;
+          if (!taskId) {
+            const basics = await getJobBasics(deps.pave, jobId);
+            if (!basics) return json(res, 404, { error: "JobTread has no job with that id" });
+            taskId = await createFinalInspection(deps.pave, jobId, ref);
+            made = true;
           }
+          await closeInspectionTask(deps.pave, taskId, parseVisit(body), session.name, ref);
           // The board moves the Status (told how many problems the phone
           // found, so the REPORTs still on their way count) and the area's
           // reviewer is told what the inspection found.
           const outcome = await afterInspection(deps.pave, deps.board, { jobId, area: null, problemsReported, actor: session.name });
-          return json(res, 200, { completedTaskId: task?.id ?? null, flipped: outcome.flipped, sentTo: outcome.reviewer });
+          return json(res, 200, { completedTaskId: taskId, made, flipped: outcome.flipped, sentTo: outcome.reviewer });
         }
 
         // A work area inspected with notes and photos instead of the roof
@@ -692,6 +706,17 @@ export function createHandler(deps: RouterDeps) {
       // on when it was the last, and the area's reviewer is told.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = (await readBody(req)) as { jobId?: string; note?: string };
+        // Only a repair the phone could have listed, still there, on the job
+        // it says (DB Crew audit D23/D38, 2 Nov 2026). Gone is 410, so the
+        // phone stops retrying and offers Discard; a task that is not a
+        // repair on this job is refused outright and never ticked.
+        const task = await readRepairTask(deps.pave, parts[1]);
+        if (!task) {
+          return json(res, 410, { error: "That repair is no longer in JobTread — it was taken off or moved. Ask your PM.", gone: true });
+        }
+        if (!isRepairTask(task) || (body.jobId && task.jobId && task.jobId !== body.jobId)) {
+          return json(res, 422, { error: "That task is not a repair on this job — nothing was marked done." });
+        }
         const note = body.note?.trim() ? `${body.note.trim()} — ${session.name}` : session.name;
         await completeTask(deps.pave, parts[1], note);
         // The finish note as a message on the repair's own to-do, its photos
@@ -711,11 +736,59 @@ export function createHandler(deps: RouterDeps) {
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Upstream JobTread trouble is a 502, not our 500 — monitoring should
-      // tell "JT is struggling" apart from "our code crashed".
+      // A record JobTread no longer has is 410: asking again changes nothing,
+      // and the phone stops retrying it (DB Crew audit D23). Other upstream
+      // JobTread trouble is a 502, not our 500 — monitoring should tell "JT
+      // is struggling" apart from "our code crashed", and the phone retries.
+      if (isGone(err)) return json(res, 410, { error: message, gone: true });
       return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
   };
+}
+
+/**
+ * JobTread saying the record a write names is not there: "Could not find task
+ * with ID …" is its wording for an id it does not have (the same shape as the
+ * "Could not find custom field with ID or name …" the board recorded). Any
+ * other refusal stays a 502, so a real outage is still retried.
+ */
+export function isGone(err: unknown): boolean {
+  return err instanceof PaveError && /could not find|was not found|does not exist/i.test(err.body);
+}
+
+/**
+ * The job's "Final inspection" line, made by the crew's close when the job has
+ * none — named, typed and described exactly as the board makes it (a scheduled
+ * task, not a to-do, like the template's), so both apps find it and the PM's
+ * review reads the answers off it. A re-sent close finds the one it made by the
+ * send's reference instead of making a second.
+ */
+async function createFinalInspection(pave: PaveClient, jobId: string, ref: string | undefined): Promise<string> {
+  const marker = ref ? clientRefMarker(`${ref}.task`) : null;
+  if (marker && ref) {
+    const existing = await findTaskByRef(pave, jobId, `${ref}.task`);
+    if (existing) return existing;
+  }
+  const description = [
+    FINAL_INSPECTION_NOTE,
+    "Made by DB CheckOut: the job had no Final inspection task when the crew sent theirs.",
+    ...(marker ? [marker] : []),
+  ].join("\n\n");
+  const res = await pave.query<{ createTask: { createdTask?: { id: string } } }>({
+    createTask: {
+      $: {
+        targetType: "job",
+        targetId: jobId,
+        taskTypeId: TASK_TYPES.inspection,
+        name: PIPELINE_TASKS.finalInspection.name,
+        description,
+      },
+      createdTask: { id: {} },
+    },
+  });
+  const id = res.createTask.createdTask?.id;
+  if (!id) throw new Error("JobTread did not create the Final inspection task");
+  return id;
 }
 
 /**
