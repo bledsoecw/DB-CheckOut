@@ -184,7 +184,11 @@ Production deploys build from the `main` branch.
 
 **Deploying to Vercel:** `api/index.mjs` is the router bundled into one
 file (`npm run build:api`, esbuild) and `vercel.json` routes the API paths to
-it. **Vercel runs `npm run build:api` as the build command on every deploy**,
+it — **only the paths it names**: anything else falls through to
+`public/index.html`, the retired app's notice page, which answers 200 with
+HTML. A new route needs its line there (`GET /assigned` shipped without one
+on the first T2.34 preview and answered the notice page), and
+`test/routes.test.ts` fails when a path the handler answers has none. **Vercel runs `npm run build:api` as the build command on every deploy**,
 so a deploy carries the source it was made from. Until 30 Oct 2026 the build
 command was empty and Vercel shipped the committed bundle as it was: nobody
 rebuilt it after 26 Oct, and the next two commits (the form sent with each
