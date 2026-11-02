@@ -2022,7 +2022,9 @@ export async function completeTask(pave: PaveClient, taskId: string, note?: stri
     task: { $: { id: taskId }, description: {} },
   });
   const done = `✔ Done — ${trimmed}`;
-  const existing = res.task?.description ?? "";
+  const raw = res.task?.description ?? "";
+  // Finished after all (DB Crew T2.35): it no longer waits on anything.
+  const existing = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
   // A re-sent completion must not write "Done" twice.
   const description = existing.includes(done) ? existing : existing ? `${existing}\n\n${done}` : done;
   await pave.query({

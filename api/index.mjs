@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 6f6af0cdb4e5
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 5405cbdbf6c5
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "6f6af0cdb4e5", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "5405cbdbf6c5", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -1586,7 +1586,8 @@ async function completeTask(pave, taskId, note) {
     task: { $: { id: taskId }, description: {} }
   });
   const done = `\u2714 Done \u2014 ${trimmed}`;
-  const existing = res.task?.description ?? "";
+  const raw = res.task?.description ?? "";
+  const existing = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
   const description = existing.includes(done) ? existing : existing ? `${existing}
 
 ${done}` : done;

@@ -1546,3 +1546,17 @@ test("listPunchTasks says why a repair is waiting", async () => {
   const tasks = await listPunchTasks(client, "job1");
   assert.deepEqual(tasks.map((t) => t.waiting), [{ reason: "decision", note: "patch or replace?" }, null]);
 });
+
+test("a repair finished after it waited loses its waiting line", async () => {
+  const writes: PaveQuery[] = [];
+  const client: PaveClient = {
+    async query<T>(q: PaveQuery): Promise<T> {
+      writes.push(q);
+      if ("task" in q) return { task: { description: "Reseal\n\n⏳ Waiting on access — Gate locked (Yahir Gonzalez, Nov 3)" } } as T;
+      return {} as T;
+    },
+  };
+  await completeTask(client, "p1", "Resealed — Yahir Gonzalez");
+  const w = (writes.find((q) => "updateTask" in q)!["updateTask"] as Record<string, Record<string, unknown>>)["$"];
+  assert.equal(w["description"], "Reseal\n\n✔ Done — Resealed — Yahir Gonzalez");
+});
