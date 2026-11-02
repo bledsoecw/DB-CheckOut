@@ -212,11 +212,13 @@ export interface CloseInspectionRequest {
   /**
    * What the crew found on the checklist lines they marked ACTION, one per
    * report that came from a line. Sent inline (without photos) because the
-   * REPORT tasks are their own sends and may land after this: the item's
-   * note goes into its checklist entry and the task description, and a
-   * fixed-on-site item is ticked.
+   * REPORT tasks are their own sends and may land after this. Only `itemKey`
+   * and `fixedOnSite` are read: a fixed-on-site item is ticked. The note
+   * reaches JobTread with the REPORT itself, as a task message.
    */
   findings?: ChecklistFinding[];
+  /** Why each line marked N/A does not apply, keyed by item key (DB Crew T2.34, audit D33). */
+  naReasons?: Record<string, string>;
   /**
    * Problems the crew recorded THIS visit that still need a return trip.
    * Carried here because the outbox can deliver the REPORT tasks after this.
@@ -252,6 +254,8 @@ export interface CloseAreaInspectionRequest {
   answers?: Record<string, Record<string, string>>;
   sectionNotes?: Record<string, string>;
   findings?: Array<{ itemKey: string; fixedOnSite?: boolean; location?: string; note?: string; photos?: number }>;
+  /** Why each line marked N/A does not apply, keyed by item key (DB Crew T2.34, audit D33). */
+  naReasons?: Record<string, string>;
 }
 
 /**

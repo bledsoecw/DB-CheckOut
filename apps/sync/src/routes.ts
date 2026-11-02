@@ -12,7 +12,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { assertAllowedIdentity, type SessionUser } from "./auth";
 import { PaveError, type PaveClient } from "./pave";
-import { AREA_CHECKLISTS, FINAL_INSPECTION_NOTE, isRoofingJob, PIPELINE_TASKS, STATUS, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import {
+  AREA_CHECKLISTS,
+  FINAL_INSPECTION_NOTE,
+  isRoofingJob,
+  PIPELINE_TASKS,
+  STATUS,
+  TASK_TYPES,
+  cleanLineWords,
+} from "../../../packages/shared/src/jobtread";
 import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
 import { CLOSEOUT_FORMS } from "../../../packages/shared/src/forms";
 import {
@@ -41,6 +49,10 @@ import {
   uploadPhoto,
   type PhotoUpload,
   type VisitChecklists,
+  openReportCodes,
+  listPunchTasks,
+  scanAssignedTasks,
+  whyGone,
 } from "./jt";
 import { afterInspection, afterRepair, applyPipeline, areaInspectionTaskOf } from "./pipeline";
 import { areaFormKey, areaInspectionName, fallbackRepairCrew, isAreaKey, jobAreas, lineArea, AREA_LABEL, type AreaKey } from "./areas";
@@ -91,8 +103,13 @@ const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : {
  * made when the job has none, and the answer names it; a repair is checked
  * before it is marked Done; and a task or job JobTread no longer has is
  * answered 410 Gone rather than 502, so the phone stops retrying it.
+ * 3 (DB Crew T2.34, audit D33/D37/I16) = a line marked N/A is written with
+ * its reason (`naReasons`) and every answered line with who answered it; a
+ * problem reported on a line an earlier visit passed unticks it while its
+ * repair is open; a camera photo's `takenAt` names its file in office time;
+ * and GET /assigned lists one person's close-out work task by task.
  */
-const PHONE_CONTRACT = 2;
+const PHONE_CONTRACT = 3;
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -189,11 +206,19 @@ export function parseVisit(body: Partial<CloseInspectionRequest> & { answers?: u
           photos: typeof f["photos"] === "number" && f["photos"] > 0 ? Math.floor(f["photos"]) : 0,
         }))
     : [];
+  // Why each N/A line does not apply (DB Crew T2.34, audit D33): words for
+  // the line's name, so the markers they could carry are taken out.
+  const naReasons: Record<string, string> = {};
+  for (const [k, v] of Object.entries(stringMap((body as { naReasons?: unknown }).naReasons))) {
+    const why = cleanLineWords(v);
+    if (why) naReasons[k] = why;
+  }
   return {
     inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
     cleanup: nested ? stringMap(answers["cleanup"]) : {},
     notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"], final: notes["final"] },
     findings,
+    naReasons,
   };
 }
 
@@ -238,7 +263,10 @@ const MAX_PHOTO_BYTES = 4_000_000;
  */
 export function photoOrigin(body: { source?: unknown; takenAt?: unknown }, now: Date = new Date()): { fromPhone: boolean; takenAt?: string } {
   const fromPhone = body.source === "phone";
-  if (!fromPhone || typeof body.takenAt !== "string" || !body.takenAt) return { fromPhone };
+  // A camera shot carries its time too (DB Crew T2.34, audit D37), so a photo
+  // sent hours later, from a dead spot, is filed under when it was taken.
+  const camera = body.source === "camera";
+  if ((!fromPhone && !camera) || typeof body.takenAt !== "string" || !body.takenAt) return { fromPhone };
   const t = new Date(body.takenAt).getTime();
   if (!Number.isFinite(t) || t < Date.UTC(2000, 0, 1) || t > now.getTime() + 86_400_000) return { fromPhone };
   return { fromPhone, takenAt: new Date(t).toISOString() };
@@ -416,6 +444,26 @@ export function createHandler(deps: RouterDeps) {
         return json(res, 200, [...jobs, ...extra].sort((a, b) => a.number.localeCompare(b.number)));
       }
 
+      // One person's close-out work, task by task (DB Crew T2.34, audit I16):
+      // what the Apps Script diffs each hour to tell the crew a repair or an
+      // inspection was assigned to them, moved, or taken away. A scan that
+      // stopped early is an error here, never a shorter list — a gap would
+      // read as work taken away. `known` names what the caller last saw, so
+      // what has gone is said with its reason: deleted, done, given to someone.
+      if (req.method === "GET" && url.pathname === "/assigned") {
+        if (!session) return json(res, 401, { error: "Unauthorized" });
+        const scan = await scanAssignedTasks(deps.pave, session);
+        if (!scan.complete) return json(res, 502, { error: "JobTread did not answer for the whole list — try again later" });
+        const items = scan.tasks.map((t) => ({
+          id: t.id, kind: t.kind, name: t.name, jobId: t.jobId, jobNumber: t.jobNumber, jobName: t.jobName,
+          date: (t.startDate ?? t.endDate ?? "").slice(0, 10) || null,
+        }));
+        const have = new Set(items.map((i) => i.id));
+        const known = (url.searchParams.get("known") ?? "").split(",").map((s) => s.trim()).filter((s) => /^[A-Za-z0-9]{1,40}$/.test(s)).slice(0, 120);
+        const gone = await whyGone(deps.pave, known.filter((id) => !have.has(id)), session);
+        return json(res, 200, { items, gone });
+      }
+
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
         // The session decides which punch items come back marked as theirs.
         return json(res, 200, await getJob(deps.pave, parts[1], session ?? undefined));
@@ -489,7 +537,10 @@ export function createHandler(deps: RouterDeps) {
             taskId = await createFinalInspection(deps.pave, jobId, ref);
             made = true;
           }
-          await closeInspectionTask(deps.pave, taskId, parseVisit(body), session.name, ref);
+          // A problem this visit reported unticks a line an earlier visit passed,
+          // while its repair is open (T2.34, D33): the job's open REPORT codes.
+          const openCodes = openReportCodes(await listPunchTasks(deps.pave, jobId));
+          await closeInspectionTask(deps.pave, taskId, parseVisit(body), session.name, ref, openCodes);
           // The board moves the Status (told how many problems the phone
           // found, so the REPORTs still on their way count) and the area's
           // reviewer is told what the inspection found.
@@ -528,7 +579,11 @@ export function createHandler(deps: RouterDeps) {
           }
           const items = formKey && formKey in AREA_CHECKLISTS ? AREA_CHECKLISTS[formKey as keyof typeof AREA_CHECKLISTS] : null;
           const checklist = items
-            ? { items, visit: parseVisit({ answers: body.answers ?? {}, notes: body.sectionNotes ?? {}, findings: body.findings ?? [] } as never) }
+            ? {
+                items,
+                visit: parseVisit({ answers: body.answers ?? {}, notes: body.sectionNotes ?? {}, findings: body.findings ?? [], naReasons: body.naReasons ?? {} } as never),
+                openCodes: openReportCodes(await listPunchTasks(deps.pave, jobId)),
+              }
             : undefined;
           let taskId = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line)?.id;
           if (!taskId) taskId = await createAreaInspection(deps.pave, jobId, area, line, ref);

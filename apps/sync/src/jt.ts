@@ -15,6 +15,9 @@ import {
   SERVICE_PROJECT_TYPES,
   STATUS,
   TASK_TYPES,
+  checklistLineName,
+  checklistLineParts,
+  cleanLineWords,
 } from "../../../packages/shared/src/jobtread";
 import type {
   Assignee,
@@ -582,22 +585,33 @@ export const ASSIGNED_SCAN_PAGE_SIZE = 40;
 export const ASSIGNED_SCAN_ASSIGNEES = 10;
 export const ASSIGNED_SCAN_PAGES = 10;
 
+/** One open close-out task naming the viewer, as the org-wide scan reads it. */
+export interface AssignedTask {
+  id: string;
+  name: string;
+  kind: "repair" | "inspection";
+  jobId: string;
+  jobNumber: string | null;
+  jobName: string | null;
+  startDate: string | null;
+  endDate: string | null;
+}
+
 /**
- * Every open punch/inspection task in the org that names the viewer,
- * grouped by job id. One org-wide query (paginated) instead of one query
- * per queue job, so the queue's Assigned tab costs a handful of requests
- * however many jobs are in the pipeline. progress != 1 deliberately keeps
- * null-progress tasks — JT leaves progress unset until someone touches it.
- *
- * Best-effort by design: any failure returns what was gathered so far
- * (possibly nothing). The queue itself must never die over the tabs.
+ * Every open punch/inspection task in the org that names the viewer, newest
+ * first. One org-wide query (paginated) instead of one per job, so it costs a
+ * handful of requests however many jobs are in the pipeline. progress != 1
+ * deliberately keeps null-progress tasks — JT leaves progress unset until
+ * someone touches it. `complete` is false when the scan stopped early on an
+ * error: what it gathered is returned, and a caller that diffs it (the
+ * Close Out push, T2.34) must not read the gap as work taken away.
  */
-export async function listAssignedWorkByJob(
+export async function scanAssignedTasks(
   pave: PaveClient,
   viewer: Viewer | undefined,
-): Promise<Map<string, AssignedWork>> {
-  const work = new Map<string, AssignedWork>();
-  if (!viewer) return work;
+): Promise<{ tasks: AssignedTask[]; complete: boolean }> {
+  const out: AssignedTask[] = [];
+  if (!viewer) return { tasks: out, complete: true };
   try {
     let page: string | null = null;
     for (let i = 0; i < ASSIGNED_SCAN_PAGES; i++) {
@@ -641,7 +655,8 @@ export async function listAssignedWorkByJob(
               startDate: {},
               endDate: {},
               taskType: { id: {} },
-              job: { id: {} },
+              // One object, not a list: its scalars do not add to the declared size.
+              job: { id: {}, number: {}, name: {} },
               assignedMemberships: {
                 $: { size: ASSIGNED_SCAN_ASSIGNEES },
                 nodes: { id: {}, user: { name: {}, emailAddress: {} } },
@@ -659,24 +674,106 @@ export async function listAssignedWorkByJob(
           email: m.user?.emailAddress ?? null,
         }));
         if (!isCloseoutTask(task) || !viewerMatches(assignees, viewer)) continue;
-        const entry = work.get(jobId) ?? { any: false, punchOpen: 0, booked: [] };
-        entry.any = true;
-        if (task.taskType?.id === TASK_TYPES.punchList) entry.punchOpen += 1;
-        addBooked(entry.booked, bookedDayOf(task));
-        work.set(jobId, entry);
+        const job = task.job as { id: string; number?: string | null; name?: string | null };
+        out.push({
+          id: task.id,
+          name: task.name ?? "",
+          kind: task.taskType?.id === TASK_TYPES.punchList ? "repair" : "inspection",
+          jobId,
+          jobNumber: job.number ?? null,
+          jobName: job.name ?? null,
+          startDate: task.startDate ?? null,
+          endDate: task.endDate ?? null,
+        });
       }
       if (!tasks?.nextPage) break;
       page = tasks.nextPage;
     }
   } catch (err) {
-    // Partial (or empty) is fine — worst case the Assigned tab under-counts
-    // until the next refresh; All still shows everything. But say so in the
-    // log: a rejected query here read as "0 assigned" with no trace anywhere.
+    // Said in the log: a rejected query here once read as "0 assigned" with
+    // no trace anywhere.
     console.warn(
       `assigned-work scan stopped early: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return { tasks: out, complete: false };
+  }
+  return { tasks: out, complete: true };
+}
+
+/**
+ * The same scan grouped by job, for the queue's Assigned tab. Best-effort by
+ * design: a scan that stopped early gives what it gathered (possibly
+ * nothing) — worst case the tab under-counts until the next refresh; All
+ * still shows everything. The queue itself must never die over the tabs.
+ */
+export async function listAssignedWorkByJob(
+  pave: PaveClient,
+  viewer: Viewer | undefined,
+): Promise<Map<string, AssignedWork>> {
+  const work = new Map<string, AssignedWork>();
+  const { tasks } = await scanAssignedTasks(pave, viewer);
+  for (const task of tasks) {
+    const entry = work.get(task.jobId) ?? { any: false, punchOpen: 0, booked: [] };
+    entry.any = true;
+    if (task.kind === "repair") entry.punchOpen += 1;
+    addBooked(entry.booked, bookedDayOf({ startDate: task.startDate, endDate: task.endDate, taskType: { id: task.kind === "repair" ? TASK_TYPES.punchList : TASK_TYPES.inspection } }));
+    work.set(task.jobId, entry);
   }
   return work;
+}
+
+/** Why a task the viewer had is no longer on their list: gone from JobTread, finished, or given to somebody else. */
+export interface GoneTask {
+  id: string;
+  why: "deleted" | "done" | "reassigned";
+  name?: string;
+  jobNumber?: string | null;
+  /** The job's own name, so the push can say where ("Turner Roof"). */
+  jobName?: string | null;
+  to?: string[];
+}
+
+/**
+ * For each task id the caller last saw on the viewer's list and no longer
+ * does: was it deleted, finished, or given to somebody else? A task still
+ * open and still theirs (the scan only reaches so far) is not gone and is
+ * left out. Throws on a JobTread error — a push must never guess.
+ */
+export async function whyGone(pave: PaveClient, ids: string[], viewer: Viewer): Promise<GoneTask[]> {
+  const out: GoneTask[] = [];
+  for (let i = 0; i < ids.length; i += ASSIGNED_SCAN_PAGE_SIZE) {
+    const chunk = ids.slice(i, i + ASSIGNED_SCAN_PAGE_SIZE);
+    const res: { organization: { tasks: { nodes: RawTask[] } } | null } = await pave.query({
+      organization: {
+        $: { id: ORGANIZATION_ID },
+        tasks: {
+          $: { size: ASSIGNED_SCAN_PAGE_SIZE, where: [["id"], "in", chunk] },
+          nodes: {
+            id: {},
+            name: {},
+            progress: {},
+            job: { id: {}, number: {}, name: {} },
+            assignedMemberships: {
+              $: { size: ASSIGNED_SCAN_ASSIGNEES },
+              nodes: { id: {}, user: { name: {}, emailAddress: {} } },
+            },
+          },
+        },
+      },
+    });
+    const found = new Map((res.organization?.tasks.nodes ?? []).map((t) => [t.id, t]));
+    for (const id of chunk) {
+      const t = found.get(id);
+      if (!t) { out.push({ id, why: "deleted" }); continue; }
+      const job = t.job as { number?: string | null; name?: string | null } | null;
+      const base = { id, name: t.name ?? "", jobNumber: job?.number ?? null, jobName: job?.name ?? null };
+      if ((t.progress ?? 0) >= 1) { out.push({ ...base, why: "done" }); continue; }
+      const assignees = (t.assignedMemberships?.nodes ?? []).map((m) => ({ name: m.user?.name ?? null, email: m.user?.emailAddress ?? null }));
+      if (viewerMatches(assignees, viewer)) continue;
+      out.push({ ...base, why: "reassigned", to: assignees.map((a) => a.name ?? "").filter(Boolean) });
+    }
+  }
+  return out;
 }
 
 // --------------------------------------------------------------------------
@@ -803,6 +900,8 @@ export interface VisitChecklists {
   /** `final`: the crew's closing notes on the visit (DB Crew T2.27 — required on the phone). */
   notes?: { inspection?: string; attic?: string; cleanup?: string; final?: string };
   findings?: ChecklistFinding[];
+  /** Why each line marked N/A does not apply, keyed by item key (DB Crew T2.34). */
+  naReasons?: Record<string, string>;
 }
 
 /** Marks every description line this server writes, so a replay can find its own stamp. */
@@ -819,32 +918,57 @@ const oneLine = (text: string, max: number): string => {
 
 /**
  * The checklist as JobTread stores it: eight inspection items, then the five
- * cleanup items — the template's names, untouched. Notes never go on the
- * entry: they are task MESSAGES that name the line (see postFindingComment).
+ * cleanup items — the template's text, then what the crew said about the
+ * line (DB Crew T2.34, audit D33): " — n/a: <reason>" and " — by: <who
+ * answered>" (checklistLineName). Notes never go on the entry: they are task
+ * MESSAGES that name the line (see postFindingComment).
  *
- * Ticked: OK, N/A, an ACTION the crew corrected on the spot (nothing is
- * left to do), and anything JT already shows ticked (a reported item whose
- * punch work has since closed — a replayed close must not untick it).
- * A reported ACTION stays unticked until its punch task closes.
+ * Ticked: OK, N/A (its marker says it was never done), an ACTION the crew
+ * corrected on the spot, and anything JT already shows ticked — a reported
+ * item whose punch work has since closed, so a replayed close must not
+ * untick it. Except: a problem THIS visit reports, while its repair is still
+ * open (`openCodes`, the item codes of the job's open REPORT to-dos), unticks
+ * a line an earlier visit passed. An open deficiency never reads as passed;
+ * a replay after the repair closed finds no open repair and keeps the tick.
+ * A line this visit did not answer keeps its N/A and who answered it.
  */
 export function checklistSubtasks(
   visit: VisitChecklists,
   current: Subtask[] = [],
-  list: ReadonlyArray<{ key: string; subtask: string }> = CHECKLIST_ITEMS,
+  list: ReadonlyArray<{ key: string; code?: string; subtask: string }> = CHECKLIST_ITEMS,
+  opts: { byName?: string; openCodes?: ReadonlySet<string> } = {},
 ): Subtask[] {
   const answered = { ...visit.cleanup, ...visit.inspection };
   const findingsFor = (key: string) => (visit.findings ?? []).filter((f) => f.itemKey === key);
+  const by = cleanLineWords(opts.byName ?? "", 60);
   return list.map((item) => {
     const findings = findingsFor(item.key);
     const answer = answered[item.key];
-    const already = current.find((s) => s.name === item.subtask)?.isComplete === true;
+    const prev = current.find((s) => checklistLineParts(s.name).base === item.subtask);
+    const was = prev ? checklistLineParts(prev.name) : { base: item.subtask };
+    const fixedAll = findings.length > 0 && findings.every((f) => f.fixedOnSite);
+    const reopened = answer === ANSWER.action && !fixedAll && !!item.code && !!opts.openCodes?.has(item.code);
     const ticked =
       answer === ANSWER.ok ||
       answer === ANSWER.na ||
-      (answer === ANSWER.action && findings.length > 0 && findings.every((f) => f.fixedOnSite)) ||
-      already;
-    return { name: item.subtask, isComplete: ticked };
+      (answer === ANSWER.action && fixedAll) ||
+      (prev?.isComplete === true && !reopened);
+    const answeredNow = answer === ANSWER.ok || answer === ANSWER.na || answer === ANSWER.action;
+    const na = answer === ANSWER.na ? cleanLineWords(visit.naReasons?.[item.key]) || true : answeredNow ? null : was.na ?? null;
+    const who = answeredNow && by ? by : was.by ?? null;
+    return { name: checklistLineName(item.subtask, { na, by: who }), isComplete: ticked };
   });
+}
+
+/** The checklist codes of a job's REPORT to-dos still open — what this visit's problems unticked. */
+export function openReportCodes(punch: ReadonlyArray<{ progress: number | null; description: string | null }>): Set<string> {
+  const out = new Set<string>();
+  for (const t of punch) {
+    if ((t.progress ?? 0) >= 1) continue;
+    const code = ITEM_MARKER.exec(t.description ?? "")?.[1];
+    if (code) out.add(code);
+  }
+  return out;
 }
 
 /** The one line the task description gets: who inspected. It is also the "closed" marker. */
@@ -1315,11 +1439,17 @@ export function inspectionReviewSummary(args: {
   const lines = ["🔍 READY FOR PM REVIEW — final inspection passed, no repairs needed", ...areaLine(args.area)];
   if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
   const open = args.checklist.filter((s) => !s.isComplete);
+  // N/A is not passed (T2.34, audit D33): said apart, with its reason.
+  const na = args.checklist.filter((s) => s.isComplete && checklistLineParts(s.name).na);
+  const naWords = na.length
+    ? ` — not applicable: ${na.map((s) => { const p = checklistLineParts(s.name); return p.na === true ? p.base : `${p.base} (${p.na})`; }).join("; ")}`
+    : "";
   if (args.checklist.length) {
+    const passed = args.checklist.length - open.length - na.length;
     lines.push(
       open.length === 0
-        ? `All ${args.checklist.length} checks passed`
-        : `${args.checklist.length - open.length} of ${args.checklist.length} checks passed — left open: ${open.map((s) => s.name).join("; ")}`,
+        ? (na.length ? `${passed} of ${args.checklist.length} checks passed${naWords}` : `All ${args.checklist.length} checks passed`)
+        : `${passed} of ${args.checklist.length} checks passed — left open: ${open.map((s) => checklistLineParts(s.name).base).join("; ")}${naWords}`,
     );
   }
   lines.push(...visitExtras(args.messages));
@@ -1478,6 +1608,7 @@ export async function closeInspectionTask(
   visit: VisitChecklists,
   byName: string,
   clientRef?: string,
+  openCodes?: ReadonlySet<string>,
 ): Promise<void> {
   const res = await pave.query<{
     task: { description: string | null; subtasks: Array<{ name?: string | null; isComplete?: boolean | null }> | null } | null;
@@ -1488,7 +1619,7 @@ export async function closeInspectionTask(
     name: st.name ?? "",
     isComplete: st.isComplete === true,
   }));
-  const subtasks = checklistSubtasks(visit, current);
+  const subtasks = checklistSubtasks(visit, current, CHECKLIST_ITEMS, { byName, openCodes });
   const note = inspectionNote(visit, byName);
   const existing = res.task?.description ?? "";
   const description = existing.includes(note) ? existing : existing ? `${existing}\n\n${note}` : note;
@@ -1529,7 +1660,7 @@ export async function closeAreaInspection(
   notes: string | undefined,
   byName: string,
   clientRef?: string,
-  checklist?: { items: ReadonlyArray<{ key: string; subtask: string }>; visit: VisitChecklists },
+  checklist?: { items: ReadonlyArray<{ key: string; code?: string; subtask: string }>; visit: VisitChecklists; openCodes?: ReadonlySet<string> },
 ): Promise<void> {
   const res = await pave.query<{
     task: { description: string | null; subtasks: Array<{ name?: string | null; isComplete?: boolean | null }> | null } | null;
@@ -1545,9 +1676,11 @@ export async function closeAreaInspection(
   let subtasks: Subtask[] | undefined;
   if (checklist) {
     const current: Subtask[] = (res.task?.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true }));
-    const written = checklistSubtasks(checklist.visit, current, checklist.items);
-    const ours = new Set(written.map((st) => st.name));
-    subtasks = [...written, ...current.filter((st) => !ours.has(st.name))];
+    const written = checklistSubtasks(checklist.visit, current, checklist.items, { byName, openCodes: checklist.openCodes });
+    // Ours by their base: a line now carrying " — by: Yahir" is the same line,
+    // never an office line to keep beside it (T2.34).
+    const ours = new Set(written.map((st) => checklistLineParts(st.name).base));
+    subtasks = [...written, ...current.filter((st) => !ours.has(checklistLineParts(st.name).base))];
   }
   await pave.query({
     updateTask: {
@@ -1863,11 +1996,14 @@ function officeStamp(iso: string): string {
 }
 
 /**
- * The name and description a photo's JobTread file gets. A camera shot keeps
- * the upload stamp it always had; a photo picked from the phone is named by
- * when it was TAKEN, says "from phone", and its description says so in words
- * — or that the time is unknown (screenshots and messaging-app copies carry
- * none), never a guess.
+ * The name and description a photo's JobTread file gets. A camera shot is
+ * stamped with when it was TAKEN, as the phone says (DB Crew T2.34, audit
+ * D37 — an after photo taken with no signal was filed hours later, in UTC),
+ * else when it arrived; both in the office's own clock. A photo picked from
+ * the phone is named by when it was taken, says "from phone", and its
+ * description says so in words — or that the time is unknown (screenshots
+ * and messaging-app copies carry none), never a guess. The label stays first:
+ * BEFORE / AFTER / INSPECTION are looked up by it.
  */
 export function photoFileWords(
   photo: Pick<PhotoUpload, "label" | "title" | "byName" | "fromPhone" | "takenAt">,
@@ -1876,10 +2012,11 @@ export function photoFileWords(
 ): { name: string; description: string } {
   const head = photo.title ?? photo.label;
   if (!photo.fromPhone) {
-    const stamp = now.toISOString().slice(0, 16).replace("T", " ");
+    const stamp = officeStamp(photo.takenAt ?? now.toISOString());
+    const taken = photo.takenAt ? ` · taken ${officeTime(photo.takenAt)}` : "";
     return {
       name: `${head} ${stamp} — ${photo.byName}`,
-      description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` · ${marker}` : ""}`,
+      description: `Uploaded from DB CheckOut by ${photo.byName}${taken}${marker ? ` · ${marker}` : ""}`,
     };
   }
   const taken = photo.takenAt ? ` (from phone, taken ${officeStamp(photo.takenAt)})` : " (from phone, time unknown)";

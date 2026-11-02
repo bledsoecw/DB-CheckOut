@@ -122,6 +122,31 @@ repair work — wired into JobTread and the DB Production board.
    on the job the phone names is 422 and is never ticked. Any JobTread
    "Could not find …" is 410 too (`isGone`); other JobTread trouble stays a
    502, which the phone retries.
+13. **What a line says, when a photo was taken, and what is assigned**
+   (DB Crew T2.34, audit D33/D37/I16, 2 Nov 2026). An N/A goes with its
+   reason (`naReasons`, by item key, on the close and the area close) and is
+   written onto the line's NAME, the way the board's own site checks carry
+   theirs, because a JobTread subtask is a name and a tick and nothing else:
+   `6. Chimneys, skylights … — n/a: no chimney — by: Yahir Gonzalez`, a bare
+   ` — n/a` when the phone gave no reason (`checklistLineName` /
+   `checklistLineParts` in `packages/shared/src/jobtread.ts`, the reader
+   stripping an older line's ` · ⚠ REPORT …`; typed words lose any marker
+   first, `cleanLineWords`, so a reason cannot split its own line). An N/A
+   line is written ticked, so JobTread's progress can reach the end; the
+   marker says it was never done. Every line this visit answered names who
+   answered it (`X-Acting-Name`); a line it did not answer keeps what it had.
+   A later inspection that answers Fix on a line, not fixed on site, while an
+   open REPORT punch item carries that line's code, unticks it
+   (`openReportCodes`), so an open problem never reads as passed. The review
+   summary counts N/A apart (*2 of 3 checks passed — not applicable: …*). A
+   camera photo now comes with `source: "camera"` and `takenAt` like a photo
+   picked from the phone's own, so one sent hours later is filed under the
+   office time it was taken (`photoOrigin`). `GET /assigned?known=…` lists
+   one person's open close-out work task by task (`scanAssignedTasks`) and
+   says why each id they last saw has gone — deleted, done, or given to
+   someone, named (`whyGone`); a scan that stopped early is a 502, never a
+   shorter list, because the Apps Script diffs it hourly for the Close Out
+   push and a gap would read as work taken away.
 
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:
@@ -170,7 +195,7 @@ its source, which `GET /health` reports as `build` (`source`, `on` —
 commit); and `test/bundle.test.ts` fails when the committed copy is older than
 the source, so rebuild and commit it with any change under `apps/sync/src`
 or `packages/shared/src`. `/health` also reports `contract`
-(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33): what DB Crew's phone
+(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34): what DB Crew's phone
 can count on this server for. DB Crew's Diagnostics shows it beside the
 build and warns while it is below the phone's `CO_CONTRACT_NEED`, so raise it
 in the change that gives the phone something new to depend on. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`

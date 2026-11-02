@@ -341,10 +341,13 @@ test("extractJobId reads JobTread's real delivery shape, and the older guesses",
   assert.equal(extractJobId({}), null);
 });
 
-test("photoOrigin: a phone photo carries its taken time; a bad time is dropped, never refused", () => {
+test("photoOrigin: a phone photo and a camera shot carry their taken time; a bad time is dropped, never refused", () => {
   const now = new Date("2026-10-13T18:00:00Z");
   assert.deepEqual(photoOrigin({}, now), { fromPhone: false });
-  assert.deepEqual(photoOrigin({ source: "camera", takenAt: "2026-10-12T18:10:00Z" }, now), { fromPhone: false }, "a time only counts on a phone photo");
+  // DB Crew T2.34 (audit D37): the camera's own time is kept, so a shot sent late is filed when it was taken.
+  assert.deepEqual(photoOrigin({ source: "camera", takenAt: "2026-10-12T18:10:00Z" }, now), { fromPhone: false, takenAt: "2026-10-12T18:10:00.000Z" });
+  assert.deepEqual(photoOrigin({ takenAt: "2026-10-12T18:10:00Z" }, now), { fromPhone: false }, "no source, no time: an older build's shot keeps its upload time");
+  assert.deepEqual(photoOrigin({ source: "camera", takenAt: "2026-10-20T00:00:00Z" }, now), { fromPhone: false }, "a clock set ahead is dropped for a camera shot too");
   assert.deepEqual(photoOrigin({ source: "phone", takenAt: "2026-10-12T14:10:00-04:00" }, now), { fromPhone: true, takenAt: "2026-10-12T18:10:00.000Z" });
   assert.deepEqual(photoOrigin({ source: "phone" }, now), { fromPhone: true });
   assert.deepEqual(photoOrigin({ source: "phone", takenAt: "yesterday" }, now), { fromPhone: true });
@@ -790,3 +793,48 @@ test("JobTread saying it cannot find a record is 410 Gone; other refusals stay 5
     assert.equal(call.out.status, want, body);
   }
 });
+
+// --------------------------------------------------------------------------
+// DB Crew T2.34
+// --------------------------------------------------------------------------
+
+test("T2.34 D33: parseVisit keeps each N/A's reason as words for the line's name", () => {
+  const v = parseVisit({ answers: { inspection: {}, cleanup: {} }, problemsReported: 0, naReasons: { a: "  no chimney — n/a: x ", b: 5, c: "   " } } as never);
+  assert.deepEqual(v.naReasons, { a: "no chimney x" });
+});
+
+test("T2.34 I16: GET /assigned lists the person's work task by task, says what has gone and why, and refuses a partial list", async () => {
+  const queries: PaveQuery[] = [];
+  const people = (name: string, email: string) => ({ nodes: [{ id: "m1", user: { name, emailAddress: email } }] });
+  let scanFails = false;
+  const deps = routerDeps((q) => {
+    const where = ((q as { organization?: { tasks?: { $?: { where?: unknown } } } }).organization?.tasks?.$?.where) as unknown;
+    if (Array.isArray(where) && where[1] === "in") {
+      return { organization: { tasks: { nodes: [
+        { id: "done1", name: "REPORT: Reseal", progress: 1, job: { id: "j1", number: "26-0415" }, assignedMemberships: people("Yahir Gonzalez", "yahirgonzalez@deitemeyerbrothers.com") },
+        { id: "moved1", name: "REPORT: Downspout", progress: 0, job: { id: "j1", number: "26-0415" }, assignedMemberships: people("Alberto Gonzalez", "alberto@deitemeyerbrothers.com") },
+      ] } } };
+    }
+    if (scanFails) throw new Error("Pave request failed (500)");
+    return { organization: { tasks: { nextPage: null, nodes: [
+      { id: "t1", name: "REPORT: Ridge vent nails", isToDo: true, startDate: "2026-11-04T00:00:00Z", endDate: null, taskType: { id: TASK_TYPES.punchList },
+        job: { id: "j2", number: "26-0540", name: "260540 Lane_Roof" }, assignedMemberships: people("Yahir Gonzalez", "yahirgonzalez@deitemeyerbrothers.com") },
+    ] } } };
+  }, queries);
+  const handle = createHandler(deps);
+  const h = fakeHttp("GET", "/assigned?known=t1,gone1,done1,moved1,bad id!");
+  await handle(h.req, h.res);
+  assert.equal(h.out.status, 200);
+  const body = JSON.parse(h.out.body);
+  assert.deepEqual(body.items, [{ id: "t1", kind: "repair", name: "REPORT: Ridge vent nails", jobId: "j2", jobNumber: "26-0540", jobName: "260540 Lane_Roof", date: "2026-11-04" }]);
+  assert.deepEqual(body.gone, [
+    { id: "gone1", why: "deleted" },
+    { id: "done1", name: "REPORT: Reseal", jobNumber: "26-0415", jobName: null, why: "done" },
+    { id: "moved1", name: "REPORT: Downspout", jobNumber: "26-0415", jobName: null, why: "reassigned", to: ["Alberto Gonzalez"] },
+  ]);
+  scanFails = true;
+  const h2 = fakeHttp("GET", "/assigned?known=t1");
+  await handle(h2.req, h2.res);
+  assert.equal(h2.out.status, 502, "a list JobTread did not finish is never a shorter list — the push would read the gap as taken away");
+});
+

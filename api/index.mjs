@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source d0b195b48064
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 157fcfa809fc
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "d0b195b48064", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "157fcfa809fc", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -208,6 +208,36 @@ var PUNCH_CREW = [
 var PM_REVIEWER = { name: "Dave Elick", membershipId: "22PLtDsn6f4P" };
 function isRoofingJob(job) {
   return job.jobType === "Roofing" || job.projectTypes.some((t) => t.startsWith("R-"));
+}
+var LINE_NA_MARK = " \u2014 n/a";
+var LINE_BY_MARK = " \u2014 by: ";
+function cleanLineWords(text, max = 120) {
+  return String(text ?? "").replace(/—\s*(?:n\/a|by|note)\b:?/gi, " ").replace(/\s+/g, " ").trim().slice(0, max).trim();
+}
+function checklistLineName(base, parts) {
+  let name = base;
+  if (parts.na) name += parts.na === true || !String(parts.na).trim() ? LINE_NA_MARK : `${LINE_NA_MARK}: ${parts.na}`;
+  if (parts.by) name += `${LINE_BY_MARK}${parts.by}`;
+  return name;
+}
+function checklistLineParts(name) {
+  const s = String(name ?? "");
+  const marks = [];
+  const by = s.indexOf(LINE_BY_MARK);
+  if (by >= 0) marks.push({ kind: "by", at: by, len: LINE_BY_MARK.length });
+  const na = / — n\/a(?=:|$| — )/.exec(s);
+  if (na) marks.push({ kind: "na", at: na.index, len: LINE_NA_MARK.length });
+  marks.sort((a, b) => a.at - b.at);
+  const out = {
+    base: (marks.length ? s.slice(0, marks[0].at) : s).split(" \xB7 \u26A0")[0].trim()
+  };
+  marks.forEach((m, i) => {
+    const end = i + 1 < marks.length ? marks[i + 1].at : s.length;
+    const v = s.slice(m.at + m.len, end).replace(/^:\s*/, "").trim();
+    if (m.kind === "na") out.na = v || true;
+    else if (v) out.by = v;
+  });
+  return out;
 }
 
 // packages/shared/src/i18n.ts
@@ -715,9 +745,9 @@ function isCloseoutTask(task) {
 var ASSIGNED_SCAN_PAGE_SIZE = 40;
 var ASSIGNED_SCAN_ASSIGNEES = 10;
 var ASSIGNED_SCAN_PAGES = 10;
-async function listAssignedWorkByJob(pave, viewer) {
-  const work = /* @__PURE__ */ new Map();
-  if (!viewer) return work;
+async function scanAssignedTasks(pave, viewer) {
+  const out = [];
+  if (!viewer) return { tasks: out, complete: true };
   try {
     let page = null;
     for (let i = 0; i < ASSIGNED_SCAN_PAGES; i++) {
@@ -759,7 +789,8 @@ async function listAssignedWorkByJob(pave, viewer) {
               startDate: {},
               endDate: {},
               taskType: { id: {} },
-              job: { id: {} },
+              // One object, not a list: its scalars do not add to the declared size.
+              job: { id: {}, number: {}, name: {} },
               assignedMemberships: {
                 $: { size: ASSIGNED_SCAN_ASSIGNEES },
                 nodes: { id: {}, user: { name: {}, emailAddress: {} } }
@@ -777,11 +808,17 @@ async function listAssignedWorkByJob(pave, viewer) {
           email: m.user?.emailAddress ?? null
         }));
         if (!isCloseoutTask(task) || !viewerMatches(assignees, viewer)) continue;
-        const entry2 = work.get(jobId) ?? { any: false, punchOpen: 0, booked: [] };
-        entry2.any = true;
-        if (task.taskType?.id === TASK_TYPES.punchList) entry2.punchOpen += 1;
-        addBooked(entry2.booked, bookedDayOf(task));
-        work.set(jobId, entry2);
+        const job = task.job;
+        out.push({
+          id: task.id,
+          name: task.name ?? "",
+          kind: task.taskType?.id === TASK_TYPES.punchList ? "repair" : "inspection",
+          jobId,
+          jobNumber: job.number ?? null,
+          jobName: job.name ?? null,
+          startDate: task.startDate ?? null,
+          endDate: task.endDate ?? null
+        });
       }
       if (!tasks?.nextPage) break;
       page = tasks.nextPage;
@@ -790,8 +827,63 @@ async function listAssignedWorkByJob(pave, viewer) {
     console.warn(
       `assigned-work scan stopped early: ${err instanceof Error ? err.message : String(err)}`
     );
+    return { tasks: out, complete: false };
+  }
+  return { tasks: out, complete: true };
+}
+async function listAssignedWorkByJob(pave, viewer) {
+  const work = /* @__PURE__ */ new Map();
+  const { tasks } = await scanAssignedTasks(pave, viewer);
+  for (const task of tasks) {
+    const entry2 = work.get(task.jobId) ?? { any: false, punchOpen: 0, booked: [] };
+    entry2.any = true;
+    if (task.kind === "repair") entry2.punchOpen += 1;
+    addBooked(entry2.booked, bookedDayOf({ startDate: task.startDate, endDate: task.endDate, taskType: { id: task.kind === "repair" ? TASK_TYPES.punchList : TASK_TYPES.inspection } }));
+    work.set(task.jobId, entry2);
   }
   return work;
+}
+async function whyGone(pave, ids, viewer) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += ASSIGNED_SCAN_PAGE_SIZE) {
+    const chunk = ids.slice(i, i + ASSIGNED_SCAN_PAGE_SIZE);
+    const res = await pave.query({
+      organization: {
+        $: { id: ORGANIZATION_ID },
+        tasks: {
+          $: { size: ASSIGNED_SCAN_PAGE_SIZE, where: [["id"], "in", chunk] },
+          nodes: {
+            id: {},
+            name: {},
+            progress: {},
+            job: { id: {}, number: {}, name: {} },
+            assignedMemberships: {
+              $: { size: ASSIGNED_SCAN_ASSIGNEES },
+              nodes: { id: {}, user: { name: {}, emailAddress: {} } }
+            }
+          }
+        }
+      }
+    });
+    const found = new Map((res.organization?.tasks.nodes ?? []).map((t) => [t.id, t]));
+    for (const id of chunk) {
+      const t = found.get(id);
+      if (!t) {
+        out.push({ id, why: "deleted" });
+        continue;
+      }
+      const job = t.job;
+      const base = { id, name: t.name ?? "", jobNumber: job?.number ?? null, jobName: job?.name ?? null };
+      if ((t.progress ?? 0) >= 1) {
+        out.push({ ...base, why: "done" });
+        continue;
+      }
+      const assignees = (t.assignedMemberships?.nodes ?? []).map((m) => ({ name: m.user?.name ?? null, email: m.user?.emailAddress ?? null }));
+      if (viewerMatches(assignees, viewer)) continue;
+      out.push({ ...base, why: "reassigned", to: assignees.map((a) => a.name ?? "").filter(Boolean) });
+    }
+  }
+  return out;
 }
 var TASK_WRITE_GUARDS = { updateDependentTasks: false, notify: false };
 function isInspectionClosed(task) {
@@ -838,16 +930,32 @@ var oneLine = (text, max) => {
   const flat2 = text.replace(/\s+/g, " ").trim();
   return flat2.length > max ? `${flat2.slice(0, max - 1)}\u2026` : flat2;
 };
-function checklistSubtasks(visit, current = [], list = CHECKLIST_ITEMS) {
+function checklistSubtasks(visit, current = [], list = CHECKLIST_ITEMS, opts = {}) {
   const answered = { ...visit.cleanup, ...visit.inspection };
   const findingsFor = (key) => (visit.findings ?? []).filter((f) => f.itemKey === key);
+  const by = cleanLineWords(opts.byName ?? "", 60);
   return list.map((item) => {
     const findings = findingsFor(item.key);
     const answer = answered[item.key];
-    const already = current.find((s) => s.name === item.subtask)?.isComplete === true;
-    const ticked = answer === ANSWER.ok || answer === ANSWER.na || answer === ANSWER.action && findings.length > 0 && findings.every((f) => f.fixedOnSite) || already;
-    return { name: item.subtask, isComplete: ticked };
+    const prev = current.find((s) => checklistLineParts(s.name).base === item.subtask);
+    const was = prev ? checklistLineParts(prev.name) : { base: item.subtask };
+    const fixedAll = findings.length > 0 && findings.every((f) => f.fixedOnSite);
+    const reopened = answer === ANSWER.action && !fixedAll && !!item.code && !!opts.openCodes?.has(item.code);
+    const ticked = answer === ANSWER.ok || answer === ANSWER.na || answer === ANSWER.action && fixedAll || prev?.isComplete === true && !reopened;
+    const answeredNow = answer === ANSWER.ok || answer === ANSWER.na || answer === ANSWER.action;
+    const na = answer === ANSWER.na ? cleanLineWords(visit.naReasons?.[item.key]) || true : answeredNow ? null : was.na ?? null;
+    const who = answeredNow && by ? by : was.by ?? null;
+    return { name: checklistLineName(item.subtask, { na, by: who }), isComplete: ticked };
   });
+}
+function openReportCodes(punch) {
+  const out = /* @__PURE__ */ new Set();
+  for (const t of punch) {
+    if ((t.progress ?? 0) >= 1) continue;
+    const code = ITEM_MARKER.exec(t.description ?? "")?.[1];
+    if (code) out.add(code);
+  }
+  return out;
 }
 function inspectionNote(_visit, byName) {
   return `${INSPECTED_STAMP}${byName} \u2014 ${CHECKLIST_STAMP}`;
@@ -1095,9 +1203,15 @@ function inspectionReviewSummary(args) {
   const lines = ["\u{1F50D} READY FOR PM REVIEW \u2014 final inspection passed, no repairs needed", ...areaLine(args.area)];
   if (args.inspector) lines.push(`Inspected by ${args.inspector}`);
   const open = args.checklist.filter((s) => !s.isComplete);
+  const na = args.checklist.filter((s) => s.isComplete && checklistLineParts(s.name).na);
+  const naWords = na.length ? ` \u2014 not applicable: ${na.map((s) => {
+    const p = checklistLineParts(s.name);
+    return p.na === true ? p.base : `${p.base} (${p.na})`;
+  }).join("; ")}` : "";
   if (args.checklist.length) {
+    const passed = args.checklist.length - open.length - na.length;
     lines.push(
-      open.length === 0 ? `All ${args.checklist.length} checks passed` : `${args.checklist.length - open.length} of ${args.checklist.length} checks passed \u2014 left open: ${open.map((s) => s.name).join("; ")}`
+      open.length === 0 ? na.length ? `${passed} of ${args.checklist.length} checks passed${naWords}` : `All ${args.checklist.length} checks passed` : `${passed} of ${args.checklist.length} checks passed \u2014 left open: ${open.map((s) => checklistLineParts(s.name).base).join("; ")}${naWords}`
     );
   }
   lines.push(...visitExtras(args.messages));
@@ -1180,7 +1294,7 @@ async function postInspectionReviewSummary(pave, inspectionTask, target, reviewe
   for (const fileId of photos) await attachFileToComment(pave, commentId, fileId);
   return commentId;
 }
-async function closeInspectionTask(pave, taskId, visit, byName, clientRef2) {
+async function closeInspectionTask(pave, taskId, visit, byName, clientRef2, openCodes) {
   const res = await pave.query({
     task: { $: { id: taskId }, description: {}, subtasks: { name: {}, isComplete: {} } }
   });
@@ -1188,7 +1302,7 @@ async function closeInspectionTask(pave, taskId, visit, byName, clientRef2) {
     name: st.name ?? "",
     isComplete: st.isComplete === true
   }));
-  const subtasks = checklistSubtasks(visit, current);
+  const subtasks = checklistSubtasks(visit, current, CHECKLIST_ITEMS, { byName, openCodes });
   const note = inspectionNote(visit, byName);
   const existing = res.task?.description ?? "";
   const description = existing.includes(note) ? existing : existing ? `${existing}
@@ -1225,9 +1339,9 @@ ${stamp}` : stamp;
   let subtasks;
   if (checklist) {
     const current = (res.task?.subtasks ?? []).map((st) => ({ name: st.name ?? "", isComplete: st.isComplete === true }));
-    const written = checklistSubtasks(checklist.visit, current, checklist.items);
-    const ours = new Set(written.map((st) => st.name));
-    subtasks = [...written, ...current.filter((st) => !ours.has(st.name))];
+    const written = checklistSubtasks(checklist.visit, current, checklist.items, { byName, openCodes: checklist.openCodes });
+    const ours = new Set(written.map((st) => checklistLineParts(st.name).base));
+    subtasks = [...written, ...current.filter((st) => !ours.has(checklistLineParts(st.name).base))];
   }
   await pave.query({
     updateTask: {
@@ -1420,10 +1534,11 @@ function officeStamp(iso) {
 function photoFileWords(photo, marker, now = /* @__PURE__ */ new Date()) {
   const head = photo.title ?? photo.label;
   if (!photo.fromPhone) {
-    const stamp = now.toISOString().slice(0, 16).replace("T", " ");
+    const stamp = officeStamp(photo.takenAt ?? now.toISOString());
+    const taken2 = photo.takenAt ? ` \xB7 taken ${officeTime(photo.takenAt)}` : "";
     return {
       name: `${head} ${stamp} \u2014 ${photo.byName}`,
-      description: `Uploaded from DB CheckOut by ${photo.byName}${marker ? ` \xB7 ${marker}` : ""}`
+      description: `Uploaded from DB CheckOut by ${photo.byName}${taken2}${marker ? ` \xB7 ${marker}` : ""}`
     };
   }
   const taken = photo.takenAt ? ` (from phone, taken ${officeStamp(photo.takenAt)})` : " (from phone, time unknown)";
@@ -1812,7 +1927,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 
 // apps/sync/src/routes.ts
 var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
-var PHONE_CONTRACT = 2;
+var PHONE_CONTRACT = 3;
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -1878,11 +1993,17 @@ function parseVisit(body) {
     note: typeof f["note"] === "string" ? f["note"] : "",
     photos: typeof f["photos"] === "number" && f["photos"] > 0 ? Math.floor(f["photos"]) : 0
   })) : [];
+  const naReasons = {};
+  for (const [k, v] of Object.entries(stringMap(body.naReasons))) {
+    const why = cleanLineWords(v);
+    if (why) naReasons[k] = why;
+  }
   return {
     inspection: nested ? stringMap(answers["inspection"]) : stringMap(answers),
     cleanup: nested ? stringMap(answers["cleanup"]) : {},
     notes: { inspection: notes["inspection"], attic: notes["attic"], cleanup: notes["cleanup"], final: notes["final"] },
-    findings
+    findings,
+    naReasons
   };
 }
 var PHOTO_LABELS = /* @__PURE__ */ new Set(["BEFORE", "AFTER", "REPAIR", "REPORT", "INSPECTION"]);
@@ -1902,7 +2023,8 @@ function decodeAudio(audioBase64) {
 var MAX_PHOTO_BYTES = 4e6;
 function photoOrigin(body, now = /* @__PURE__ */ new Date()) {
   const fromPhone = body.source === "phone";
-  if (!fromPhone || typeof body.takenAt !== "string" || !body.takenAt) return { fromPhone };
+  const camera = body.source === "camera";
+  if (!fromPhone && !camera || typeof body.takenAt !== "string" || !body.takenAt) return { fromPhone };
   const t = new Date(body.takenAt).getTime();
   if (!Number.isFinite(t) || t < Date.UTC(2e3, 0, 1) || t > now.getTime() + 864e5) return { fromPhone };
   return { fromPhone, takenAt: new Date(t).toISOString() };
@@ -2026,6 +2148,24 @@ function createHandler(deps) {
         }
         return json(res, 200, [...jobs, ...extra].sort((a, b) => a.number.localeCompare(b.number)));
       }
+      if (req.method === "GET" && url.pathname === "/assigned") {
+        if (!session) return json(res, 401, { error: "Unauthorized" });
+        const scan = await scanAssignedTasks(deps.pave, session);
+        if (!scan.complete) return json(res, 502, { error: "JobTread did not answer for the whole list \u2014 try again later" });
+        const items2 = scan.tasks.map((t) => ({
+          id: t.id,
+          kind: t.kind,
+          name: t.name,
+          jobId: t.jobId,
+          jobNumber: t.jobNumber,
+          jobName: t.jobName,
+          date: (t.startDate ?? t.endDate ?? "").slice(0, 10) || null
+        }));
+        const have = new Set(items2.map((i) => i.id));
+        const known = (url.searchParams.get("known") ?? "").split(",").map((s) => s.trim()).filter((s) => /^[A-Za-z0-9]{1,40}$/.test(s)).slice(0, 120);
+        const gone = await whyGone(deps.pave, known.filter((id) => !have.has(id)), session);
+        return json(res, 200, { items: items2, gone });
+      }
       if (req.method === "GET" && parts[0] === "jobs" && parts.length === 2) {
         return json(res, 200, await getJob(deps.pave, parts[1], session ?? void 0));
       }
@@ -2070,7 +2210,8 @@ function createHandler(deps) {
             taskId = await createFinalInspection(deps.pave, jobId, ref);
             made = true;
           }
-          await closeInspectionTask(deps.pave, taskId, parseVisit(body), session.name, ref);
+          const openCodes = openReportCodes(await listPunchTasks(deps.pave, jobId));
+          await closeInspectionTask(deps.pave, taskId, parseVisit(body), session.name, ref, openCodes);
           const outcome = await afterInspection(deps.pave, deps.board, { jobId, area: null, problemsReported, actor: session.name });
           return json(res, 200, { completedTaskId: taskId, made, flipped: outcome.flipped, sentTo: outcome.reviewer });
         }
@@ -2094,7 +2235,11 @@ function createHandler(deps) {
             return json(res, 400, { error: `The ${area} inspection is not the ${formKey} form` });
           }
           const items2 = formKey && formKey in AREA_CHECKLISTS ? AREA_CHECKLISTS[formKey] : null;
-          const checklist = items2 ? { items: items2, visit: parseVisit({ answers: body.answers ?? {}, notes: body.sectionNotes ?? {}, findings: body.findings ?? [] }) } : void 0;
+          const checklist = items2 ? {
+            items: items2,
+            visit: parseVisit({ answers: body.answers ?? {}, notes: body.sectionNotes ?? {}, findings: body.findings ?? [], naReasons: body.naReasons ?? {} }),
+            openCodes: openReportCodes(await listPunchTasks(deps.pave, jobId))
+          } : void 0;
           let taskId = areaInspectionTaskOf(await listPipelineTasks(deps.pave, jobId), area, line)?.id;
           if (!taskId) taskId = await createAreaInspection(deps.pave, jobId, area, line, ref);
           await closeAreaInspection(deps.pave, taskId, notes, session.name, ref, checklist);

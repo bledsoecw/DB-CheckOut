@@ -46,8 +46,12 @@ import {
   inspectorOf,
   inspectionReviewSummary,
   punchListSummary,
+  openReportCodes,
+  scanAssignedTasks,
+  whyGone,
   type PipelineTask,
 } from "../src/jt";
+import { checklistLineName, checklistLineParts, cleanLineWords } from "../../../packages/shared/src/jobtread";
 import { ensureWebhook, WEBHOOK_EVENT_TYPES } from "../src/webhookRegistration";
 import {
   ANSWER,
@@ -146,9 +150,11 @@ test("checklistSubtasks writes the eight inspection items then the five cleanup 
     cleanup: { [CLEANUP_ITEMS[4].key]: ANSWER.ok },
   });
   assert.equal(subtasks.length, INSPECTION_ITEMS.length + CLEANUP_ITEMS.length);
+  // The template's text, and an N/A line says so on its name (DB Crew T2.34, D33):
+  // with no reason from the phone it is a bare " — n/a", still ticked.
   assert.deepEqual(
     subtasks.map((s) => s.name),
-    [...INSPECTION_ITEMS.map((i) => i.subtask), ...CLEANUP_ITEMS.map((i) => i.subtask)],
+    [...INSPECTION_ITEMS.map((i, n) => (n === 1 ? `${i.subtask} — n/a` : i.subtask)), ...CLEANUP_ITEMS.map((i) => i.subtask)],
   );
   assert.deepEqual(
     subtasks.map((s) => s.isComplete),
@@ -378,7 +384,11 @@ test("closeInspectionTask replaces the checklist, stamps the description, and po
   assert.equal(dollar["progress"], 1);
   assert.equal(dollar["updateDependentTasks"], false, "the pipeline tasks are a chain — never let JT re-date them");
   assert.equal(dollar["notify"], false);
-  assert.deepEqual((dollar["subtasks"] as Array<{ name: string }>).map((s) => s.name), CHECKLIST_NAMES);
+  // The line this visit answered says who answered it (DB Crew T2.34, D33); the rest stay the template's.
+  assert.deepEqual(
+    (dollar["subtasks"] as Array<{ name: string }>).map((s) => s.name),
+    CHECKLIST_NAMES.map((n, i) => (i === 0 ? `${n} — by: Alberto Gonzalez` : n)),
+  );
   assert.equal(dollar["description"], "Complete the quality inspection.\n\n✔ Inspected by Alberto Gonzalez — via DB CheckOut");
   const message = dollarOf(queries[3], "createComment");
   assert.equal(message["targetId"], "fi1");
@@ -672,12 +682,20 @@ test("uploadPhoto requests an upload, sends the bytes, attaches the file to the 
   assert.match(String(createDollar["name"]), /^AFTER .*Yahir Gonzalez$/);
 });
 
-test("photoFileWords: a camera shot keeps the upload stamp; a phone photo says when it was taken", () => {
+test("photoFileWords: a camera shot is stamped when it was taken, in office time; a phone photo says when it was taken", () => {
   const now = new Date("2026-10-13T18:40:00Z");
+  // No time from the phone (an older build): when it arrived, in the office's clock — 18:40Z is 2:40 PM EDT.
   const camera = photoFileWords({ label: "AFTER", byName: "Yahir Gonzalez" }, "DB CheckOut ref: 1-ab.p0", now);
   assert.deepEqual(camera, {
-    name: "AFTER 2026-10-13 18:40 — Yahir Gonzalez",
+    name: "AFTER 2026-10-13 14:40 — Yahir Gonzalez",
     description: "Uploaded from DB CheckOut by Yahir Gonzalez · DB CheckOut ref: 1-ab.p0",
+  });
+  // DB Crew T2.34 (audit D37): a camera shot carries when it was taken — sent four hours later
+  // from a dead spot, it is still filed under 10:15 AM, not when it arrived.
+  const late = photoFileWords({ label: "AFTER", byName: "Yahir Gonzalez", takenAt: "2026-10-13T14:15:00.000Z" }, "DB CheckOut ref: 1-ab.p0", now);
+  assert.deepEqual(late, {
+    name: "AFTER 2026-10-13 10:15 — Yahir Gonzalez",
+    description: "Uploaded from DB CheckOut by Yahir Gonzalez · taken Oct 13, 2026, 10:15 AM · DB CheckOut ref: 1-ab.p0",
   });
   // 18:10Z on 12 Oct is 2:10 PM in Ohio (EDT): named and said in the office's clock.
   const phone = photoFileWords({ label: "AFTER", byName: "Yahir Gonzalez", fromPhone: true, takenAt: "2026-10-12T18:10:00.000Z" }, "DB CheckOut ref: 1-ab.p0", now);
@@ -1350,3 +1368,143 @@ test("punchListSummary: every repair to schedule, its note, who it is for, then 
   );
   assert.match(punchListSummary({ inspector: null, open: [], reported: 1, messages: [], photosLinked: 0 }), /found 1 thing to repair\n\n1 more reported on the phone is still on the way[\s\S]*No problem photos have reached JobTread yet/);
 });
+
+// --------------------------------------------------------------------------
+// DB Crew T2.34: what a checklist line says (D33), and one person's work (I16)
+// --------------------------------------------------------------------------
+
+test("T2.34 D33: a line's name carries its N/A and who answered, read back whatever the order", () => {
+  const base = "1. Shingle field flat — no exposed fasteners or unaddressed damage";
+  assert.equal(checklistLineName(base, {}), base);
+  assert.equal(checklistLineName(base, { na: "no chimney", by: "Yahir Gonzalez" }), `${base} — n/a: no chimney — by: Yahir Gonzalez`);
+  assert.equal(checklistLineName(base, { na: true }), `${base} — n/a`);
+  assert.deepEqual(checklistLineParts(`${base} — n/a: no chimney — by: Yahir Gonzalez`), { base, na: "no chimney", by: "Yahir Gonzalez" });
+  assert.deepEqual(checklistLineParts(`${base} — by: Yahir — n/a: city sewer`), { base, na: "city sewer", by: "Yahir" });
+  assert.deepEqual(checklistLineParts(`${base} — n/a`), { base, na: true });
+  assert.deepEqual(checklistLineParts(`${base} — n/a: `), { base, na: true }, "an empty reason is a bare n/a");
+  assert.deepEqual(checklistLineParts(`${base} — n/a: no starter — metal roof — by: Y`), { base, na: "no starter — metal roof", by: "Y" }, "only the keyword markers split");
+  assert.deepEqual(checklistLineParts(base), { base });
+  assert.deepEqual(checklistLineParts(`${base} · ⚠ REPORT — lifted tab`), { base }, "an older line's REPORT suffix is not its base");
+  assert.equal(cleanLineWords("  no chimney — n/a: x \n — by: me "), "no chimney x me", "the markers come out of typed words");
+});
+
+test("T2.34 D33: N/A is written with its reason, every answered line with who answered it, and an unanswered line keeps both", () => {
+  const [a, b, c] = INSPECTION_ITEMS;
+  const prev = [{ name: `${c.subtask} — n/a: no ridge — by: Alberto Gonzalez`, isComplete: true }];
+  const out = checklistSubtasks(
+    { inspection: { [a.key]: ANSWER.ok, [b.key]: ANSWER.na }, cleanup: {}, naReasons: { [b.key]: "metal roof, no starter" } },
+    prev,
+    undefined,
+    { byName: "Yahir Gonzalez" },
+  );
+  assert.deepEqual(out.slice(0, 3), [
+    { name: `${a.subtask} — by: Yahir Gonzalez`, isComplete: true },
+    { name: `${b.subtask} — n/a: metal roof, no starter — by: Yahir Gonzalez`, isComplete: true },
+    { name: `${c.subtask} — n/a: no ridge — by: Alberto Gonzalez`, isComplete: true },
+  ]);
+  // Answered OK now, it was N/A before: the n/a comes off.
+  const again = checklistSubtasks({ inspection: { [c.key]: ANSWER.ok }, cleanup: {} }, prev, undefined, { byName: "Yahir Gonzalez" });
+  assert.equal(again[2].name, `${c.subtask} — by: Yahir Gonzalez`);
+});
+
+test("T2.34 D33: a problem reported on a line an earlier visit passed unticks it while its repair is open; a replay after the repair keeps the tick", () => {
+  const item = INSPECTION_ITEMS[3];
+  const prev = [{ name: `${item.subtask} — by: Alberto Gonzalez`, isComplete: true }];
+  const finding = { itemKey: item.key, fixedOnSite: false, location: "", note: "Boot cracked", photos: 1 };
+  const visit = { inspection: { [item.key]: ANSWER.action }, cleanup: {}, findings: [finding] };
+  const open = checklistSubtasks(visit, prev, undefined, { byName: "Yahir Gonzalez", openCodes: new Set([item.code]) });
+  assert.deepEqual(open[3], { name: `${item.subtask} — by: Yahir Gonzalez`, isComplete: false }, "an open deficiency never reads as passed");
+  const replay = checklistSubtasks(visit, prev, undefined, { byName: "Yahir Gonzalez", openCodes: new Set() });
+  assert.equal(replay[3].isComplete, true, "its repair has closed: a replayed close keeps the tick, as before");
+  const fixed = checklistSubtasks({ ...visit, findings: [{ ...finding, fixedOnSite: true }] }, prev, undefined, { openCodes: new Set([item.code]) });
+  assert.equal(fixed[3].isComplete, true, "fixed on the spot leaves nothing open");
+});
+
+test("T2.34: openReportCodes reads the item codes of the open REPORT to-dos only", () => {
+  const codes = openReportCodes([
+    { progress: 0, description: "Lifted tab\n\nDB CheckOut item: 4" },
+    { progress: 1, description: "DB CheckOut item: 2" },
+    { progress: null, description: "DB CheckOut item: G3" },
+    { progress: 0, description: "no marker here" },
+  ]);
+  assert.deepEqual([...codes].sort(), ["4", "G3"]);
+});
+
+test("T2.34: an area's own lines, renamed with who answered, are never kept a second time as office lines", async () => {
+  const items = AREA_CHECKLISTS.gutters;
+  const { client, queries } = fakePave((q) =>
+    "task" in q
+      ? { task: { description: "Gutters", subtasks: [{ name: items[0].subtask, isComplete: false }, { name: "Office: check the extension at the garage", isComplete: false }] } }
+      : {},
+  );
+  await closeAreaInspection(client, "ga1", undefined, "Yahir Gonzalez", undefined, {
+    items,
+    visit: { inspection: { [items[0].key]: ANSWER.ok }, cleanup: {} },
+    openCodes: new Set(),
+  });
+  const written = dollarOf(queries[1], "updateTask")["subtasks"] as Array<{ name: string; isComplete: boolean }>;
+  assert.equal(written.length, items.length + 1, "every area line once, then the office's line");
+  assert.equal(written[0].name, `${items[0].subtask} — by: Yahir Gonzalez`);
+  assert.equal(written[written.length - 1].name, "Office: check the extension at the garage");
+});
+
+test("T2.34: the PM's review summary says N/A apart from passed, with its reason", () => {
+  const text = inspectionReviewSummary({
+    inspector: "Yahir Gonzalez",
+    checklist: [
+      { name: "1. Field flat — by: Yahir Gonzalez", isComplete: true },
+      { name: "6. Chimneys flashed — n/a: no chimney — by: Yahir Gonzalez", isComplete: true },
+      { name: "7. Sealant appropriate", isComplete: true },
+    ],
+    messages: [],
+    photosLinked: 0,
+  });
+  assert.match(text, /2 of 3 checks passed — not applicable: 6\. Chimneys flashed \(no chimney\)/);
+  assert.doesNotMatch(text, /All 3 checks passed/);
+});
+
+const YAHIR = { email: "yahirgonzalez@deitemeyerbrothers.com", name: "Yahir Gonzalez" };
+const assigneeNodes = (...people: Array<[string, string]>) => ({ nodes: people.map(([name, emailAddress], i) => ({ id: `m${i}`, user: { name, emailAddress } })) });
+
+test("T2.34 I16: the assigned scan gives each task with its job, and says when it stopped early", async () => {
+  const { client } = fakePave(() => ({
+    organization: {
+      tasks: {
+        nextPage: null,
+        nodes: [
+          { id: "t1", name: "REPORT: Reseal the pipe boot", isToDo: true, startDate: "2026-11-04", endDate: null, taskType: { id: TASK_TYPES.punchList },
+            job: { id: "j1", number: "26-0415", name: "260415 Okafor_Roof" }, assignedMemberships: assigneeNodes(["Yahir Gonzalez", YAHIR.email]) },
+          { id: "t2", name: "REPORT: Not his", isToDo: true, taskType: { id: TASK_TYPES.punchList },
+            job: { id: "j2", number: "26-0416", name: "x" }, assignedMemberships: assigneeNodes(["Alberto Gonzalez", "alberto@deitemeyerbrothers.com"]) },
+        ],
+      },
+    },
+  }));
+  const r = await scanAssignedTasks(client, YAHIR);
+  assert.equal(r.complete, true);
+  assert.deepEqual(r.tasks.map((t) => [t.id, t.kind, t.jobNumber, t.startDate]), [["t1", "repair", "26-0415", "2026-11-04"]]);
+  const broken = fakePave(() => { throw new Error("Pave request failed (500)"); });
+  const r2 = await scanAssignedTasks(broken.client, YAHIR);
+  assert.deepEqual(r2, { tasks: [], complete: false }, "a stopped scan is said, never passed off as a short list");
+});
+
+test("T2.34 I16: whyGone says deleted, done or given to somebody else, and leaves out what is still theirs", async () => {
+  const { client } = fakePave(() => ({
+    organization: {
+      tasks: {
+        nodes: [
+          { id: "done1", name: "REPORT: A", progress: 1, job: { id: "j", number: "26-0415" }, assignedMemberships: assigneeNodes(["Yahir Gonzalez", YAHIR.email]) },
+          { id: "moved1", name: "REPORT: B", progress: 0, job: { id: "j", number: "26-0415", name: "260415 Turner_Roof" }, assignedMemberships: assigneeNodes(["Alberto Gonzalez", "alberto@deitemeyerbrothers.com"]) },
+          { id: "still1", name: "REPORT: C", progress: 0, job: { id: "j", number: "26-0415" }, assignedMemberships: assigneeNodes(["Yahir Gonzalez", YAHIR.email]) },
+        ],
+      },
+    },
+  }));
+  const gone = await whyGone(client, ["gone1", "done1", "moved1", "still1"], YAHIR);
+  assert.deepEqual(gone, [
+    { id: "gone1", why: "deleted" },
+    { id: "done1", name: "REPORT: A", jobNumber: "26-0415", jobName: null, why: "done" },
+    { id: "moved1", name: "REPORT: B", jobNumber: "26-0415", jobName: "260415 Turner_Roof", why: "reassigned", to: ["Alberto Gonzalez"] },
+  ]);
+});
+

@@ -313,3 +313,51 @@ export const ROLES = {
   frontOffice: "22PEWd4hUQ2j",
   accountsManager: "22PQcyVsGZTt",
 } as const;
+
+/**
+ * What the crew said about a checklist line rides on the line's NAME (DB Crew
+ * T2.34, audit D33): a JobTread subtask is a name and a tick, nothing else.
+ * The way the board's own site checks do it — " — n/a: <reason>" (a bare
+ * " — n/a" when the phone gave none) and " — by: <who answered>", in that
+ * order. The base is the template's text, which itself carries " — ", so
+ * only these exact markers split it. An N/A line is written ticked, so
+ * JobTread's progress can reach the end; the marker says it was never done.
+ */
+export const LINE_NA_MARK = " — n/a";
+export const LINE_BY_MARK = " — by: ";
+/** Words for a line's name: the markers taken out, one line, capped. */
+export function cleanLineWords(text: unknown, max = 120): string {
+  return String(text ?? "")
+    .replace(/—\s*(?:n\/a|by|note)\b:?/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max)
+    .trim();
+}
+export function checklistLineName(base: string, parts: { na?: string | true | null; by?: string | null }): string {
+  let name = base;
+  if (parts.na) name += parts.na === true || !String(parts.na).trim() ? LINE_NA_MARK : `${LINE_NA_MARK}: ${parts.na}`;
+  if (parts.by) name += `${LINE_BY_MARK}${parts.by}`;
+  return name;
+}
+/** A line's name read back: its template base, its N/A (the reason, or true), who answered. */
+export function checklistLineParts(name: string): { base: string; na?: string | true; by?: string } {
+  const s = String(name ?? "");
+  const marks: Array<{ kind: "na" | "by"; at: number; len: number }> = [];
+  const by = s.indexOf(LINE_BY_MARK);
+  if (by >= 0) marks.push({ kind: "by", at: by, len: LINE_BY_MARK.length });
+  const na = / — n\/a(?=:|$| — )/.exec(s);
+  if (na) marks.push({ kind: "na", at: na.index, len: LINE_NA_MARK.length });
+  marks.sort((a, b) => a.at - b.at);
+  // An older line could carry " · ⚠ REPORT — …" after its base: it is not the base.
+  const out: { base: string; na?: string | true; by?: string } = {
+    base: (marks.length ? s.slice(0, marks[0].at) : s).split(" · ⚠")[0].trim(),
+  };
+  marks.forEach((m, i) => {
+    const end = i + 1 < marks.length ? marks[i + 1].at : s.length;
+    const v = s.slice(m.at + m.len, end).replace(/^:\s*/, "").trim();
+    if (m.kind === "na") out.na = v || true;
+    else if (v) out.by = v;
+  });
+  return out;
+}
