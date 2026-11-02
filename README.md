@@ -147,6 +147,25 @@ repair work — wired into JobTread and the DB Production board.
    someone, named (`whyGone`); a scan that stopped early is a 502, never a
    shorter list, because the Apps Script diffs it hourly for the Close Out
    push and a gap would read as work taken away.
+14. **A repair that can't be finished today stays open and says why** (DB
+   Crew T2.35, audit I10, 2 Nov 2026). `POST /tasks/:id/blocked` takes
+   `reason` — `material` · `access` · `weather` · `decision` · `other` — and
+   `note`, which `material`, `decision` and `other` must carry (a 400
+   otherwise). It writes one waiting line on the to-do's description, the
+   Production Board's own family (`⏳ Waiting on material` · `on access` ·
+   `on the weather` · `on a decision` · a bare `⏳ Waiting`, then ` — <words>
+   (<name>, <Mon D>)`; `waitingLine` / `waitingOf` in
+   `packages/shared/src/jobtread.ts`, the board's `waitingOf` in
+   `src/lib/trades.ts` — change them together), replacing any earlier one,
+   and takes the spent repair day off (`markRepairWaiting`): the board's
+   Close-out list asks only about open repairs with no day, so that is what
+   puts it in front of the PM. It posts "⏳ COULDN'T FINISH — …" on the
+   to-do, tagged to the area's reviewer (the board asked with `move: false`;
+   the seed when the board is unset), with the photos sent under the send's
+   reference `.m0`, `.m1`… linked. A to-do JobTread no longer has is 410, one
+   that is not a repair on that job 422, one already done 422. The repair is
+   listed with `waiting: { reason, note }`; finishing it later
+   (`completeTask`) takes the line off.
 
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:
@@ -199,7 +218,7 @@ its source, which `GET /health` reports as `build` (`source`, `on` —
 commit); and `test/bundle.test.ts` fails when the committed copy is older than
 the source, so rebuild and commit it with any change under `apps/sync/src`
 or `packages/shared/src`. `/health` also reports `contract`
-(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34): what DB Crew's phone
+(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34, 4 since T2.35): what DB Crew's phone
 can count on this server for. DB Crew's Diagnostics shows it beside the
 build and warns while it is below the phone's `CO_CONTRACT_NEED`, so raise it
 in the change that gives the phone something new to depend on. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`
