@@ -838,3 +838,23 @@ test("T2.34 I16: GET /assigned lists the person's work task by task, says what h
   assert.equal(h2.out.status, 502, "a list JobTread did not finish is never a shorter list — the push would read the gap as taken away");
 });
 
+
+// Every path the handler answers has to be routed to it on Vercel: anything
+// vercel.json does not name falls through to public/index.html, the retired
+// app's notice page, and answers 200 with HTML. GET /assigned shipped that way
+// on the first T2.34 preview (DB Crew T2.34): the hourly Close Out push would
+// have read every answer as a failure and said nothing, for good. The handler
+// is tested by calling it directly, so only this check sees the routing.
+test("T2.34: every path the handler answers is routed to the API in vercel.json", async () => {
+  const { readFileSync } = await import("node:fs");
+  const root = new URL("../../../", import.meta.url);
+  const vercel = JSON.parse(readFileSync(new URL("vercel.json", root), "utf8")) as { rewrites: { source: string; destination: string }[] };
+  const toApi = new Set(vercel.rewrites.filter((r) => r.destination === "/api").map((r) => r.source));
+  const src = readFileSync(new URL("apps/sync/src/routes.ts", root), "utf8");
+  const exact = [...src.matchAll(/url\.pathname === "(\/[^"]*)"/g)].map((m) => m[1]);
+  const prefixed = [...src.matchAll(/parts\[0\] === "([^"]+)"/g)].map((m) => `/${m[1]}/:rest*`);
+  const wanted = [...new Set([...exact, ...prefixed])].sort();
+  assert.ok(wanted.includes("/assigned") && wanted.includes("/jobs/:rest*"), "the scan still finds the handler's paths");
+  assert.deepEqual(wanted.filter((path) => !toApi.has(path)), [], "a path the handler answers that Vercel never sends it");
+  assert.equal(vercel.rewrites[vercel.rewrites.length - 1].source, "/(.*)", "the notice page stays the last rewrite, after the API's");
+});

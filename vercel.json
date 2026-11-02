@@ -7,6 +7,7 @@
     { "source": "/translate", "destination": "/api" },
     { "source": "/transcribe", "destination": "/api" },
     { "source": "/queue", "destination": "/api" },
+    { "source": "/assigned", "destination": "/api" },
     { "source": "/jobs/:rest*", "destination": "/api" },
     { "source": "/tasks/:rest*", "destination": "/api" },
     { "source": "/webhooks/:rest*", "destination": "/api" },
