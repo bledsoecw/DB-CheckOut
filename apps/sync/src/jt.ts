@@ -18,6 +18,8 @@ import {
   checklistLineName,
   checklistLineParts,
   cleanLineWords,
+  waitingOf,
+  withWaitingLine,
 } from "../../../packages/shared/src/jobtread";
 import type {
   Assignee,
@@ -487,6 +489,8 @@ export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<P
         assigneeNames: assignees.map((a) => a.name).filter((n) => n.length > 0),
         // Filled in by getJob, which is the layer that knows who is asking.
         mine: false,
+        // Why it is waiting, if it is (DB Crew T2.35, audit I10).
+        waiting: waitingOf(t.description),
       };
     });
 }
@@ -1901,6 +1905,9 @@ export interface RepairTaskInfo {
   isToDo: boolean;
   typeId: string | null;
   progress: number;
+  /** For its work area (areaOfPunch) when the crew cannot finish it (T2.35). */
+  name?: string;
+  description?: string | null;
 }
 
 /**
@@ -1911,13 +1918,93 @@ export interface RepairTaskInfo {
  */
 export async function readRepairTask(pave: PaveClient, taskId: string): Promise<RepairTaskInfo | null> {
   const res = await pave.query<{
-    task: { id: string; isToDo?: boolean | null; progress?: number | null; taskType?: { id: string } | null; job?: { id: string } | null } | null;
+    task: {
+      id: string;
+      name?: string | null;
+      description?: string | null;
+      isToDo?: boolean | null;
+      progress?: number | null;
+      taskType?: { id: string } | null;
+      job?: { id: string } | null;
+    } | null;
   }>({
-    task: { $: { id: taskId }, id: {}, isToDo: {}, progress: {}, taskType: { id: {} }, job: { id: {} } },
+    task: { $: { id: taskId }, id: {}, name: {}, description: {}, isToDo: {}, progress: {}, taskType: { id: {} }, job: { id: {} } },
   });
   const t = res.task;
   if (!t) return null;
-  return { id: t.id, jobId: t.job?.id ?? null, isToDo: t.isToDo === true, typeId: t.taskType?.id ?? null, progress: t.progress ?? 0 };
+  return {
+    id: t.id,
+    jobId: t.job?.id ?? null,
+    isToDo: t.isToDo === true,
+    typeId: t.taskType?.id ?? null,
+    progress: t.progress ?? 0,
+    name: t.name ?? "",
+    description: t.description ?? null,
+  };
+}
+
+/**
+ * The crew could not finish the repair (DB Crew T2.35, audit I10): it stays
+ * open, its waiting line says why, and its repair day comes off — that day
+ * was spent, and a dated item drops off the board's list of repairs to book,
+ * which is where the PM has to see it. Idempotent: a re-sent call finds the
+ * same line and no day.
+ */
+export async function markRepairWaiting(pave: PaveClient, task: RepairTaskInfo, line: string): Promise<void> {
+  const description = withWaitingLine(task.description ?? "", line).slice(0, 4096);
+  await pave.query({
+    updateTask: {
+      $: { id: task.id, ...TASK_WRITE_GUARDS, description, startDate: null, endDate: null },
+    },
+  });
+}
+
+/** What the reason is called in the crew's message. */
+const WAITING_WORDS: Readonly<Record<string, string>> = {
+  material: "waiting on material",
+  access: "no access",
+  weather: "the weather",
+  decision: "needs a decision",
+  other: "",
+};
+
+/** The message a repair the crew could not finish posts on its own to-do. */
+export function repairWaitingMessage(reason: string, note: string | undefined, byName: string): string {
+  const why = WAITING_WORDS[reason] ?? "";
+  const said = note?.trim();
+  return [
+    `⏳ COULDN'T FINISH${why ? ` — ${why}` : ""}`,
+    ...(said ? [said] : []),
+    `${byName} via DB CheckOut. The repair stays open: book it again on the Production Board (Close-out).`,
+  ].join("\n");
+}
+
+/**
+ * Post that message, tagged to whoever reviews the repair's work area, with
+ * the photos the crew sent with it (they ride ".m0", ".m1"… after the send's
+ * reference, as a repair's extra photos do). A re-send finds its message.
+ */
+export async function postRepairWaiting(
+  pave: PaveClient,
+  taskId: string,
+  message: string,
+  clientRef: string | undefined,
+  tagged: readonly string[],
+): Promise<{ commentId: string; photos: number }> {
+  const commentId = await postTaskMessage(pave, taskId, message, clientRef, tagged);
+  if (!commentId || !clientRef) return { commentId, photos: 0 };
+  const picked = pickRepairPhotos(await listTaskFiles(pave, taskId), clientRef);
+  let photos = 0;
+  for (const fileId of picked.more) {
+    await attachFileToComment(pave, commentId, fileId);
+    photos++;
+  }
+  return { commentId, photos };
+}
+
+/** "Nov 3" in the office's own clock — the day on a waiting line. */
+export function officeDay(at: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(at);
 }
 
 /** A punch item the phone lists, and so may finish: a Punch List-typed to-do (`listPunchTasks`'s own rule). */

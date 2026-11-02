@@ -90,6 +90,12 @@ export interface PunchTask {
    * its tag line; null when no area claims it. Only GET /jobs/:id sets it.
    */
   area?: string | null;
+  /**
+   * Why it is waiting, off its "⏳ Waiting…" line (DB Crew T2.35, audit I10):
+   * the crew could not finish it, or the PM parked it on material. null when
+   * nothing is waiting; absent from a server older than contract 4.
+   */
+  waiting?: { reason: "material" | "access" | "weather" | "decision" | "other"; note: string } | null;
 }
 
 /** One line of an approved customer order (the record stays English). */

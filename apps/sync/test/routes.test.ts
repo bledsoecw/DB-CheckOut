@@ -858,3 +858,123 @@ test("T2.34: every path the handler answers is routed to the API in vercel.json"
   assert.deepEqual(wanted.filter((path) => !toApi.has(path)), [], "a path the handler answers that Vercel never sends it");
   assert.equal(vercel.rewrites[vercel.rewrites.length - 1].source, "/(.*)", "the notice page stays the last rewrite, after the API's");
 });
+
+// --------------------------------------------------------------------------
+// DB Crew T2.35 — "Can't finish today" (audit I10)
+// --------------------------------------------------------------------------
+
+interface WaitTask { id: string; name: string; description: string | null; progress?: number; isToDo?: boolean; typeId?: string; jobId?: string }
+
+/** McCoy's job, with one repair the routes read as a repair, and its files. */
+function waitingResponder(task: WaitTask | null, files: Array<{ id: string; name: string; description: string }> = []) {
+  const base = areaResponder(McCOY);
+  return (q: PaveQuery): unknown => {
+    const t = q["task"] as Record<string, unknown> | undefined;
+    if (t && "isToDo" in t) {
+      return task
+        ? { task: { id: task.id, name: task.name, description: task.description, isToDo: task.isToDo ?? true, progress: task.progress ?? 0,
+            taskType: { id: task.typeId ?? TASK_TYPES.punchList }, job: { id: task.jobId ?? "job1" } } }
+        : { task: null };
+    }
+    if (t && "files" in t) return { task: { files: { nodes: files.map((f) => ({ ...f, createdAt: null })) } } };
+    if ("comment" in q) return { comment: { files: { nodes: [] } } };
+    if ("updateComment" in q) return {};
+    return base(q);
+  };
+}
+
+const GUTTER_REPAIR: WaitTask = {
+  id: "pt7",
+  name: "Yahir — Reseal the downspout",
+  description: "Reseal the downspout\n\nPunch list · Gutters · asked by Carl Bledsoe\n\n⏳ Waiting on material — 10ft section",
+};
+
+test("Can't finish today: the repair stays open, says why on the board's waiting line, loses its spent day, and its area's PM is tagged (I10)", async () => {
+  const queries: PaveQuery[] = [];
+  const board = boardThat({ areas: [GUTTERS_AREA] });
+  const ref = "1762100000000-cf00aa";
+  const handle = createHandler({
+    ...routerDeps(waitingResponder(GUTTER_REPAIR, [{ id: "fp", name: "REPAIR 2026-11-03 10:02 — Yahir Gonzalez", description: `DB CheckOut ref: ${ref}.m0` }]), queries),
+    board,
+  });
+  const call = fakeHttp("POST", "/tasks/pt7/blocked", { "x-client-ref": ref }, { jobId: "job1", reason: "access", note: "Gate locked, nobody home" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  const answer = JSON.parse(call.out.body);
+  assert.equal(answer.ok, true);
+  assert.equal(answer.sentTo, "Neal Deitemeyer", "the gutters' reviewer, by the board's list");
+  assert.equal(answer.waiting.reason, "access");
+  assert.match(answer.waiting.note, /^Gate locked, nobody home \(Yahir Gonzalez, [A-Z][a-z]{2} \d{1,2}\)$/);
+
+  const write = dollarOf(queries.find((q) => "updateTask" in q), "updateTask");
+  assert.equal(write["id"], "pt7");
+  assert.equal(write["startDate"], null, "the spent repair day comes off");
+  assert.equal(write["endDate"], null);
+  assert.ok(!("progress" in write), "it stays open");
+  assert.match(
+    String(write["description"]),
+    /^Reseal the downspout\n\nPunch list · Gutters · asked by Carl Bledsoe\n\n⏳ Waiting on access — Gate locked, nobody home \(Yahir Gonzalez, [A-Z][a-z]{2} \d{1,2}\)$/,
+    "one waiting line at a time: the old material line is replaced, the rest kept",
+  );
+  assert.equal(board.asks.length, 1);
+  assert.equal(board.asks[0].move, false, "the board is asked who reviews, and moves nothing");
+
+  const msg = dollarOf(queries.find((q) => "createComment" in q), "createComment");
+  assert.equal(msg["targetId"], "pt7");
+  assert.equal(
+    msg["message"],
+    `⏳ COULDN'T FINISH — no access\nGate locked, nobody home\nYahir Gonzalez via DB CheckOut. The repair stays open: book it again on the Production Board (Close-out).\n\nDB CheckOut ref: ${ref}`,
+  );
+  assert.deepEqual(msg["assignees"], [{ membershipId: "22PLUqZNCKaY" }], "Neal is tagged");
+  assert.equal(queries.filter((q) => "updateComment" in q).length, 1, "the photo sent with it is linked");
+});
+
+test("Can't finish today: material, a decision and other need words; the weather and no access do not (I10)", async () => {
+  for (const [reason, note, want] of [
+    ["material", "", 400],
+    ["decision", "  ", 400],
+    ["other", "", 400],
+    ["sideways", "x", 400],
+    ["weather", "", 200],
+    ["access", "", 200],
+  ] as const) {
+    const queries: PaveQuery[] = [];
+    const handle = createHandler({ ...routerDeps(waitingResponder({ ...GUTTER_REPAIR, description: "Reseal the downspout" }), queries), board: boardThat() });
+    const call = fakeHttp("POST", "/tasks/pt7/blocked", {}, { jobId: "job1", reason, note });
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, want, `${reason} "${note}"`);
+    if (want === 400) assert.ok(!queries.some((q) => "updateTask" in q || "createComment" in q), `${reason}: nothing written`);
+    if (reason === "weather") {
+      const write = dollarOf(queries.find((q) => "updateTask" in q), "updateTask");
+      assert.match(String(write["description"]), /\n\n⏳ Waiting on the weather — \(Yahir Gonzalez, [A-Z][a-z]{2} \d{1,2}\)$/);
+    }
+  }
+});
+
+test("Can't finish today on a repair that is gone, done, or not a repair on the job writes nothing (I10)", async () => {
+  for (const [label, task, want] of [
+    ["gone", null, 410],
+    ["already done", { ...GUTTER_REPAIR, progress: 1 }, 422],
+    ["a scheduled task", { ...GUTTER_REPAIR, isToDo: false }, 422],
+    ["another job's repair", { ...GUTTER_REPAIR, jobId: "job2" }, 422],
+  ] as const) {
+    const queries: PaveQuery[] = [];
+    const handle = createHandler({ ...routerDeps(waitingResponder(task), queries), board: boardThat() });
+    const call = fakeHttp("POST", "/tasks/pt7/blocked", {}, { jobId: "job1", reason: "weather", note: "" });
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, want, label);
+    assert.ok(!queries.some((q) => "updateTask" in q || "createComment" in q), `${label}: nothing written`);
+  }
+});
+
+test("Can't finish today with the board down still tags somebody: the fallback reviewer (I10)", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(routerDeps(waitingResponder({ id: "pt8", name: "Reseal the boot", description: "Reseal the boot" }), queries));
+  const call = fakeHttp("POST", "/tasks/pt8/blocked", {}, { jobId: "job1", reason: "decision", note: "Rotten decking under the boot — replace or patch?" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  assert.equal(JSON.parse(call.out.body).sentTo, "Dave Elick");
+  const msg = dollarOf(queries.find((q) => "createComment" in q), "createComment");
+  assert.match(String(msg["message"]), /^⏳ COULDN'T FINISH — needs a decision\nRotten decking under the boot — replace or patch\?\n/);
+  assert.deepEqual(msg["assignees"], [{ membershipId: "22PLtDsn6f4P" }]);
+});

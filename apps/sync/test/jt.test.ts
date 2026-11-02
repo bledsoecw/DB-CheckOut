@@ -1508,3 +1508,41 @@ test("T2.34 I16: whyGone says deleted, done or given to somebody else, and leave
   ]);
 });
 
+
+// --------------------------------------------------------------------------
+// DB Crew T2.35 — the waiting line (audit I10)
+// --------------------------------------------------------------------------
+
+test("the waiting line: one per repair, read back by reason, and the board's own material line still reads", async () => {
+  const { waitingLine, waitingOf, withWaitingLine, WAITING_REASONS } = await import("../../../packages/shared/src/jobtread");
+  for (const reason of WAITING_REASONS) {
+    const line = waitingLine(reason, "said\n\n(dicho)", "Yahir Gonzalez", "Nov 3");
+    assert.deepEqual(waitingOf(`Fix it\n\n${line}`), { reason, note: "said (Yahir Gonzalez, Nov 3)" }, reason);
+  }
+  assert.equal(waitingLine("other", "Dog in the yard", "Yahir Gonzalez", "Nov 3"), "⏳ Waiting — Dog in the yard (Yahir Gonzalez, Nov 3)");
+  assert.equal(waitingLine("weather", "", null, null), "⏳ Waiting on the weather");
+  // The board's PM writes "⏳ Waiting on material — <note>" with no name.
+  assert.deepEqual(waitingOf("Reseal\n\n⏳ Waiting on material — 2 bundles ridge cap"), { reason: "material", note: "2 bundles ridge cap" });
+  assert.deepEqual(waitingOf("⏳ Waiting on material"), { reason: "material", note: "" });
+  assert.equal(waitingOf("Reseal the boot\n\n✔ Done — Fixed — Yahir"), null);
+  assert.equal(withWaitingLine("A\n\n⏳ Waiting on material — x\n\n", "⏳ Waiting on access — y"), "A\n\n⏳ Waiting on access — y");
+  assert.equal(withWaitingLine("A\n\n⏳ Waiting on access — y", null), "A");
+  assert.equal(withWaitingLine(null, "⏳ Waiting — z"), "⏳ Waiting — z");
+});
+
+test("listPunchTasks says why a repair is waiting", async () => {
+  const client: PaveClient = {
+    async query<T>(): Promise<T> {
+      return {
+        job: { tasks: { nodes: [
+          { id: "p1", name: "Reseal", description: "Reseal\n\n⏳ Waiting on a decision — patch or replace?", progress: 0, endDate: null, isToDo: true,
+            taskType: { id: TASK_TYPES.punchList }, assignedMemberships: { nodes: [] } },
+          { id: "p2", name: "Flash", description: "Flash the wall", progress: 0, endDate: "2026-11-04", isToDo: true,
+            taskType: { id: TASK_TYPES.punchList }, assignedMemberships: { nodes: [] } },
+        ] } },
+      } as T;
+    },
+  };
+  const tasks = await listPunchTasks(client, "job1");
+  assert.deepEqual(tasks.map((t) => t.waiting), [{ reason: "decision", note: "patch or replace?" }, null]);
+});

@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 157fcfa809fc
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 6f6af0cdb4e5
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "157fcfa809fc", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "6f6af0cdb4e5", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -238,6 +238,46 @@ function checklistLineParts(name) {
     else if (v) out.by = v;
   });
   return out;
+}
+var WAITING_PREFIX = "\u23F3 Waiting";
+var WAITING_REASONS = ["material", "access", "weather", "decision", "other"];
+var WAITING_HEAD = {
+  material: "\u23F3 Waiting on material",
+  access: "\u23F3 Waiting on access",
+  weather: "\u23F3 Waiting on the weather",
+  decision: "\u23F3 Waiting on a decision",
+  other: "\u23F3 Waiting"
+};
+var WAITING_NEEDS_NOTE = /* @__PURE__ */ new Set(["material", "decision", "other"]);
+function isWaitingReason(v) {
+  return typeof v === "string" && WAITING_REASONS.includes(v);
+}
+function waitingWords(note, max = 160) {
+  return String(note ?? "").split(/\n\s*\n/)[0].replace(/\s+/g, " ").trim().slice(0, max).trim();
+}
+function waitingLine(reason, note, by, day) {
+  const said = waitingWords(note);
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  const tail = [said, who ? `(${who})` : ""].filter(Boolean).join(" ");
+  return tail ? `${WAITING_HEAD[reason]} \u2014 ${tail}` : WAITING_HEAD[reason];
+}
+function waitingOf(description) {
+  for (const raw of String(description ?? "").split("\n")) {
+    const l = raw.trim();
+    if (!l.startsWith(WAITING_PREFIX)) continue;
+    const reason = ["material", "access", "weather", "decision"].find((r) => l.startsWith(WAITING_HEAD[r])) ?? "other";
+    const dash = l.indexOf(" \u2014 ");
+    return { reason, note: dash >= 0 ? l.slice(dash + 3).trim() : "" };
+  }
+  return null;
+}
+function withWaitingLine(description, line) {
+  const lines = String(description ?? "").split("\n").filter((l) => !l.trim().startsWith(WAITING_PREFIX));
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  if (!line) return lines.join("\n");
+  return lines.length ? `${lines.join("\n")}
+
+${line}` : line;
 }
 
 // packages/shared/src/i18n.ts
@@ -709,7 +749,9 @@ async function listPunchTasks(pave, jobId) {
       assignees,
       assigneeNames: assignees.map((a) => a.name).filter((n) => n.length > 0),
       // Filled in by getJob, which is the layer that knows who is asking.
-      mine: false
+      mine: false,
+      // Why it is waiting, if it is (DB Crew T2.35, audit I10).
+      waiting: waitingOf(t.description)
     };
   });
 }
@@ -1479,11 +1521,57 @@ DB CheckOut item: ${item.code}`);
 }
 async function readRepairTask(pave, taskId) {
   const res = await pave.query({
-    task: { $: { id: taskId }, id: {}, isToDo: {}, progress: {}, taskType: { id: {} }, job: { id: {} } }
+    task: { $: { id: taskId }, id: {}, name: {}, description: {}, isToDo: {}, progress: {}, taskType: { id: {} }, job: { id: {} } }
   });
   const t = res.task;
   if (!t) return null;
-  return { id: t.id, jobId: t.job?.id ?? null, isToDo: t.isToDo === true, typeId: t.taskType?.id ?? null, progress: t.progress ?? 0 };
+  return {
+    id: t.id,
+    jobId: t.job?.id ?? null,
+    isToDo: t.isToDo === true,
+    typeId: t.taskType?.id ?? null,
+    progress: t.progress ?? 0,
+    name: t.name ?? "",
+    description: t.description ?? null
+  };
+}
+async function markRepairWaiting(pave, task, line) {
+  const description = withWaitingLine(task.description ?? "", line).slice(0, 4096);
+  await pave.query({
+    updateTask: {
+      $: { id: task.id, ...TASK_WRITE_GUARDS, description, startDate: null, endDate: null }
+    }
+  });
+}
+var WAITING_WORDS = {
+  material: "waiting on material",
+  access: "no access",
+  weather: "the weather",
+  decision: "needs a decision",
+  other: ""
+};
+function repairWaitingMessage(reason, note, byName) {
+  const why = WAITING_WORDS[reason] ?? "";
+  const said = note?.trim();
+  return [
+    `\u23F3 COULDN'T FINISH${why ? ` \u2014 ${why}` : ""}`,
+    ...said ? [said] : [],
+    `${byName} via DB CheckOut. The repair stays open: book it again on the Production Board (Close-out).`
+  ].join("\n");
+}
+async function postRepairWaiting(pave, taskId, message, clientRef2, tagged) {
+  const commentId = await postTaskMessage(pave, taskId, message, clientRef2, tagged);
+  if (!commentId || !clientRef2) return { commentId, photos: 0 };
+  const picked = pickRepairPhotos(await listTaskFiles(pave, taskId), clientRef2);
+  let photos = 0;
+  for (const fileId of picked.more) {
+    await attachFileToComment(pave, commentId, fileId);
+    photos++;
+  }
+  return { commentId, photos };
+}
+function officeDay(at = /* @__PURE__ */ new Date()) {
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(at);
 }
 function isRepairTask(task) {
   return task.typeId === TASK_TYPES.punchList && task.isToDo;
@@ -1789,6 +1877,13 @@ async function afterRepair(pave, board, args) {
   });
   return { flipped: answer?.moved?.to ?? null, reviewer: posted.length ? names[0] ?? null : null };
 }
+async function reviewerForRepair(pave, board, args) {
+  const basics = await getJobBasics(pave, args.jobId);
+  const areas = basics ? jobAreas(basics) : [];
+  const area = areas.length ? areaOfPunch(args.task, areas) : null;
+  const answer = board ? await board.closeout({ jobId: args.jobId, move: false, actor: args.actor }) : null;
+  return reviewerOf(answer, area);
+}
 
 // apps/sync/src/translate.ts
 var GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -1927,7 +2022,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 
 // apps/sync/src/routes.ts
 var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
-var PHONE_CONTRACT = 3;
+var PHONE_CONTRACT = 4;
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -2379,6 +2474,53 @@ function createHandler(deps) {
         }
         const outcome = body.jobId ? await afterRepair(deps.pave, deps.board, { jobId: body.jobId, actor: session.name }) : { flipped: null, reviewer: null };
         return json(res, 200, { ok: true, flipped: outcome.flipped, sentTo: outcome.reviewer });
+      }
+      if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "blocked") {
+        const body = await readBody(req);
+        if (!isWaitingReason(body.reason)) {
+          return json(res, 400, { error: "reason must be material, access, weather, decision or other" });
+        }
+        const note = typeof body.note === "string" ? body.note.trim().slice(0, 2e3) : "";
+        if (WAITING_NEEDS_NOTE.has(body.reason) && !note) {
+          return json(res, 400, { error: "Say what is needed, so the PM can act on it." });
+        }
+        const task = await readRepairTask(deps.pave, parts[1]);
+        if (!task) {
+          return json(res, 410, { error: "That repair is no longer in JobTread \u2014 it was taken off or moved. Ask your PM.", gone: true });
+        }
+        if (!isRepairTask(task) || body.jobId && task.jobId && task.jobId !== body.jobId) {
+          return json(res, 422, { error: "That task is not a repair on this job \u2014 nothing was changed." });
+        }
+        if (task.progress >= 1) {
+          return json(res, 422, { error: "That repair is already marked done \u2014 nothing was changed.", done: true });
+        }
+        const line = waitingLine(body.reason, note, session.name, officeDay());
+        await markRepairWaiting(deps.pave, task, line);
+        let reviewer = null;
+        const jobId = body.jobId || task.jobId;
+        if (jobId) {
+          try {
+            reviewer = await reviewerForRepair(deps.pave, deps.board, {
+              jobId,
+              task: { name: task.name ?? "", description: task.description ?? null },
+              actor: session.name
+            });
+          } catch (err) {
+            console.warn(`no reviewer for the waiting repair ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        try {
+          await postRepairWaiting(
+            deps.pave,
+            parts[1],
+            repairWaitingMessage(body.reason, note, session.name),
+            clientRef(req),
+            reviewer?.membershipId ? [reviewer.membershipId] : []
+          );
+        } catch (err) {
+          console.warn(`waiting message not posted on ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return json(res, 200, { ok: true, waiting: waitingOf(line), sentTo: reviewer?.name ?? null });
       }
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });
     } catch (err) {

@@ -20,6 +20,10 @@ import {
   STATUS,
   TASK_TYPES,
   cleanLineWords,
+  isWaitingReason,
+  waitingLine,
+  waitingOf,
+  WAITING_NEEDS_NOTE,
 } from "../../../packages/shared/src/jobtread";
 import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
 import { CLOSEOUT_FORMS } from "../../../packages/shared/src/forms";
@@ -53,8 +57,12 @@ import {
   listPunchTasks,
   scanAssignedTasks,
   whyGone,
+  markRepairWaiting,
+  officeDay,
+  postRepairWaiting,
+  repairWaitingMessage,
 } from "./jt";
-import { afterInspection, afterRepair, applyPipeline, areaInspectionTaskOf } from "./pipeline";
+import { afterInspection, afterRepair, applyPipeline, areaInspectionTaskOf, reviewerForRepair } from "./pipeline";
 import { areaFormKey, areaInspectionName, fallbackRepairCrew, isAreaKey, jobAreas, lineArea, AREA_LABEL, type AreaKey } from "./areas";
 import type { BoardClient } from "./board";
 import { summarizeScope, transcribeNote, translateTexts, TRANSLATE_LIMITS } from "./translate";
@@ -108,8 +116,10 @@ const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : {
  * problem reported on a line an earlier visit passed unticks it while its
  * repair is open; a camera photo's `takenAt` names its file in office time;
  * and GET /assigned lists one person's close-out work task by task.
+ * 4 (DB Crew T2.35, audit I10) = POST /tasks/:id/blocked keeps a repair the
+ * crew could not finish open with its reason, and a repair carries `waiting`.
  */
-const PHONE_CONTRACT = 3;
+const PHONE_CONTRACT = 4;
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -786,6 +796,59 @@ export function createHandler(deps: RouterDeps) {
           ? await afterRepair(deps.pave, deps.board, { jobId: body.jobId, actor: session.name })
           : { flipped: null, reviewer: null };
         return json(res, 200, { ok: true, flipped: outcome.flipped, sentTo: outcome.reviewer });
+      }
+
+      // The crew could not finish a repair today (DB Crew T2.35, audit I10):
+      // it stays open with its reason on the board's waiting line, its spent
+      // repair day comes off so the PM's Close-out panel lists it, and the
+      // area's reviewer is tagged on a message saying why, with any photo.
+      if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "blocked") {
+        const body = (await readBody(req)) as { jobId?: string; reason?: unknown; note?: unknown };
+        if (!isWaitingReason(body.reason)) {
+          return json(res, 400, { error: "reason must be material, access, weather, decision or other" });
+        }
+        const note = typeof body.note === "string" ? body.note.trim().slice(0, 2000) : "";
+        if (WAITING_NEEDS_NOTE.has(body.reason) && !note) {
+          return json(res, 400, { error: "Say what is needed, so the PM can act on it." });
+        }
+        const task = await readRepairTask(deps.pave, parts[1]);
+        if (!task) {
+          return json(res, 410, { error: "That repair is no longer in JobTread — it was taken off or moved. Ask your PM.", gone: true });
+        }
+        if (!isRepairTask(task) || (body.jobId && task.jobId && task.jobId !== body.jobId)) {
+          return json(res, 422, { error: "That task is not a repair on this job — nothing was changed." });
+        }
+        if (task.progress >= 1) {
+          return json(res, 422, { error: "That repair is already marked done — nothing was changed.", done: true });
+        }
+        const line = waitingLine(body.reason, note, session.name, officeDay());
+        await markRepairWaiting(deps.pave, task, line);
+        // Who to tell; the repair is recorded whatever the board says.
+        let reviewer: { name: string; membershipId: string | null } | null = null;
+        const jobId = body.jobId || task.jobId;
+        if (jobId) {
+          try {
+            reviewer = await reviewerForRepair(deps.pave, deps.board, {
+              jobId,
+              task: { name: task.name ?? "", description: task.description ?? null },
+              actor: session.name,
+            });
+          } catch (err) {
+            console.warn(`no reviewer for the waiting repair ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        try {
+          await postRepairWaiting(
+            deps.pave,
+            parts[1],
+            repairWaitingMessage(body.reason, note, session.name),
+            clientRef(req),
+            reviewer?.membershipId ? [reviewer.membershipId] : [],
+          );
+        } catch (err) {
+          console.warn(`waiting message not posted on ${parts[1]}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return json(res, 200, { ok: true, waiting: waitingOf(line), sentTo: reviewer?.name ?? null });
       }
 
       return json(res, 404, { error: `No route: ${req.method} ${url.pathname}` });

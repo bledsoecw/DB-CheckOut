@@ -361,3 +361,58 @@ export function checklistLineParts(name: string): { base: string; na?: string | 
   });
   return out;
 }
+
+/**
+ * A repair the crew could not finish (DB Crew T2.35, audit I10). The reason
+ * rides one line in the punch to-do's DESCRIPTION — the Production Board's own
+ * "⏳ Waiting on material" line, which a PM reading the to-do in JobTread
+ * already knows, and the same family for the other reasons — so the board's
+ * Close-out panel reads it with no new field. One waiting line at a time: a
+ * new one replaces the old, and the board takes it off when the PM books the
+ * repair again. The board reads these exact words (`waitingOf` in its
+ * lib/trades.ts): change both together.
+ */
+export const WAITING_PREFIX = "⏳ Waiting";
+export const WAITING_REASONS = ["material", "access", "weather", "decision", "other"] as const;
+export type WaitingReason = (typeof WAITING_REASONS)[number];
+export const WAITING_HEAD: Readonly<Record<WaitingReason, string>> = {
+  material: "⏳ Waiting on material",
+  access: "⏳ Waiting on access",
+  weather: "⏳ Waiting on the weather",
+  decision: "⏳ Waiting on a decision",
+  other: "⏳ Waiting",
+};
+/** The reasons a crew must say more about: what is short, what needs deciding, what happened. */
+export const WAITING_NEEDS_NOTE: ReadonlySet<WaitingReason> = new Set<WaitingReason>(["material", "decision", "other"]);
+export function isWaitingReason(v: unknown): v is WaitingReason {
+  return typeof v === "string" && (WAITING_REASONS as readonly string[]).includes(v);
+}
+/** The note on one line: its first paragraph (the English, when a translation follows), capped. */
+export function waitingWords(note: unknown, max = 160): string {
+  return String(note ?? "").split(/\n\s*\n/)[0].replace(/\s+/g, " ").trim().slice(0, max).trim();
+}
+/** "⏳ Waiting on access — the gate was locked (Yahir Gonzalez, Nov 3)". */
+export function waitingLine(reason: WaitingReason, note: unknown, by?: string | null, day?: string | null): string {
+  const said = waitingWords(note);
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  const tail = [said, who ? `(${who})` : ""].filter(Boolean).join(" ");
+  return tail ? `${WAITING_HEAD[reason]} — ${tail}` : WAITING_HEAD[reason];
+}
+/** The description's waiting line read back: the reason and what follows its " — ", or null. */
+export function waitingOf(description: string | null | undefined): { reason: WaitingReason; note: string } | null {
+  for (const raw of String(description ?? "").split("\n")) {
+    const l = raw.trim();
+    if (!l.startsWith(WAITING_PREFIX)) continue;
+    const reason = (["material", "access", "weather", "decision"] as const).find((r) => l.startsWith(WAITING_HEAD[r])) ?? "other";
+    const dash = l.indexOf(" — ");
+    return { reason, note: dash >= 0 ? l.slice(dash + 3).trim() : "" };
+  }
+  return null;
+}
+/** The description with its waiting line taken off, or replaced by `line`. */
+export function withWaitingLine(description: string | null | undefined, line: string | null): string {
+  const lines = String(description ?? "").split("\n").filter((l) => !l.trim().startsWith(WAITING_PREFIX));
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  if (!line) return lines.join("\n");
+  return lines.length ? `${lines.join("\n")}\n\n${line}` : line;
+}

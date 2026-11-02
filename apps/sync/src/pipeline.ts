@@ -437,3 +437,22 @@ export async function afterRepair(
   });
   return { flipped: answer?.moved?.to ?? null, reviewer: posted.length ? (names[0] ?? null) : null };
 }
+
+/**
+ * Who a repair the crew could not finish is said to (DB Crew T2.35, audit I10):
+ * the reviewer of its work area by Operations' list, asked of the board
+ * without moving anything (`move: false`), else the fallback seed; a job with
+ * no work areas goes to its own PM. Never throws for the board: unset or
+ * down, the answer is null and the fallback names somebody.
+ */
+export async function reviewerForRepair(
+  pave: PaveClient,
+  board: BoardClient | null | undefined,
+  args: { jobId: string; task: { name: string; description: string | null }; actor: string },
+): Promise<Reviewer | null> {
+  const basics = await getJobBasics(pave, args.jobId);
+  const areas = basics ? jobAreas(basics) : [];
+  const area = areas.length ? areaOfPunch(args.task, areas) : null;
+  const answer = board ? await board.closeout({ jobId: args.jobId, move: false, actor: args.actor }) : null;
+  return reviewerOf(answer, area);
+}
