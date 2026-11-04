@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 5405cbdbf6c5
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 006185e192e5
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "5405cbdbf6c5", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "006185e192e5", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -766,6 +766,24 @@ function viewerMatches(assignees, viewer) {
   return assignees.some(
     (a) => email.length > 0 && norm(a.email) === email || name.length > 0 && norm(a.name) === name
   );
+}
+async function isInternalMemberEmail(pave, email) {
+  const want = email.trim().toLowerCase();
+  if (!want) return false;
+  for (const where of [[["user", "emailAddress"], want], [["user", "emailAddress"], "like", want]]) {
+    const res = await pave.query({
+      organization: {
+        $: { id: ORGANIZATION_ID },
+        memberships: {
+          $: { size: 5, where: { and: [where, [["isInternal"], true]] } },
+          nodes: { isInternal: {}, user: { emailAddress: {} } }
+        }
+      }
+    });
+    const nodes = res.organization?.memberships.nodes ?? [];
+    if (nodes.some((m) => m.isInternal === true && (m.user?.emailAddress ?? "").trim().toLowerCase() === want)) return true;
+  }
+  return false;
 }
 function bookedDayOf(task) {
   const start = String(task.startDate ?? "").slice(0, 10);
@@ -2049,6 +2067,26 @@ function actingUser(req, deps) {
     return null;
   }
 }
+var MEMBER_OK_MS = 10 * 60 * 1e3;
+var MEMBER_NO_MS = 60 * 1e3;
+var memberSeen = /* @__PURE__ */ new Map();
+async function actingPerson(req, deps) {
+  const listed = actingUser(req, deps);
+  if (listed) return listed;
+  const bearer = bearerToken(req);
+  if (!bearer || !deps.crewAppSecret || bearer !== deps.crewAppSecret) return null;
+  const email = headerValue(req, "x-acting-email").toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  const seen = memberSeen.get(email);
+  let ok;
+  if (seen && Date.now() - seen.at < (seen.ok ? MEMBER_OK_MS : MEMBER_NO_MS)) ok = seen.ok;
+  else {
+    ok = await isInternalMemberEmail(deps.pave, email);
+    memberSeen.set(email, { ok, at: Date.now() });
+  }
+  if (!ok) return null;
+  return { email, name: headerValue(req, "x-acting-name") || email };
+}
 function clientRef(req) {
   const header = req.headers["x-client-ref"];
   const value = Array.isArray(header) ? header[0] : header;
@@ -2194,7 +2232,13 @@ function createHandler(deps) {
         }
         return json(res, 200, { ok: true, flipped });
       }
-      const session = actingUser(req, deps);
+      let session;
+      try {
+        session = await actingPerson(req, deps);
+      } catch (err) {
+        console.warn(`who is acting could not be checked: ${err instanceof Error ? err.message : String(err)}`);
+        return json(res, 503, { error: "JobTread did not answer while checking who this is \u2014 try again" });
+      }
       if (!session) return json(res, 401, { error: "Unauthorized" });
       if (req.method === "POST" && url.pathname === "/transcribe") {
         if (!deps.geminiApiKey) return json(res, 501, { error: "Transcription is not configured" });

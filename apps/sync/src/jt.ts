@@ -536,6 +536,40 @@ function viewerMatches(
   );
 }
 
+/**
+ * Is this address one of the company's own people, as JobTread knows them —
+ * an internal membership whose user has exactly this email? DB Crew lets a
+ * person in by the same fact (its sign-in gate, then its own JobTread
+ * membership check), and most of the field crew are on personal addresses in
+ * JobTread (the construction bench, the site managers), so this is how the
+ * crew-app door acts for them without a second list kept in step by hand (DB
+ * Crew T2.39, audit I13). `=` first, then `like`: JobTread keeps an address as
+ * it was typed and `like` is case-insensitive — the same two tries as DB
+ * Crew's memberFor_ — and the answer must match the address exactly, because
+ * `like` reads `_` as a wildcard. Throws when JobTread does not answer: the
+ * caller says "try again", never "you are not one of us".
+ */
+export async function isInternalMemberEmail(pave: PaveClient, email: string): Promise<boolean> {
+  const want = email.trim().toLowerCase();
+  if (!want) return false;
+  for (const where of [[["user", "emailAddress"], want], [["user", "emailAddress"], "like", want]] as const) {
+    const res = await pave.query<{
+      organization: { memberships: { nodes: Array<{ isInternal?: boolean | null; user?: { emailAddress?: string | null } | null }> } } | null;
+    }>({
+      organization: {
+        $: { id: ORGANIZATION_ID },
+        memberships: {
+          $: { size: 5, where: { and: [where, [["isInternal"], true]] } },
+          nodes: { isInternal: {}, user: { emailAddress: {} } },
+        },
+      },
+    });
+    const nodes = res.organization?.memberships.nodes ?? [];
+    if (nodes.some((m) => m.isInternal === true && (m.user?.emailAddress ?? "").trim().toLowerCase() === want)) return true;
+  }
+  return false;
+}
+
 /** What the viewer is on the hook for on one job (see listAssignedWorkByJob). */
 export interface AssignedWork {
   /** They are on an open repair or final inspection here — the job is "theirs". */

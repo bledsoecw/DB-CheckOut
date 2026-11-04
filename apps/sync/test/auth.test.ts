@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHmac } from "node:crypto";
 import { assertAllowedIdentity } from "../src/auth";
-import { createHandler, decodePhoto, type RouterDeps } from "../src/routes";
+import { createHandler, decodePhoto, forgetMembers, type RouterDeps } from "../src/routes";
 import type { PaveClient, PaveQuery } from "../src/pave";
 
 const CREW = "crew-app-test-secret";
@@ -178,4 +178,88 @@ test("POST /translate is gated on auth and configuration", async () => {
   const unconfigured = fakeHttp("POST", "/translate", AS_YAHIR, { texts: ["Hello"] });
   await handle(unconfigured.req, unconfigured.res);
   assert.equal(unconfigured.out.status, 501);
+});
+
+// ---------------------------------------------------------------------------
+// DB Crew T2.39 (audit I13): the company's own people, as JobTread knows them.
+// Most of the field crew are on personal addresses in JobTread; DB Crew sends
+// them their close-out work, so the door acts for them — and only for them.
+// ---------------------------------------------------------------------------
+
+/** A JobTread that knows these internal people (and a customer, not internal). */
+function memberDeps(people: Array<{ email: string; internal: boolean }>, opts: { fail?: boolean } = {}) {
+  const asked: PaveQuery[] = [];
+  const pave: PaveClient = {
+    async query<T>(q: PaveQuery): Promise<T> {
+      const org = (q as Record<string, any>)["organization"];
+      if (org && org["memberships"]) {
+        asked.push(q);
+        if (opts.fail) throw new Error("Pave request failed (503)");
+        const where = org["memberships"]["$"]["where"]["and"][0] as unknown[];
+        const value = String(where[where.length - 1]);
+        const like = where.length === 3;
+        // `like` is case-insensitive and reads `_` as any one character, as Pave does.
+        const re = new RegExp("^" + value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/_/g, ".") + "$", like ? "i" : "");
+        const nodes = people.filter((p) => p.internal && (like ? re.test(p.email) : p.email === value))
+          .map((p) => ({ isInternal: true, user: { emailAddress: p.email } }));
+        return { organization: { memberships: { nodes } } } as T;
+      }
+      return { organization: { jobs: { nodes: [] }, tasks: { nodes: [], nextPage: null } } } as T;
+    },
+  };
+  return { asked, deps: { ...deps([]), pave } as RouterDeps };
+}
+const asPerson = (email: string, name = "Somebody") => ({ authorization: `Bearer ${CREW}`, "x-acting-email": email, "x-acting-name": name });
+
+test("T2.39: an address JobTread has as one of our own people gets in, and the answer is kept", async () => {
+  forgetMembers();
+  const { asked, deps: d } = memberDeps([{ email: "srice565@gmail.com", internal: true }]);
+  const handle = createHandler(d);
+  const a = fakeHttp("GET", "/queue", asPerson("srice565@gmail.com", "Scott Rice"));
+  await handle(a.req, a.res);
+  assert.notEqual(a.out.status, 401, "Scott Rice, on Gmail in JobTread, gets in");
+  const b = fakeHttp("GET", "/queue", asPerson("SRice565@Gmail.com", "Scott Rice"));
+  await handle(b.req, b.res);
+  assert.notEqual(b.out.status, 401);
+  assert.equal(asked.length, 1, "JobTread is asked once, then the answer is kept");
+});
+
+test("T2.39: a stranger, a customer and a near-miss on _ are nobody", async () => {
+  forgetMembers();
+  // `like` reads `_` in the address asked about as any one character, so
+  // "poe_ian@…" would match a stored "poexian@…" — the answer must be exact.
+  const { deps: d } = memberDeps([{ email: "poexian@yahoo.com", internal: true }, { email: "customer@gmail.com", internal: false }]);
+  const handle = createHandler(d);
+  for (const email of ["someone@gmail.com", "customer@gmail.com", "poe_ian@yahoo.com", "not-an-address"]) {
+    const h = fakeHttp("GET", "/queue", asPerson(email));
+    await handle(h.req, h.res);
+    assert.equal(h.out.status, 401, `${email} is not one of ours`);
+  }
+  const ian = fakeHttp("GET", "/queue", asPerson("poexian@yahoo.com", "Ian Poe"));
+  await handle(ian.req, ian.res);
+  assert.notEqual(ian.out.status, 401, "the address itself still gets in");
+});
+
+test("T2.39: the company's own addresses never cost a JobTread read, and the secret is still the door", async () => {
+  forgetMembers();
+  const { asked, deps: d } = memberDeps([{ email: "srice565@gmail.com", internal: true }]);
+  const handle = createHandler(d);
+  const y = fakeHttp("GET", "/queue", AS_YAHIR);
+  await handle(y.req, y.res);
+  assert.notEqual(y.out.status, 401);
+  assert.equal(asked.length, 0);
+  const wrong = fakeHttp("GET", "/queue", { ...asPerson("srice565@gmail.com"), authorization: "Bearer nope" });
+  await handle(wrong.req, wrong.res);
+  assert.equal(wrong.out.status, 401, "a wrong secret is nobody, whoever it names");
+  assert.equal(asked.length, 0, "and JobTread is not asked for it");
+});
+
+test("T2.39: JobTread not answering is 'try again' (503), never 401", async () => {
+  forgetMembers();
+  const { deps: d } = memberDeps([], { fail: true });
+  const handle = createHandler(d);
+  const h = fakeHttp("GET", "/queue", asPerson("srice565@gmail.com"));
+  await handle(h.req, h.res);
+  assert.equal(h.out.status, 503);
+  assert.match(h.out.body, /try again/);
 });

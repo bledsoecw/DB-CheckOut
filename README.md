@@ -245,7 +245,13 @@ calls this server for the signed-in person with a shared secret: set
 property) and every protected route accepts `Authorization: Bearer <that
 secret>` plus `X-Acting-Email` / `X-Acting-Name`, the person being gated by
 the domain / allow-list rule (`GOOGLE_ALLOWED_EMAILS` for accounts off the
-domain). **It is the only way in.** Unset, every protected route answers 401.
+domain) — or, since DB Crew T2.39 (4 Nov 2026), by JobTread itself: an
+address JobTread has as an internal membership is one of the company's own
+people, which is how most of the field crew (on personal addresses in
+JobTread) get the close-out work DB Crew now sends anyone it is assigned to.
+The answer is kept ten minutes per instance (a no, one minute); JobTread not
+answering is a 503 "try again", never a 401. A stranger is still nobody,
+whatever the secret. **It is the only way in.** Unset, every protected route answers 401.
 `GET /health` reports it as `crewApp`. `POST /translate` also takes `to: "en"` now, which is how a note
 dictated in Spanish on that app becomes the English the office reads.
 

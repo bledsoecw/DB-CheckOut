@@ -40,6 +40,7 @@ import {
   findPipelineTask,
   findTaskByRef,
   getJob,
+  isInternalMemberEmail,
   getJobBasics,
   postTaskMessage,
   postRepairDone,
@@ -159,6 +160,42 @@ export function actingUser(req: IncomingMessage, deps: Pick<RouterDeps, "crewApp
   } catch {
     return null;
   }
+}
+
+/**
+ * Who this request acts for, all of it (DB Crew T2.39, audit I13): the domain
+ * and the allow-list (actingUser), and otherwise anyone JobTread knows as one
+ * of the company's own people — an internal membership with that address.
+ * Most of the field crew are on personal addresses in JobTread, and since
+ * T2.39 DB Crew sends anyone the close-out work it gives them, so the bench
+ * and the site managers have to get through here too. Never a stranger: the
+ * shared secret alone does not make an address a person. JobTread's answer is
+ * kept ten minutes (a minute for a no), per server instance. Throws when
+ * JobTread does not answer — the handler says "try again", never 401, which
+ * the phone would read as "Close Out does not know you".
+ */
+const MEMBER_OK_MS = 10 * 60 * 1000, MEMBER_NO_MS = 60 * 1000;
+const memberSeen = new Map<string, { ok: boolean; at: number }>();
+export function forgetMembers(): void { memberSeen.clear(); }
+export async function actingPerson(
+  req: IncomingMessage,
+  deps: Pick<RouterDeps, "crewAppSecret" | "workspaceDomain" | "allowedEmails" | "pave">,
+): Promise<SessionUser | null> {
+  const listed = actingUser(req, deps);
+  if (listed) return listed;
+  const bearer = bearerToken(req);
+  if (!bearer || !deps.crewAppSecret || bearer !== deps.crewAppSecret) return null;
+  const email = headerValue(req, "x-acting-email").toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  const seen = memberSeen.get(email);
+  let ok: boolean;
+  if (seen && Date.now() - seen.at < (seen.ok ? MEMBER_OK_MS : MEMBER_NO_MS)) ok = seen.ok;
+  else {
+    ok = await isInternalMemberEmail(deps.pave, email);
+    memberSeen.set(email, { ok, at: Date.now() });
+  }
+  if (!ok) return null;
+  return { email, name: headerValue(req, "x-acting-name") || email };
 }
 
 function clientRef(req: IncomingMessage): string | undefined {
@@ -380,7 +417,12 @@ export function createHandler(deps: RouterDeps) {
 
       // Everything below acts for a person: DB Crew's, through its shared
       // secret (see actingUser).
-      const session: SessionUser | null = actingUser(req, deps);
+      let session: SessionUser | null;
+      try { session = await actingPerson(req, deps); }
+      catch (err) {
+        console.warn(`who is acting could not be checked: ${err instanceof Error ? err.message : String(err)}`);
+        return json(res, 503, { error: "JobTread did not answer while checking who this is — try again" });
+      }
       if (!session) return json(res, 401, { error: "Unauthorized" });
 
       // Dictated field note -> verbatim transcription + clean English note.
