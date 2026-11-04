@@ -426,6 +426,8 @@ test("finishing a repair posts its note as a message on the to-do, with its phot
 interface AreaJob {
   status: string;
   projectTypes: string[];
+  /** The Job Type field; absent, Roofing. */
+  jobType?: string;
   /** Tasks on the job (the pipeline read sees them all). */
   tasks: Array<{ id: string; name: string; progress?: number | null; typeId?: string | null; description?: string | null }>;
 }
@@ -478,7 +480,7 @@ function areaResponder(job: AreaJob) {
           customFieldValues: {
             nodes: [
               { value: job.status, customField: { id: CUSTOM_FIELDS.status } },
-              { value: "Roofing", customField: { id: CUSTOM_FIELDS.jobType } },
+              { value: job.jobType ?? "Roofing", customField: { id: CUSTOM_FIELDS.jobType } },
               ...job.projectTypes.map((v) => ({ value: v, customField: { id: CUSTOM_FIELDS.projectType } })),
             ],
           },
@@ -600,6 +602,98 @@ test("close-area-inspection refuses an area the job does not have", async () => 
   assert.match(JSON.parse(call.out.body).error, /shingle, gutters/);
 });
 
+// A construction job's final inspection (DB Crew T2.40, audit I13 step 2):
+// notes and photos on its own "Final inspection" line, the Status moved by
+// Close Out's own rule — construction is not the board's work-area loop.
+const WOODRUFF: AreaJob = {
+  status: "Final Inspection",
+  jobType: "Construction",
+  projectTypes: ["C-Remodel/Interior"],
+  tasks: [{ id: "fi", name: "Final inspection", typeId: TASK_TYPES.inspection, description: "Walk the job." }],
+};
+
+test("T2.40: a construction inspection is closed on its Final inspection line, noted, and moved by Close Out's own rule", async () => {
+  const queries: PaveQuery[] = [];
+  const board = boardThat({ pm: { name: "Neal Deitemeyer", membershipId: "22PLUqZNCKaY" } });
+  let done = false;
+  const responder = areaResponder(WOODRUFF);
+  const handle = createHandler({
+    ...routerDeps((q) => {
+      if ("updateTask" in q) done = true;
+      // The milestones as JobTread has them once the close has landed.
+      if (done && "job" in q && "tasks" in (q["job"] as Record<string, unknown>) && !JSON.stringify(q).includes("assignedMemberships") && !JSON.stringify(q).includes("DB CheckOut ref")) {
+        return { job: { tasks: { nodes: [{ id: "fi", name: "Final inspection", progress: 1, taskType: { id: TASK_TYPES.inspection }, description: "Walk the job.\n\n✔ Inspected by Yahir Gonzalez — via DB CheckOut", subtasks: [] }] } } };
+      }
+      return responder(q);
+    }, queries),
+    board,
+  });
+  const call = fakeHttp("POST", "/jobs/job1/close-area-inspection", { "x-client-ref": "1758400000000-ab12cd" }, {
+    area: "construction",
+    notes: "Ceiling patched and painted; site clean.",
+    problemsReported: 0,
+  });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  const out = JSON.parse(call.out.body);
+  assert.equal(out.completedTaskId, "fi");
+  assert.equal(out.made, false);
+  assert.equal(out.flipped, "PM Review", "a clean construction inspection goes to the PM, Close Out's linear rule");
+  const stamp = dollarOf(queries.find((q) => "updateTask" in q && dollarOf(q, "updateTask")["id"] === "fi"), "updateTask");
+  assert.equal(stamp["progress"], 1);
+  assert.equal(stamp["description"], "Walk the job.\n\n✔ Inspected by Yahir Gonzalez — via DB CheckOut");
+  assert.equal(stamp["subtasks"], undefined, "notes and photos: no checklist is written onto the line");
+  const notes = queries.filter((q) => "createComment" in q).map((q) => dollarOf(q, "createComment"));
+  assert.equal(notes[0]["targetId"], "fi");
+  assert.match(String(notes[0]["message"]), /^Inspector notes: Ceiling patched and painted; site clean\.\n— Yahir Gonzalez via DB CheckOut/);
+  const status = dollarOf(queries.find((q) => "updateJob" in q), "updateJob");
+  assert.ok(JSON.stringify(status).includes("PM Review"), "Close Out writes the Status on a construction job");
+  assert.ok(!board.asks.some((a) => a.move === true), "the board is not asked to move a job with no work areas");
+});
+
+test("T2.40: a construction inspection with no line makes the job's Final inspection line, and only Construction may send one", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(routerDeps(areaResponder({ ...WOODRUFF, status: "Production", tasks: [] }), queries));
+  const call = fakeHttp("POST", "/jobs/job1/close-area-inspection", {}, { area: "construction", problemsReported: 0 });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  const made = dollarOf(queries.find((q) => "createTask" in q), "createTask");
+  assert.equal(made["name"], "Final inspection");
+  assert.equal(made["taskTypeId"], TASK_TYPES.inspection);
+  assert.notEqual(made["isToDo"], true, "the job's line, a scheduled task like the template's");
+  assert.deepEqual({ completedTaskId: JSON.parse(call.out.body).completedTaskId, made: JSON.parse(call.out.body).made }, { completedTaskId: "new-task", made: true });
+
+  const roof = createHandler(routerDeps(areaResponder(McCOY), []));
+  const onRoof = fakeHttp("POST", "/jobs/job1/close-area-inspection", {}, { area: "construction", problemsReported: 0 });
+  await roof(onRoof.req, onRoof.res);
+  assert.equal(onRoof.out.status, 400, "a roofing job has no construction inspection");
+
+  const form = createHandler(routerDeps(areaResponder(WOODRUFF), []));
+  const asRoof = fakeHttp("POST", "/jobs/job1/close-area-inspection", {}, { area: "construction", form: "roof", problemsReported: 0 });
+  await form(asRoof.req, asRoof.res);
+  assert.equal(asRoof.out.status, 400);
+  assert.match(JSON.parse(asRoof.out.body).error, /notes and photos/);
+});
+
+test("T2.40: a construction inspection that found problems moves the job to Punch List", async () => {
+  const queries: PaveQuery[] = [];
+  let done = false;
+  const responder = areaResponder(WOODRUFF);
+  const handle = createHandler(
+    routerDeps((q) => {
+      if ("updateTask" in q) done = true;
+      if (done && "job" in q && "tasks" in (q["job"] as Record<string, unknown>) && !JSON.stringify(q).includes("assignedMemberships") && !JSON.stringify(q).includes("DB CheckOut ref")) {
+        return { job: { tasks: { nodes: [{ id: "fi", name: "Final inspection", progress: 1, taskType: { id: TASK_TYPES.inspection }, description: "✔ Inspected by Yahir Gonzalez — via DB CheckOut", subtasks: [] }] } } };
+      }
+      return responder(q);
+    }, queries),
+  );
+  const call = fakeHttp("POST", "/jobs/job1/close-area-inspection", {}, { area: "construction", notes: "Trim gap by the door.", problemsReported: 1 });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  assert.equal(JSON.parse(call.out.body).flipped, "Punch List");
+});
+
 test("an inspection photo for the gutters lands on the gutters' inspection", async () => {
   const queries: PaveQuery[] = [];
   const responder = areaResponder(McCOY);
@@ -619,6 +713,30 @@ test("an inspection photo for the gutters lands on the gutters' inspection", asy
     await handle(call.req, call.res);
     assert.equal(call.out.status, 200);
     assert.equal(dollarOf(queries.find((q) => "createFile" in q), "createFile")["targetId"], "fg");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("T2.40: a construction inspection photo lands on the job's Final inspection line", async () => {
+  const queries: PaveQuery[] = [];
+  const responder = areaResponder(WOODRUFF);
+  const handle = createHandler(
+    routerDeps((q) => {
+      if ("createUploadRequest" in q) {
+        return { createUploadRequest: { createdUploadRequest: { id: "u1", url: "https://up.example", method: "PUT", headers: {} } } };
+      }
+      if ("createFile" in q) return { createFile: { createdFile: { id: "f1" } } };
+      return responder(q);
+    }, queries),
+  );
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
+  try {
+    const call = fakeHttp("POST", "/jobs/job1/photos", {}, { label: "INSPECTION", imageBase64: PIXEL, area: "construction" });
+    await handle(call.req, call.res);
+    assert.equal(call.out.status, 200);
+    assert.equal(dollarOf(queries.find((q) => "createFile" in q), "createFile")["targetId"], "fi");
   } finally {
     globalThis.fetch = realFetch;
   }

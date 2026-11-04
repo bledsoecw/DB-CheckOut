@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 006185e192e5
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 3239ced62585
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "006185e192e5", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "3239ced62585", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -440,6 +440,11 @@ function jobAreas(job) {
   }
   return AREA_ORDER.filter((a) => found.has(a));
 }
+var CONSTRUCTION_AREA = "construction";
+var CONSTRUCTION_LABEL = "Construction";
+function isConstructionCloseout(job) {
+  return job.jobType === "Construction";
+}
 function lineArea(areas) {
   return areas.find((a) => ROOFS.includes(a)) ?? areas[0] ?? null;
 }
@@ -638,7 +643,8 @@ async function getJob(pave, jobId, viewer) {
   const mineOpen = open.filter((t) => t.mine).length;
   const count = viewer ? mineOpen : open.length;
   const basics = toQueueJob(res.job, count, mineOpen > 0);
-  const areas = closeoutAreas(basics, punchTasks, inspections, viewer);
+  const construction = constructionArea(basics, punchTasks, inspections, viewer);
+  const areas = construction ? [construction] : closeoutAreas(basics, punchTasks, inspections, viewer);
   const keys = jobAreas(basics);
   return {
     ...basics,
@@ -701,6 +707,22 @@ function closeoutAreas(job, punch, inspections, viewer) {
       openRepairs: punch.filter((t) => t.progress < 1 && areaOfPunch(t, areas) === area).length
     };
   });
+}
+function constructionArea(job, punch, inspections, viewer) {
+  if (!isConstructionCloseout(job)) return null;
+  const task = inspections.find((t) => sameName(t.name, PIPELINE_TASKS.finalInspection.name));
+  return {
+    key: CONSTRUCTION_AREA,
+    label: CONSTRUCTION_LABEL,
+    line: false,
+    form: "notes",
+    inspectionTaskId: task?.id ?? null,
+    inspectionDate: task?.startDate ?? null,
+    assigneeNames: (task?.assignees ?? []).map((a) => a.name ?? "").filter((n) => n.length > 0),
+    mine: task ? viewerMatches(task.assignees, viewer) : false,
+    inspected: Boolean(task && (task.progress >= 1 || (task.description ?? "").includes(INSPECTED_STAMP))),
+    openRepairs: punch.filter((t) => t.progress < 1).length
+  };
 }
 async function listPunchTasks(pave, jobId) {
   const res = await pave.query({
@@ -2041,7 +2063,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 
 // apps/sync/src/routes.ts
 var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
-var PHONE_CONTRACT = 4;
+var PHONE_CONTRACT = 5;
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -2359,6 +2381,23 @@ function createHandler(deps) {
           const body = await readBody(req);
           const basics = await getJobBasics(deps.pave, jobId);
           if (!basics) return json(res, 404, { error: "JobTread has no job with that id" });
+          if (body.area === CONSTRUCTION_AREA && isConstructionCloseout(basics)) {
+            if (body.form != null && body.form !== "notes") {
+              return json(res, 400, { error: `The construction inspection is notes and photos, not the ${String(body.form)} form` });
+            }
+            const problems = typeof body.problemsReported === "number" && body.problemsReported > 0 ? Math.floor(body.problemsReported) : 0;
+            const said = typeof body.notes === "string" ? body.notes.slice(0, 4e3) : void 0;
+            const ref2 = clientRef(req);
+            let taskId2 = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection)?.id ?? null;
+            let made = false;
+            if (!taskId2) {
+              taskId2 = await createFinalInspection(deps.pave, jobId, ref2);
+              made = true;
+            }
+            await closeAreaInspection(deps.pave, taskId2, said, session.name, ref2);
+            const outcome2 = await afterInspection(deps.pave, deps.board, { jobId, area: null, problemsReported: problems, actor: session.name });
+            return json(res, 200, { completedTaskId: taskId2, made, flipped: outcome2.flipped, sentTo: outcome2.reviewer });
+          }
           const areas = jobAreas(basics);
           const area = areaOf(body.area, areas);
           if (!area) {

@@ -137,7 +137,8 @@ test("/health says what the server was built from, and no longer offers sign-in"
   // 2 (DB Crew T2.33): inspections always recorded on a task; repairs checked; gone is 410.
   // 3 (T2.34): N/A reasons, who answered, photo times, GET /assigned.
   // 4 (T2.35): Can't finish today (POST /tasks/:id/blocked) and `waiting` on a repair.
-  assert.equal(body["contract"], 4);
+  // 5 (T2.40): a construction job's final inspection, notes and photos, as one area.
+  assert.equal(body["contract"], 5);
 });
 
 test("reports are stamped with the acted-for name, not the client's claim", async () => {

@@ -131,7 +131,10 @@ export interface ScopeSummary {
  * siding, the gutters — inspected, repaired and approved on its own.
  */
 export interface CloseoutArea {
-  /** "shingle" | "metal" | "flat" | "siding" | "gutters". */
+  /**
+   * "shingle" | "metal" | "flat" | "siding" | "gutters" — or "construction",
+   * a construction job's one notes-and-photos inspection (DB Crew T2.40).
+   */
   key: string;
   /** "Shingle roof", "Gutters". */
   label: string;

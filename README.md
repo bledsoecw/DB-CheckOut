@@ -39,6 +39,19 @@ repair work — wired into JobTread and the DB Production board.
    A finding carries its area (`"Gutters · reported by Yahir"` in its
    description), and goes to whoever that area's repairs go to: Alberto and
    Yahir on a shingle roof, nobody else by default.
+   **A construction job's final inspection is notes and photos too** (DB
+   Crew T2.40, 4 Nov 2026 — Carl: the job's sales rep does it, its PM as
+   backup, *"notes a photos for now"*). Construction is not the board's
+   work-area loop, so the job lists it as one area, `construction`
+   (`constructionArea` in `jt.ts`, form `notes`, on the job's own "Final
+   inspection" line, `line: false` so every phone build draws it as a
+   notes-and-photos tile), and `close-area-inspection` with that area
+   stamps the line, posts the notes on it, makes the line when the job has
+   none, and moves the Status by Close Out's own rule (`applyLinear`: Final
+   Inspection → PM Review, or Punch List with problems). Judged by the Job
+   Type field alone: a service call typed Construction is inspected the
+   same way, a job typed Roofing never is. Its findings belong to no area
+   and go to nobody by default, as before.
 7. The **punch crew** sees assigned repairs in the same app: where to
    go, what to do, what to bring, before/after photos, and a big
    "Terminado" button. The job's scheduled **"Punch list"** task mirrors
@@ -218,7 +231,7 @@ its source, which `GET /health` reports as `build` (`source`, `on` —
 commit); and `test/bundle.test.ts` fails when the committed copy is older than
 the source, so rebuild and commit it with any change under `apps/sync/src`
 or `packages/shared/src`. `/health` also reports `contract`
-(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34, 4 since T2.35): what DB Crew's phone
+(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34, 4 since T2.35, 5 since T2.40): what DB Crew's phone
 can count on this server for. DB Crew's Diagnostics shows it beside the
 build and warns while it is below the phone's `CO_CONTRACT_NEED`, so raise it
 in the change that gives the phone something new to depend on. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`

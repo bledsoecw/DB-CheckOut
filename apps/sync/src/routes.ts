@@ -64,7 +64,18 @@ import {
   repairWaitingMessage,
 } from "./jt";
 import { afterInspection, afterRepair, applyPipeline, areaInspectionTaskOf, reviewerForRepair } from "./pipeline";
-import { areaFormKey, areaInspectionName, fallbackRepairCrew, isAreaKey, jobAreas, lineArea, AREA_LABEL, type AreaKey } from "./areas";
+import {
+  areaFormKey,
+  areaInspectionName,
+  fallbackRepairCrew,
+  isAreaKey,
+  isConstructionCloseout,
+  jobAreas,
+  lineArea,
+  AREA_LABEL,
+  CONSTRUCTION_AREA,
+  type AreaKey,
+} from "./areas";
 import type { BoardClient } from "./board";
 import { summarizeScope, transcribeNote, translateTexts, TRANSLATE_LIMITS } from "./translate";
 
@@ -119,8 +130,11 @@ const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : {
  * and GET /assigned lists one person's close-out work task by task.
  * 4 (DB Crew T2.35, audit I10) = POST /tasks/:id/blocked keeps a repair the
  * crew could not finish open with its reason, and a repair carries `waiting`.
+ * 5 (DB Crew T2.40, audit I13 step 2) = a construction job lists its final
+ * inspection as one notes-and-photos area ("construction"), and
+ * close-area-inspection closes it on the job's "Final inspection" line.
  */
-const PHONE_CONTRACT = 4;
+const PHONE_CONTRACT = 5;
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -610,6 +624,29 @@ export function createHandler(deps: RouterDeps) {
           const body = (await readBody(req)) as Partial<CloseAreaInspectionRequest>;
           const basics = await getJobBasics(deps.pave, jobId);
           if (!basics) return json(res, 404, { error: "JobTread has no job with that id" });
+          // A construction job's final inspection (DB Crew T2.40, audit I13
+          // step 2: "notes a photos for now"): the job's own "Final
+          // inspection" line, stamped and noted like any notes-and-photos
+          // area, and the Status moved by Close Out's own rule, because
+          // construction is not the board's work-area loop.
+          if (body.area === CONSTRUCTION_AREA && isConstructionCloseout(basics)) {
+            if (body.form != null && body.form !== "notes") {
+              return json(res, 400, { error: `The construction inspection is notes and photos, not the ${String(body.form)} form` });
+            }
+            const problems =
+              typeof body.problemsReported === "number" && body.problemsReported > 0 ? Math.floor(body.problemsReported) : 0;
+            const said = typeof body.notes === "string" ? body.notes.slice(0, 4000) : undefined;
+            const ref = clientRef(req);
+            let taskId = findPipelineTask(await listPipelineTasks(deps.pave, jobId), PIPELINE_TASKS.finalInspection)?.id ?? null;
+            let made = false;
+            if (!taskId) {
+              taskId = await createFinalInspection(deps.pave, jobId, ref);
+              made = true;
+            }
+            await closeAreaInspection(deps.pave, taskId, said, session.name, ref);
+            const outcome = await afterInspection(deps.pave, deps.board, { jobId, area: null, problemsReported: problems, actor: session.name });
+            return json(res, 200, { completedTaskId: taskId, made, flipped: outcome.flipped, sentTo: outcome.reviewer });
+          }
           const areas = jobAreas(basics);
           const area = areaOf(body.area, areas);
           if (!area) {

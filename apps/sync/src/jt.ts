@@ -35,6 +35,9 @@ import type {
 import { CLOSEOUT_FORMS, jobFormKey } from "../../../packages/shared/src/forms";
 import {
   AREA_LABEL,
+  CONSTRUCTION_AREA,
+  CONSTRUCTION_LABEL,
+  isConstructionCloseout,
   areaInspectionName,
   areaOfInspectionName,
   areaOfPunch,
@@ -331,7 +334,10 @@ export async function getJob(
   const count = viewer ? mineOpen : open.length;
 
   const basics = toQueueJob(res.job, count, mineOpen > 0);
-  const areas = closeoutAreas(basics, punchTasks, inspections, viewer);
+  // A construction job's one inspection rides the same list (T2.40): notes
+  // and photos on its own "Final inspection" line.
+  const construction = constructionArea(basics, punchTasks, inspections, viewer);
+  const areas = construction ? [construction] : closeoutAreas(basics, punchTasks, inspections, viewer);
   const keys = jobAreas(basics);
   return {
     ...basics,
@@ -432,6 +438,41 @@ export function closeoutAreas(
       openRepairs: punch.filter((t) => t.progress < 1 && areaOfPunch(t, areas) === area).length,
     };
   });
+}
+
+/**
+ * A construction job's final inspection, as the one area the phone draws for
+ * it (DB Crew T2.40, audit I13 step 2): notes and photos on the job's own
+ * "Final inspection" line — the task the Production Board puts the sales rep
+ * and the PM on. null on any job not typed Construction.
+ *
+ * `line` is false on purpose. On the phone `line` means "this area's
+ * inspection is the roof checklist on the job screen", and an area that is
+ * not the line is drawn as a notes-and-photos tile with its own screen and
+ * send (close-area-inspection) — which is exactly this one, on every phone
+ * build that knows about areas at all. Its repairs belong to no area (a
+ * construction job has none), so `openRepairs` is every open repair on it.
+ */
+export function constructionArea(
+  job: Pick<QueueJob, "jobType">,
+  punch: PunchTask[],
+  inspections: InspectionTask[],
+  viewer: Viewer | undefined,
+): CloseoutArea | null {
+  if (!isConstructionCloseout(job)) return null;
+  const task = inspections.find((t) => sameName(t.name, PIPELINE_TASKS.finalInspection.name));
+  return {
+    key: CONSTRUCTION_AREA,
+    label: CONSTRUCTION_LABEL,
+    line: false,
+    form: "notes",
+    inspectionTaskId: task?.id ?? null,
+    inspectionDate: task?.startDate ?? null,
+    assigneeNames: (task?.assignees ?? []).map((a) => a.name ?? "").filter((n) => n.length > 0),
+    mine: task ? viewerMatches(task.assignees, viewer) : false,
+    inspected: Boolean(task && (task.progress >= 1 || (task.description ?? "").includes(INSPECTED_STAMP))),
+    openRepairs: punch.filter((t) => t.progress < 1).length,
+  };
 }
 
 export async function listPunchTasks(pave: PaveClient, jobId: string): Promise<PunchTask[]> {

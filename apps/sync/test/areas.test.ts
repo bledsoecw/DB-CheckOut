@@ -7,13 +7,15 @@ import {
   areaOfReviewName,
   areaTagLine,
   fallbackRepairCrew,
+  isConstructionCloseout,
   jobAreas,
   lineArea,
   reviewTaskName,
   usesRoofForm,
 } from "../src/areas";
-import { closeoutAreas, isCloseoutTask } from "../src/jt";
-import { PUNCH_CREW, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import { closeoutAreas, constructionArea, getJob, isCloseoutTask } from "../src/jt";
+import type { PaveClient, PaveQuery } from "../src/pave";
+import { CUSTOM_FIELDS, PUNCH_CREW, TASK_TYPES } from "../../../packages/shared/src/jobtread";
 import type { PunchTask } from "../../../packages/shared/src/types";
 
 // The names and tags here are the Production Board's (its lib/trades.ts) —
@@ -90,4 +92,63 @@ test("the job's areas, as the phone draws them", () => {
     { key: "gutters", label: "Gutters", line: false, form: "gutters", inspectionTaskId: "fg", inspectionDate: "2026-10-27", assigneeNames: ["Yahir Gonzalez"], mine: true, inspected: false, openRepairs: 1 },
   ]);
   assert.deepEqual(closeoutAreas({ jobType: "Construction", projectTypes: ["C-Additions"] }, [], [], undefined), []);
+});
+
+test("T2.40: a construction job's final inspection is one notes-and-photos area on its own Final inspection line", () => {
+  const punch = (id: string, progress: number): PunchTask => ({
+    id, name: `REPORT: ${id}`, description: null, progress, endDate: null, assignees: [], assigneeNames: [], mine: false,
+  });
+  const lines = [
+    { id: "fi", name: "Final inspection", progress: 0, description: "Complete the quality inspection.", startDate: "2026-11-05",
+      assignees: [{ name: "Justin Phillips", email: "justinphillips@deitemeyerbrothers.com" }, { name: "Neal Deitemeyer", email: "neal@deitemeyerbrothers.com" }] },
+  ];
+  const asNeal = { email: "Neal@DeitemeyerBrothers.com", name: "Neal Deitemeyer" };
+  assert.deepEqual(constructionArea({ jobType: "Construction" }, [punch("a", 0), punch("b", 1)], lines, asNeal), {
+    key: "construction", label: "Construction", line: false, form: "notes", inspectionTaskId: "fi", inspectionDate: "2026-11-05",
+    assigneeNames: ["Justin Phillips", "Neal Deitemeyer"], mine: true, inspected: false, openRepairs: 1,
+  });
+  // No line yet: still the area, so the inspection can be sent (the close makes the line).
+  const bare = constructionArea({ jobType: "Construction" }, [], [], undefined);
+  assert.equal(bare?.inspectionTaskId, null);
+  assert.equal(bare?.mine, false);
+  // Inspected by the stamp, as every area is.
+  assert.equal(constructionArea({ jobType: "Construction" }, [], [{ ...lines[0], description: "✔ Inspected by Justin Phillips — via DB CheckOut" }], undefined)?.inspected, true);
+  // A gutters task beside it is not the construction line.
+  assert.equal(constructionArea({ jobType: "Construction" }, [], [{ ...lines[0], name: "Final inspection — Gutters" }], undefined)?.inspectionTaskId, null);
+  // Roofing never; the Job Type decides, whatever the project types say.
+  assert.equal(constructionArea({ jobType: "Roofing" }, [], lines, undefined), null);
+  assert.equal(constructionArea({ jobType: null }, [], lines, undefined), null);
+  assert.equal(isConstructionCloseout({ jobType: "Construction" }), true);
+  assert.equal(isConstructionCloseout({ jobType: "Roofing" }), false);
+});
+
+test("T2.40: the job detail of a construction job carries its inspection as that one area; a service call typed Roofing carries none", async () => {
+  const fake = (jobType: string, projectTypes: string[]): PaveClient => ({
+    async query<T>(q: PaveQuery): Promise<T> {
+      const job = q["job"] as Record<string, unknown>;
+      const text = JSON.stringify(q);
+      if ("documents" in job) return { job: { documents: { nodes: [] } } } as T;
+      if ("tasks" in job && text.includes("Final inspection%")) {
+        return { job: { tasks: { nodes: [{ id: "fi", name: "Final inspection", progress: 0, description: null, startDate: null,
+          assignedMemberships: { nodes: [{ user: { name: "Justin Phillips", emailAddress: "justinphillips@deitemeyerbrothers.com" } }] } }] } } } as T;
+      }
+      if ("tasks" in job) return { job: { tasks: { nodes: [] } } } as T;
+      return { job: { id: "j1", number: "26-1347", name: "261347 Woodruff_Ceiling", location: null, customFieldValues: { nodes: [
+        { value: "Final Inspection", customField: { id: CUSTOM_FIELDS.status } },
+        { value: jobType, customField: { id: CUSTOM_FIELDS.jobType } },
+        ...projectTypes.map((v) => ({ value: v, customField: { id: CUSTOM_FIELDS.projectType } })),
+      ] } } } as T;
+    },
+  });
+  const asJustin = { email: "justinphillips@deitemeyerbrothers.com", name: "Justin Phillips" };
+  const built = await getJob(fake("Construction", ["C-Remodel/Interior"]), "j1", asJustin);
+  assert.equal(built.areas.length, 1);
+  assert.equal(built.areas[0].key, "construction");
+  assert.equal(built.areas[0].form, "notes");
+  assert.equal(built.areas[0].line, false);
+  assert.equal(built.areas[0].inspectionTaskId, "fi");
+  assert.equal(built.mine, true, "the inspection assigned to them makes the job theirs");
+  assert.equal(built.jobForm, "roof", "the job-level form is untouched; the construction inspection is the area's");
+  const service = await getJob(fake("Roofing", ["R-Repairs/Service"]), "j1", asJustin);
+  assert.deepEqual(service.areas, []);
 });

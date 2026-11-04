@@ -62,6 +62,24 @@ export function jobAreas(job: { jobType: string | null; projectTypes: readonly s
   return AREA_ORDER.filter((a) => found.has(a));
 }
 
+/**
+ * A construction job's final inspection (DB Crew T2.40, audit I13 step 2).
+ * Carl, 3–4 Nov 2026: it is done by the job's sales rep, with its PM as
+ * backup, and it is "notes a photos for now". Construction is not the
+ * board's work-area loop — Close Out still moves its Status, and its repairs
+ * belong to no area — but the phone already draws an area with the "notes"
+ * form as notes and photos, so the job lists its inspection as one area under
+ * this key, on the job's own "Final inspection" line. Judged by the Job Type
+ * field alone, as `jobAreas` is: a service call typed Construction is
+ * inspected the same way, and a job typed Roofing never is.
+ */
+export const CONSTRUCTION_AREA = "construction";
+export const CONSTRUCTION_LABEL = "Construction";
+
+export function isConstructionCloseout(job: { jobType: string | null }): boolean {
+  return job.jobType === "Construction";
+}
+
 /** Whose is the template's "Final inspection" line: the first roof, else the first area. */
 export function lineArea(areas: readonly AreaKey[]): AreaKey | null {
   return areas.find((a) => ROOFS.includes(a)) ?? areas[0] ?? null;
