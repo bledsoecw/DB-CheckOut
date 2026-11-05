@@ -20,10 +20,14 @@ import {
   STATUS,
   TASK_TYPES,
   cleanLineWords,
+  foundLine,
   isWaitingReason,
+  isWarrantyAnswer,
   waitingLine,
   waitingOf,
   WAITING_NEEDS_NOTE,
+  warrantyLine,
+  type WarrantyAnswer,
 } from "../../../packages/shared/src/jobtread";
 import type { CloseAreaInspectionRequest, CloseInspectionRequest, ProblemReport, QueueJob } from "../../../packages/shared/src/types";
 import { CLOSEOUT_FORMS } from "../../../packages/shared/src/forms";
@@ -60,6 +64,7 @@ import {
   whyGone,
   markRepairWaiting,
   officeDay,
+  type ServiceRecord,
   postRepairWaiting,
   repairWaitingMessage,
 } from "./jt";
@@ -133,8 +138,12 @@ const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : {
  * 5 (DB Crew T2.40, audit I13 step 2) = a construction job lists its final
  * inspection as one notes-and-photos area ("construction"), and
  * close-area-inspection closes it on the job's "Final inspection" line.
+ * 6 (DB Crew T2.41, audit I15) = a service repair's Done and Can't finish
+ * carry what the tech found (`found`) and the warranty answer (`warranty`:
+ * yes, no or ask), written on lines of their own on the repair, where the
+ * Production Board's "Warranty to decide" list reads them.
  */
-const PHONE_CONTRACT = 5;
+const PHONE_CONTRACT = 6;
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -849,7 +858,9 @@ export function createHandler(deps: RouterDeps) {
       // Crew finished a punch task -> mark complete; the board moves the job
       // on when it was the last, and the area's reviewer is told.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
-        const body = (await readBody(req)) as { jobId?: string; note?: string };
+        const body = (await readBody(req)) as { jobId?: string; note?: string; found?: unknown; warranty?: unknown };
+        const service = serviceRecord(body, session.name);
+        if (service === "bad") return json(res, 400, { error: "warranty must be yes, no or ask" });
         // Only a repair the phone could have listed, still there, on the job
         // it says (DB Crew audit D23/D38, 2 Nov 2026). Gone is 410, so the
         // phone stops retrying and offers Discard; a task that is not a
@@ -862,7 +873,7 @@ export function createHandler(deps: RouterDeps) {
           return json(res, 422, { error: "That task is not a repair on this job — nothing was marked done." });
         }
         const note = body.note?.trim() ? `${body.note.trim()} — ${session.name}` : session.name;
-        await completeTask(deps.pave, parts[1], note);
+        await completeTask(deps.pave, parts[1], note, service);
         // The finish note as a message on the repair's own to-do, its photos
         // linked (Carl, 13 Oct 2026). Never fails the completion: the repair
         // is done, and the description line above already says so.
@@ -882,7 +893,9 @@ export function createHandler(deps: RouterDeps) {
       // repair day comes off so the PM's Close-out panel lists it, and the
       // area's reviewer is tagged on a message saying why, with any photo.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "blocked") {
-        const body = (await readBody(req)) as { jobId?: string; reason?: unknown; note?: unknown };
+        const body = (await readBody(req)) as { jobId?: string; reason?: unknown; note?: unknown; found?: unknown; warranty?: unknown };
+        const service = serviceRecord(body, session.name);
+        if (service === "bad") return json(res, 400, { error: "warranty must be yes, no or ask" });
         if (!isWaitingReason(body.reason)) {
           return json(res, 400, { error: "reason must be material, access, weather, decision or other" });
         }
@@ -901,7 +914,7 @@ export function createHandler(deps: RouterDeps) {
           return json(res, 422, { error: "That repair is already marked done — nothing was changed.", done: true });
         }
         const line = waitingLine(body.reason, note, session.name, officeDay());
-        await markRepairWaiting(deps.pave, task, line);
+        await markRepairWaiting(deps.pave, task, line, service);
         // Who to tell; the repair is recorded whatever the board says.
         let reviewer: { name: string; membershipId: string | null } | null = null;
         const jobId = body.jobId || task.jobId;
@@ -940,6 +953,23 @@ export function createHandler(deps: RouterDeps) {
       if (isGone(err)) return json(res, 410, { error: message, gone: true });
       return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
+  };
+}
+
+/**
+ * A service visit's record from the phone (DB Crew T2.41, audit I15), as the
+ * lines to write: null when it sent none (every phone before T2.41, and any
+ * repair that is not a service call), "bad" for a warranty answer that is not
+ * one of the three.
+ */
+export function serviceRecord(body: { found?: unknown; warranty?: unknown }, by: string, day: string = officeDay()): ServiceRecord | null | "bad" {
+  const hasFound = typeof body.found === "string" && body.found.trim() !== "";
+  const hasWarranty = body.warranty !== undefined && body.warranty !== null && body.warranty !== "";
+  if (!hasFound && !hasWarranty) return null;
+  if (hasWarranty && !isWarrantyAnswer(body.warranty)) return "bad";
+  return {
+    found: hasFound ? foundLine(String(body.found).slice(0, 2000), by, day) : null,
+    warranty: hasWarranty ? warrantyLine(body.warranty as WarrantyAnswer, by, day) : null,
   };
 }
 

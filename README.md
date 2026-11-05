@@ -179,6 +179,19 @@ repair work — wired into JobTread and the DB Production board.
    that is not a repair on that job 422, one already done 422. The repair is
    listed with `waiting: { reason, note }`; finishing it later
    (`completeTask`) takes the line off.
+15. **A service visit says what was found, and whether the warranty covers
+   it** (DB Crew T2.41, audit I15, 5 Nov 2026; contract 6). Done
+   (`POST /tasks/:id/complete`) and Can't finish (`/blocked`) also take
+   `found` (words) and `warranty` — `yes` · `no` · `ask`, anything else a
+   400 — and write them on the repair's own description as their own lines,
+   `🔍 Found: <words> (<name>, <Mon D>)` and `🛡 Warranty: Yes|No|Ask the
+   office (<name>, <Mon D>)` (`serviceRecord` in `routes.ts`, `foundLine` /
+   `warrantyLine` / `withServiceLines` in `packages/shared/src/jobtread.ts`),
+   each replacing an earlier one of its own kind. The Production Board's
+   *Warranty to decide* reads them and writes its own `🛡 Warranty decided:`
+   line beside them, which these writes leave alone — change the words in
+   both repos together. A phone before T2.41 sends neither, and nothing
+   changes.
 
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:
@@ -231,7 +244,7 @@ its source, which `GET /health` reports as `build` (`source`, `on` —
 commit); and `test/bundle.test.ts` fails when the committed copy is older than
 the source, so rebuild and commit it with any change under `apps/sync/src`
 or `packages/shared/src`. `/health` also reports `contract`
-(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34, 4 since T2.35, 5 since T2.40): what DB Crew's phone
+(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34, 4 since T2.35, 5 since T2.40, 6 since T2.41): what DB Crew's phone
 can count on this server for. DB Crew's Diagnostics shows it beside the
 build and warns while it is below the phone's `CO_CONTRACT_NEED`, so raise it
 in the change that gives the phone something new to depend on. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`

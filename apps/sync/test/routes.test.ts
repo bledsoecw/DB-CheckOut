@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseVisit, photoOrigin } from "../src/routes";
-import { ANSWER, CLEANUP_ITEMS, CUSTOM_FIELDS, INSPECTION_ITEMS, PUNCH_CREW, TASK_TYPES } from "../../../packages/shared/src/jobtread";
+import { parseVisit, photoOrigin, serviceRecord } from "../src/routes";
+import { ANSWER, CLEANUP_ITEMS, CUSTOM_FIELDS, INSPECTION_ITEMS, PUNCH_CREW, TASK_TYPES, warrantyOf, withServiceLines } from "../../../packages/shared/src/jobtread";
 import type { BoardAnswer, BoardAsk, BoardClient } from "../src/board";
 
 test("parseVisit reads the app's close-inspection body: both checklists and the notes", () => {
@@ -1095,4 +1095,54 @@ test("Can't finish today with the board down still tags somebody: the fallback r
   const msg = dollarOf(queries.find((q) => "createComment" in q), "createComment");
   assert.match(String(msg["message"]), /^⏳ COULDN'T FINISH — needs a decision\nRotten decking under the boot — replace or patch\?\n/);
   assert.deepEqual(msg["assignees"], [{ membershipId: "22PLtDsn6f4P" }]);
+});
+
+// --------------------------------------------------------------------------
+// A service visit's record (DB Crew T2.41, audit I15)
+// --------------------------------------------------------------------------
+
+test("a service repair's Done carries what was found and the warranty answer, on lines the board reads (I15)", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(
+    routerDeps((q) => {
+      const task = q["task"] as Record<string, unknown> | undefined;
+      if (task && "files" in task) return { task: { files: { nodes: [] } } };
+      if (task && "isToDo" in task) return { task: { id: "pt1", isToDo: true, progress: 0, taskType: { id: TASK_TYPES.punchList }, job: { id: "job1" } } };
+      if (task) return { task: { description: "Reseal the boot\n\n🛡 Warranty: No (Somebody Else, Nov 1)" } };
+      if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
+      return {};
+    }, queries),
+  );
+  const call = fakeHttp("POST", "/tasks/pt1/complete", {}, { note: "New boot, sealed", found: "The boot was cracked at the seam", warranty: "ask" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  const done = dollarOf(queries.find((q) => "updateTask" in q), "updateTask");
+  const d = String(done["description"]);
+  assert.match(d, /\n🔍 Found: The boot was cracked at the seam \(.+, [A-Z][a-z]{2} \d{1,2}\)\n🛡 Warranty: Ask the office \(.+, [A-Z][a-z]{2} \d{1,2}\)/, "both lines, one under the other");
+  assert.equal((d.match(/🛡 Warranty:/g) || []).length, 1, "a new answer replaces the last one");
+  assert.match(d, /✔ Done — New boot, sealed — /, "and Done, as always");
+  assert.equal(done["progress"], 1);
+});
+
+test("a service repair the tech could not finish keeps its record too, and a warranty answer outside the three is refused (I15)", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler({ ...routerDeps(waitingResponder({ id: "pt7", name: "Yahir — Reseal the boot", description: "Reseal the boot" }, []), queries), board: boardThat({ areas: [] }) });
+  const call = fakeHttp("POST", "/tasks/pt7/blocked", {}, { jobId: "job1", reason: "material", note: "Need a 3in boot", found: "Boot split", warranty: "yes" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  const write = dollarOf(queries.find((q) => "updateTask" in q), "updateTask");
+  assert.match(String(write["description"]), /⏳ Waiting on material — Need a 3in boot .+\n\n🔍 Found: Boot split .+\n🛡 Warranty: Yes \(/);
+  const bad = fakeHttp("POST", "/tasks/pt7/blocked", {}, { jobId: "job1", reason: "material", note: "x", warranty: "maybe" });
+  await handle(bad.req, bad.res);
+  assert.equal(bad.out.status, 400);
+});
+
+test("the service record's lines read back, and a phone that sends none writes none (I15)", () => {
+  assert.equal(serviceRecord({}, "Yahir Gonzalez"), null, "every phone before T2.41");
+  assert.equal(serviceRecord({ warranty: "maybe" }, "Yahir Gonzalez"), "bad");
+  const r = serviceRecord({ found: "  Boot  split  ", warranty: "no" }, "Yahir Gonzalez", "Nov 6");
+  assert.deepEqual(r, { found: "🔍 Found: Boot split (Yahir Gonzalez, Nov 6)", warranty: "🛡 Warranty: No (Yahir Gonzalez, Nov 6)" });
+  assert.equal(warrantyOf("x\n🛡 Warranty: Yes (A, Nov 1)\n🛡 Warranty: Ask the office (B, Nov 6)"), "ask", "the last answer is the one");
+  assert.equal(warrantyOf("🛡 Warranty decided: Covered — Shawn Deitemeyer, Nov 7"), null, "the board's decision is not the tech's answer");
+  assert.equal(withServiceLines("Reseal\n\n🔍 Found: old (A, Nov 1)", "🔍 Found: new (B, Nov 6)", null), "Reseal\n\n🔍 Found: new (B, Nov 6)");
 });

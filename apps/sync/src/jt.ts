@@ -19,6 +19,7 @@ import {
   checklistLineParts,
   cleanLineWords,
   waitingOf,
+  withServiceLines,
   withWaitingLine,
 } from "../../../packages/shared/src/jobtread";
 import type {
@@ -2025,8 +2026,14 @@ export async function readRepairTask(pave: PaveClient, taskId: string): Promise<
  * which is where the PM has to see it. Idempotent: a re-sent call finds the
  * same line and no day.
  */
-export async function markRepairWaiting(pave: PaveClient, task: RepairTaskInfo, line: string): Promise<void> {
-  const description = withWaitingLine(task.description ?? "", line).slice(0, 4096);
+/** A service visit's record (DB Crew T2.41, audit I15): the lines to write, or nulls. */
+export interface ServiceRecord {
+  found: string | null;
+  warranty: string | null;
+}
+export async function markRepairWaiting(pave: PaveClient, task: RepairTaskInfo, line: string, service?: ServiceRecord | null): Promise<void> {
+  const waiting = withWaitingLine(task.description ?? "", line);
+  const description = (service ? withServiceLines(waiting, service.found, service.warranty) : waiting).slice(0, 4096);
   await pave.query({
     updateTask: {
       $: { id: task.id, ...TASK_WRITE_GUARDS, description, startDate: null, endDate: null },
@@ -2087,21 +2094,23 @@ export function isRepairTask(task: RepairTaskInfo): boolean {
   return task.typeId === TASK_TYPES.punchList && task.isToDo;
 }
 
-export async function completeTask(pave: PaveClient, taskId: string, note?: string): Promise<void> {
+export async function completeTask(pave: PaveClient, taskId: string, note?: string, service?: ServiceRecord | null): Promise<void> {
   const trimmed = note?.trim();
-  if (!trimmed) {
+  if (!trimmed && !(service && (service.found || service.warranty))) {
     await pave.query({ updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1 } } });
     return;
   }
   const res = await pave.query<{ task: { description: string | null } | null }>({
     task: { $: { id: taskId }, description: {} },
   });
-  const done = `✔ Done — ${trimmed}`;
+  const done = trimmed ? `✔ Done — ${trimmed}` : "";
   const raw = res.task?.description ?? "";
   // Finished after all (DB Crew T2.35): it no longer waits on anything.
-  const existing = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
+  const unwaited = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
+  // A service visit's record (T2.41): what was found, and the warranty answer.
+  const existing = service ? withServiceLines(unwaited, service.found, service.warranty) : unwaited;
   // A re-sent completion must not write "Done" twice.
-  const description = existing.includes(done) ? existing : existing ? `${existing}\n\n${done}` : done;
+  const description = !done || existing.includes(done) ? existing : existing ? `${existing}\n\n${done}` : done;
   await pave.query({
     updateTask: {
       $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1, description: description.slice(0, 4096) },

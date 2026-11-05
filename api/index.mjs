@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 3239ced62585
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 7e041bb32267
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "3239ced62585", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "7e041bb32267", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -270,6 +270,35 @@ function waitingOf(description) {
     return { reason, note: dash >= 0 ? l.slice(dash + 3).trim() : "" };
   }
   return null;
+}
+var FOUND_PREFIX = "\u{1F50D} Found:";
+var WARRANTY_PREFIX = "\u{1F6E1} Warranty:";
+var WARRANTY_ANSWERS = ["yes", "no", "ask"];
+var WARRANTY_WORDS = { yes: "Yes", no: "No", ask: "Ask the office" };
+function isWarrantyAnswer(v) {
+  return typeof v === "string" && WARRANTY_ANSWERS.includes(v);
+}
+function foundLine(found, by, day) {
+  const said = waitingWords(found, 400);
+  if (!said) return null;
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  return `${FOUND_PREFIX} ${said}${who ? ` (${who})` : ""}`;
+}
+function warrantyLine(answer, by, day) {
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  return `${WARRANTY_PREFIX} ${WARRANTY_WORDS[answer]}${who ? ` (${who})` : ""}`;
+}
+function withServiceLines(description, found, warranty) {
+  const lines = String(description ?? "").split("\n").filter((l) => {
+    const t = l.trim();
+    return !(found && t.startsWith(FOUND_PREFIX)) && !(warranty && t.startsWith(WARRANTY_PREFIX));
+  });
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const add = [found, warranty].filter((x) => !!x);
+  if (!add.length) return lines.join("\n");
+  return lines.length ? `${lines.join("\n")}
+
+${add.join("\n")}` : add.join("\n");
 }
 function withWaitingLine(description, line) {
   const lines = String(description ?? "").split("\n").filter((l) => !l.trim().startsWith(WAITING_PREFIX));
@@ -1575,8 +1604,9 @@ async function readRepairTask(pave, taskId) {
     description: t.description ?? null
   };
 }
-async function markRepairWaiting(pave, task, line) {
-  const description = withWaitingLine(task.description ?? "", line).slice(0, 4096);
+async function markRepairWaiting(pave, task, line, service) {
+  const waiting = withWaitingLine(task.description ?? "", line);
+  const description = (service ? withServiceLines(waiting, service.found, service.warranty) : waiting).slice(0, 4096);
   await pave.query({
     updateTask: {
       $: { id: task.id, ...TASK_WRITE_GUARDS, description, startDate: null, endDate: null }
@@ -1616,19 +1646,20 @@ function officeDay(at = /* @__PURE__ */ new Date()) {
 function isRepairTask(task) {
   return task.typeId === TASK_TYPES.punchList && task.isToDo;
 }
-async function completeTask(pave, taskId, note) {
+async function completeTask(pave, taskId, note, service) {
   const trimmed = note?.trim();
-  if (!trimmed) {
+  if (!trimmed && !(service && (service.found || service.warranty))) {
     await pave.query({ updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1 } } });
     return;
   }
   const res = await pave.query({
     task: { $: { id: taskId }, description: {} }
   });
-  const done = `\u2714 Done \u2014 ${trimmed}`;
+  const done = trimmed ? `\u2714 Done \u2014 ${trimmed}` : "";
   const raw = res.task?.description ?? "";
-  const existing = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
-  const description = existing.includes(done) ? existing : existing ? `${existing}
+  const unwaited = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
+  const existing = service ? withServiceLines(unwaited, service.found, service.warranty) : unwaited;
+  const description = !done || existing.includes(done) ? existing : existing ? `${existing}
 
 ${done}` : done;
   await pave.query({
@@ -2063,7 +2094,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 
 // apps/sync/src/routes.ts
 var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
-var PHONE_CONTRACT = 5;
+var PHONE_CONTRACT = 6;
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -2542,6 +2573,8 @@ function createHandler(deps) {
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
         const body = await readBody(req);
+        const service = serviceRecord(body, session.name);
+        if (service === "bad") return json(res, 400, { error: "warranty must be yes, no or ask" });
         const task = await readRepairTask(deps.pave, parts[1]);
         if (!task) {
           return json(res, 410, { error: "That repair is no longer in JobTread \u2014 it was taken off or moved. Ask your PM.", gone: true });
@@ -2550,7 +2583,7 @@ function createHandler(deps) {
           return json(res, 422, { error: "That task is not a repair on this job \u2014 nothing was marked done." });
         }
         const note = body.note?.trim() ? `${body.note.trim()} \u2014 ${session.name}` : session.name;
-        await completeTask(deps.pave, parts[1], note);
+        await completeTask(deps.pave, parts[1], note, service);
         try {
           await postRepairDone(deps.pave, parts[1], body.note, session.name, clientRef(req));
         } catch (err) {
@@ -2561,6 +2594,8 @@ function createHandler(deps) {
       }
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "blocked") {
         const body = await readBody(req);
+        const service = serviceRecord(body, session.name);
+        if (service === "bad") return json(res, 400, { error: "warranty must be yes, no or ask" });
         if (!isWaitingReason(body.reason)) {
           return json(res, 400, { error: "reason must be material, access, weather, decision or other" });
         }
@@ -2579,7 +2614,7 @@ function createHandler(deps) {
           return json(res, 422, { error: "That repair is already marked done \u2014 nothing was changed.", done: true });
         }
         const line = waitingLine(body.reason, note, session.name, officeDay());
-        await markRepairWaiting(deps.pave, task, line);
+        await markRepairWaiting(deps.pave, task, line, service);
         let reviewer = null;
         const jobId = body.jobId || task.jobId;
         if (jobId) {
@@ -2612,6 +2647,16 @@ function createHandler(deps) {
       if (isGone(err)) return json(res, 410, { error: message, gone: true });
       return json(res, err instanceof PaveError ? 502 : 500, { error: message });
     }
+  };
+}
+function serviceRecord(body, by, day = officeDay()) {
+  const hasFound = typeof body.found === "string" && body.found.trim() !== "";
+  const hasWarranty = body.warranty !== void 0 && body.warranty !== null && body.warranty !== "";
+  if (!hasFound && !hasWarranty) return null;
+  if (hasWarranty && !isWarrantyAnswer(body.warranty)) return "bad";
+  return {
+    found: hasFound ? foundLine(String(body.found).slice(0, 2e3), by, day) : null,
+    warranty: hasWarranty ? warrantyLine(body.warranty, by, day) : null
   };
 }
 function isGone(err) {

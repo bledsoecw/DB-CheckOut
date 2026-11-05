@@ -409,6 +409,59 @@ export function waitingOf(description: string | null | undefined): { reason: Wai
   }
   return null;
 }
+/**
+ * A service visit's record (DB Crew T2.41, audit I15): what the tech found, and
+ * whether the work is covered by the warranty — Yes, No, or Ask the office —
+ * on lines of their own in the repair to-do's DESCRIPTION, beside its waiting
+ * line. The Production Board reads them (`warrantyOf` in its lib/warranty.ts:
+ * change both together): a Yes or an Ask goes on its "Warranty to decide" list
+ * for the job's sales manager (Shawn for roofing, Carl for construction —
+ * Carl, 5 Nov 2026), whose answer the board writes on a line of its own,
+ * "🛡 Warranty decided: …". A new answer replaces the tech's last one; the
+ * board's decision line is never touched here.
+ */
+export const FOUND_PREFIX = "🔍 Found:";
+export const WARRANTY_PREFIX = "🛡 Warranty:";
+export const WARRANTY_ANSWERS = ["yes", "no", "ask"] as const;
+export type WarrantyAnswer = (typeof WARRANTY_ANSWERS)[number];
+export const WARRANTY_WORDS: Readonly<Record<WarrantyAnswer, string>> = { yes: "Yes", no: "No", ask: "Ask the office" };
+export function isWarrantyAnswer(v: unknown): v is WarrantyAnswer {
+  return typeof v === "string" && (WARRANTY_ANSWERS as readonly string[]).includes(v);
+}
+/** "🔍 Found: the boot was cracked at the seam (Yahir Gonzalez, Nov 6)". */
+export function foundLine(found: unknown, by?: string | null, day?: string | null): string | null {
+  const said = waitingWords(found, 400);
+  if (!said) return null;
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  return `${FOUND_PREFIX} ${said}${who ? ` (${who})` : ""}`;
+}
+/** "🛡 Warranty: Ask the office (Yahir Gonzalez, Nov 6)". */
+export function warrantyLine(answer: WarrantyAnswer, by?: string | null, day?: string | null): string {
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  return `${WARRANTY_PREFIX} ${WARRANTY_WORDS[answer]}${who ? ` (${who})` : ""}`;
+}
+/** The tech's last warranty answer, read back, or null. */
+export function warrantyOf(description: string | null | undefined): WarrantyAnswer | null {
+  let found: WarrantyAnswer | null = null;
+  for (const raw of String(description ?? "").split("\n")) {
+    const l = raw.trim();
+    if (!l.startsWith(WARRANTY_PREFIX)) continue;
+    const rest = l.slice(WARRANTY_PREFIX.length).trim();
+    found = rest.startsWith("Ask the office") ? "ask" : rest.startsWith("Yes") ? "yes" : rest.startsWith("No") ? "no" : found;
+  }
+  return found;
+}
+/** The description with the tech's found and warranty lines replaced by these (null leaves that one as it was). */
+export function withServiceLines(description: string | null | undefined, found: string | null, warranty: string | null): string {
+  const lines = String(description ?? "").split("\n").filter((l) => {
+    const t = l.trim();
+    return !(found && t.startsWith(FOUND_PREFIX)) && !(warranty && t.startsWith(WARRANTY_PREFIX));
+  });
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const add = [found, warranty].filter((x): x is string => !!x);
+  if (!add.length) return lines.join("\n");
+  return lines.length ? `${lines.join("\n")}\n\n${add.join("\n")}` : add.join("\n");
+}
 /** The description with its waiting line taken off, or replaced by `line`. */
 export function withWaitingLine(description: string | null | undefined, line: string | null): string {
   const lines = String(description ?? "").split("\n").filter((l) => !l.trim().startsWith(WAITING_PREFIX));
