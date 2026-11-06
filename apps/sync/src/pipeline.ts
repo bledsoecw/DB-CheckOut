@@ -264,9 +264,13 @@ export function reviewerOf(answer: BoardAnswer | null, area: AreaKey | null): Re
 const areaLabel = (state: Pick<CloseoutState, "areas">, area: AreaKey | null): string | null =>
   state.areas.length > 1 && area ? AREA_LABEL[area] : null;
 
-/** The area's PM has approved it — the board's "PM review — X" to-do is ticked. */
-export function areaApproved(milestones: PipelineTask[], area: AreaKey | null): boolean {
-  return area !== null && milestones.some((t) => areaOfReviewName(t.name) === area && t.progress >= 1);
+/**
+ * The area's PM has approved it — its review line is ticked: "PM punch
+ * review — Gutters" or "PM final inspection review — Gutters", the bare names
+ * on the line's own area, or the old "PM review" ones (`areaOfReviewName`).
+ */
+export function areaApproved(milestones: PipelineTask[], area: AreaKey | null, line: AreaKey | null = null): boolean {
+  return area !== null && milestones.some((t) => areaOfReviewName(t.name, line) === area && t.progress >= 1);
 }
 
 /**
@@ -314,7 +318,7 @@ export async function postRepairSummaries(
     if (tasks.length === 0 || tasks.some((t) => t.progress < 1)) continue;
     // A repair no area claims, on a job WITH areas, is the line's to look at.
     const who = area ?? state.line;
-    if (areaApproved(state.milestones, who)) continue;
+    if (areaApproved(state.milestones, who, state.line)) continue;
     try {
       const id = await postPmReviewSummary(
         pave,

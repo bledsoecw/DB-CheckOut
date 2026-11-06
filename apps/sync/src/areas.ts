@@ -13,7 +13,9 @@
  *   "Final inspection"            the template line — the first roof's, and
  *                                 the eight roof checks are on it
  *   "Final inspection — Gutters"  every other area's own inspection
- *   "PM review — Gutters"         the area's PM approved it (ticked)
+ *   "PM punch review — Gutters"   the area's PM approved it (ticked); "PM
+ *                                 final inspection review" after a clean
+ *                                 inspection, bare on the roof's own line
  *   "… · Gutters · asked by Carl" a repair the board put on the area
  *   "Gutters · reported by Yahir" a finding Close Out filed against it
  *
@@ -115,14 +117,39 @@ export function areaOfInspectionName(name: string): AreaKey | null {
   return m ? (AREA_ORDER.find((a) => AREA_LABEL[a] === m[1].trim()) ?? null) : null;
 }
 
-/** "PM review — Gutters": the reviewing PM's own to-do, written by the board. */
+/**
+ * An area's review line, as the Production Board writes it (`REVIEW_LINE` and
+ * `reviewTaskName` in its lib/trades.ts — change both together): "PM punch
+ * review" after a punch list, renamed "PM final inspection review" after a
+ * clean inspection; bare on the area that owns the template's lines (the
+ * roof), "— Gutters" on any other. "PM review" is what the template and the
+ * board wrote before 27 Oct 2026, read and never written (DB Crew audit,
+ * smaller defect: this file read only that old name, which the board no
+ * longer writes, so an approved gutters review never counted here).
+ */
+export const REVIEW_LINES = ["PM punch review", "PM final inspection review"] as const;
+const LEGACY_REVIEW = "PM review";
+
+/** "PM punch review — Gutters": the board's name for an area's review line that is not the template's own. */
 export function reviewTaskName(area: AreaKey): string {
-  return `PM review — ${AREA_LABEL[area]}`;
+  return `${REVIEW_LINES[0]} — ${AREA_LABEL[area]}`;
 }
 
-export function areaOfReviewName(name: string): AreaKey | null {
-  const m = /^PM review — (.+)$/.exec(flat(name));
-  return m ? (AREA_ORDER.find((a) => AREA_LABEL[a] === m[1].trim()) ?? null) : null;
+/**
+ * The area a review line is for: the area its name ends with, or `line` for
+ * the template's own bare line. Null when the name is no review line.
+ */
+export function areaOfReviewName(name: string, line: AreaKey | null = null): AreaKey | null {
+  const n = flat(name);
+  const lower = n.toLowerCase();
+  for (const base of [...REVIEW_LINES, LEGACY_REVIEW].map((b) => b.toLowerCase())) {
+    if (lower === base) return line;
+    if (lower.startsWith(`${base} — `)) {
+      const label = n.slice(base.length + 3).trim().toLowerCase();
+      return AREA_ORDER.find((a) => AREA_LABEL[a].toLowerCase() === label) ?? null;
+    }
+  }
+  return null;
 }
 
 /** The line a finding carries in its description so both apps file it under its area. */

@@ -1124,6 +1124,43 @@ test("a service repair's Done carries what was found and the warranty answer, on
   assert.equal(done["progress"], 1);
 });
 
+test("a service repair's Done carries the extra work to bill on its own line after the warranty answer (T2.42)", async () => {
+  const queries: PaveQuery[] = [];
+  const handle = createHandler(
+    routerDeps((q) => {
+      const task = q["task"] as Record<string, unknown> | undefined;
+      if (task && "files" in task) return { task: { files: { nodes: [] } } };
+      if (task && "isToDo" in task) return { task: { id: "pt1", isToDo: true, progress: 0, taskType: { id: TASK_TYPES.punchList }, job: { id: "job1" } } };
+      if (task) return { task: { description: "Reseal the boot" } };
+      if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
+      return {};
+    }, queries),
+  );
+  const call = fakeHttp("POST", "/tasks/pt1/complete", {}, { note: "New boot", warranty: "yes", extra: "Replaced two rotted deck boards under the boot" });
+  await handle(call.req, call.res);
+  assert.equal(call.out.status, 200, call.out.body);
+  const d = String(dollarOf(queries.find((q) => "updateTask" in q), "updateTask")["description"]);
+  assert.match(d, /🛡 Warranty: Yes \(.+\)\n💲 Extra work to bill: Replaced two rotted deck boards under the boot \(.+, [A-Z][a-z]{2} \d{1,2}\)/);
+  // The extra work alone, with no warranty answer, still writes its line and ticks the repair.
+  const q2: PaveQuery[] = [];
+  const h2 = createHandler(
+    routerDeps((q) => {
+      const task = q["task"] as Record<string, unknown> | undefined;
+      if (task && "files" in task) return { task: { files: { nodes: [] } } };
+      if (task && "isToDo" in task) return { task: { id: "pt1", isToDo: true, progress: 0, taskType: { id: TASK_TYPES.punchList }, job: { id: "job1" } } };
+      if (task) return { task: { description: "Fix the downspout" } };
+      if ("createComment" in q) return { createComment: { createdComment: { id: "c1" } } };
+      return {};
+    }, q2),
+  );
+  const c2 = fakeHttp("POST", "/tasks/pt1/complete", {}, { extra: "Re-hung the porch gutter too" });
+  await h2(c2.req, c2.res);
+  assert.equal(c2.out.status, 200, c2.out.body);
+  const w2 = dollarOf(q2.find((q) => "updateTask" in q && /Extra work/.test(String(dollarOf(q, "updateTask")["description"] ?? ""))), "updateTask");
+  assert.match(String(w2["description"]), /^Fix the downspout\n\n💲 Extra work to bill: Re-hung the porch gutter too/);
+  assert.equal(w2["progress"], 1);
+});
+
 test("a service repair the tech could not finish keeps its record too, and a warranty answer outside the three is refused (I15)", async () => {
   const queries: PaveQuery[] = [];
   const handle = createHandler({ ...routerDeps(waitingResponder({ id: "pt7", name: "Yahir — Reseal the boot", description: "Reseal the boot" }, []), queries), board: boardThat({ areas: [] }) });
@@ -1141,8 +1178,26 @@ test("the service record's lines read back, and a phone that sends none writes n
   assert.equal(serviceRecord({}, "Yahir Gonzalez"), null, "every phone before T2.41");
   assert.equal(serviceRecord({ warranty: "maybe" }, "Yahir Gonzalez"), "bad");
   const r = serviceRecord({ found: "  Boot  split  ", warranty: "no" }, "Yahir Gonzalez", "Nov 6");
-  assert.deepEqual(r, { found: "🔍 Found: Boot split (Yahir Gonzalez, Nov 6)", warranty: "🛡 Warranty: No (Yahir Gonzalez, Nov 6)" });
+  assert.deepEqual(r, { found: "🔍 Found: Boot split (Yahir Gonzalez, Nov 6)", warranty: "🛡 Warranty: No (Yahir Gonzalez, Nov 6)", extra: null });
   assert.equal(warrantyOf("x\n🛡 Warranty: Yes (A, Nov 1)\n🛡 Warranty: Ask the office (B, Nov 6)"), "ask", "the last answer is the one");
   assert.equal(warrantyOf("🛡 Warranty decided: Covered — Shawn Deitemeyer, Nov 7"), null, "the board's decision is not the tech's answer");
   assert.equal(withServiceLines("Reseal\n\n🔍 Found: old (A, Nov 1)", "🔍 Found: new (B, Nov 6)", null), "Reseal\n\n🔍 Found: new (B, Nov 6)");
+});
+
+test("extra work to bill rides the service record on its own line, replacing the tech's last one (T2.42)", () => {
+  const r = serviceRecord({ warranty: "yes", extra: "  Replaced two rotted  deck boards " }, "Yahir Gonzalez", "Nov 6");
+  assert.ok(r && r !== "bad");
+  assert.equal(r.extra, "💲 Extra work to bill: Replaced two rotted deck boards (Yahir Gonzalez, Nov 6)");
+  // Extra work alone is a record too: a repair that is no warranty call can still carry it.
+  const alone = serviceRecord({ extra: "Fixed the gutter by the door" }, "Yahir Gonzalez", "Nov 6");
+  assert.ok(alone && alone !== "bad");
+  assert.deepEqual(alone, { found: null, warranty: null, extra: "💲 Extra work to bill: Fixed the gutter by the door (Yahir Gonzalez, Nov 6)" });
+  assert.equal(serviceRecord({ extra: "   " }, "Yahir Gonzalez"), null, "blank words are no answer");
+  // A new answer replaces the last; the board's billed line and everything else stay.
+  const before = "Reseal the boot\n\n🛡 Warranty: Yes (A, Nov 1)\n💲 Extra work to bill: old (A, Nov 1)\n💲 Billed — Amy Lugibihl on the Production Board, Nov 2";
+  assert.equal(
+    withServiceLines(before, null, null, "💲 Extra work to bill: new (B, Nov 6)"),
+    "Reseal the boot\n\n🛡 Warranty: Yes (A, Nov 1)\n💲 Billed — Amy Lugibihl on the Production Board, Nov 2\n\n💲 Extra work to bill: new (B, Nov 6)",
+  );
+  assert.equal(withServiceLines(before, null, null, null), before, "no answer changes nothing");
 });

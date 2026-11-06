@@ -20,6 +20,7 @@ import {
   STATUS,
   TASK_TYPES,
   cleanLineWords,
+  extraLine,
   foundLine,
   isWaitingReason,
   isWarrantyAnswer,
@@ -142,8 +143,11 @@ const BUILD = typeof __CLOSEOUT_BUILD__ !== "undefined" ? __CLOSEOUT_BUILD__ : {
  * carry what the tech found (`found`) and the warranty answer (`warranty`:
  * yes, no or ask), written on lines of their own on the repair, where the
  * Production Board's "Warranty to decide" list reads them.
+ * 7 (DB Crew T2.42) = they also carry the extra work to bill (`extra`, words),
+ * written on its own line on the repair, where the Production Board's "Extra
+ * work to bill" list reads it.
  */
-const PHONE_CONTRACT = 6;
+const PHONE_CONTRACT = 7;
 
 function bearerToken(req: IncomingMessage): string {
   const header = req.headers["authorization"];
@@ -858,7 +862,7 @@ export function createHandler(deps: RouterDeps) {
       // Crew finished a punch task -> mark complete; the board moves the job
       // on when it was the last, and the area's reviewer is told.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "complete") {
-        const body = (await readBody(req)) as { jobId?: string; note?: string; found?: unknown; warranty?: unknown };
+        const body = (await readBody(req)) as { jobId?: string; note?: string; found?: unknown; warranty?: unknown; extra?: unknown };
         const service = serviceRecord(body, session.name);
         if (service === "bad") return json(res, 400, { error: "warranty must be yes, no or ask" });
         // Only a repair the phone could have listed, still there, on the job
@@ -893,7 +897,7 @@ export function createHandler(deps: RouterDeps) {
       // repair day comes off so the PM's Close-out panel lists it, and the
       // area's reviewer is tagged on a message saying why, with any photo.
       if (req.method === "POST" && parts[0] === "tasks" && parts[2] === "blocked") {
-        const body = (await readBody(req)) as { jobId?: string; reason?: unknown; note?: unknown; found?: unknown; warranty?: unknown };
+        const body = (await readBody(req)) as { jobId?: string; reason?: unknown; note?: unknown; found?: unknown; warranty?: unknown; extra?: unknown };
         const service = serviceRecord(body, session.name);
         if (service === "bad") return json(res, 400, { error: "warranty must be yes, no or ask" });
         if (!isWaitingReason(body.reason)) {
@@ -962,14 +966,22 @@ export function createHandler(deps: RouterDeps) {
  * repair that is not a service call), "bad" for a warranty answer that is not
  * one of the three.
  */
-export function serviceRecord(body: { found?: unknown; warranty?: unknown }, by: string, day: string = officeDay()): ServiceRecord | null | "bad" {
+export function serviceRecord(
+  body: { found?: unknown; warranty?: unknown; extra?: unknown },
+  by: string,
+  day: string = officeDay(),
+): ServiceRecord | null | "bad" {
   const hasFound = typeof body.found === "string" && body.found.trim() !== "";
   const hasWarranty = body.warranty !== undefined && body.warranty !== null && body.warranty !== "";
-  if (!hasFound && !hasWarranty) return null;
+  // Extra work to bill (DB Crew T2.42): words only; its photo rides as a
+  // REPAIR photo titled "Extra work to bill", the shape any repair photo takes.
+  const hasExtra = typeof body.extra === "string" && body.extra.trim() !== "";
+  if (!hasFound && !hasWarranty && !hasExtra) return null;
   if (hasWarranty && !isWarrantyAnswer(body.warranty)) return "bad";
   return {
     found: hasFound ? foundLine(String(body.found).slice(0, 2000), by, day) : null,
     warranty: hasWarranty ? warrantyLine(body.warranty as WarrantyAnswer, by, day) : null,
+    extra: hasExtra ? extraLine(String(body.extra).slice(0, 2000), by, day) : null,
   };
 }
 

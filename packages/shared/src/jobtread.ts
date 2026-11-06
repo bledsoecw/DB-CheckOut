@@ -451,14 +451,41 @@ export function warrantyOf(description: string | null | undefined): WarrantyAnsw
   }
   return found;
 }
-/** The description with the tech's found and warranty lines replaced by these (null leaves that one as it was). */
-export function withServiceLines(description: string | null | undefined, found: string | null, warranty: string | null): string {
+/**
+ * Extra work to bill (DB Crew T2.42, Carl 6 Nov 2026: *"Add 'Extra work to
+ * bill'"*): work on a service call the warranty or the repair does not cover —
+ * rotted decking under a covered leak, a gutter the customer asked about while
+ * the tech was there — written on a line of its own so the office invoices it.
+ * The Production Board lists every one (its lib/extras.ts reads this prefix:
+ * change both together) until somebody marks it billed there, which writes a
+ * "💲 Billed — …" line this code never touches. A new answer replaces the
+ * tech's last one.
+ */
+export const EXTRA_PREFIX = "💲 Extra work to bill:";
+/** "💲 Extra work to bill: replaced two rotted deck boards (Yahir Gonzalez, Nov 6)". */
+export function extraLine(extra: unknown, by?: string | null, day?: string | null): string | null {
+  const said = waitingWords(extra, 400);
+  if (!said) return null;
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  return `${EXTRA_PREFIX} ${said}${who ? ` (${who})` : ""}`;
+}
+/** The description with the tech's found, warranty and extra-work lines replaced by these (null leaves that one as it was). */
+export function withServiceLines(
+  description: string | null | undefined,
+  found: string | null,
+  warranty: string | null,
+  extra: string | null = null,
+): string {
   const lines = String(description ?? "").split("\n").filter((l) => {
     const t = l.trim();
-    return !(found && t.startsWith(FOUND_PREFIX)) && !(warranty && t.startsWith(WARRANTY_PREFIX));
+    return (
+      !(found && t.startsWith(FOUND_PREFIX)) &&
+      !(warranty && t.startsWith(WARRANTY_PREFIX)) &&
+      !(extra && t.startsWith(EXTRA_PREFIX))
+    );
   });
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  const add = [found, warranty].filter((x): x is string => !!x);
+  const add = [found, warranty, extra].filter((x): x is string => !!x);
   if (!add.length) return lines.join("\n");
   return lines.length ? `${lines.join("\n")}\n\n${add.join("\n")}` : add.join("\n");
 }

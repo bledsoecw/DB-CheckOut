@@ -192,6 +192,19 @@ repair work — wired into JobTread and the DB Production board.
    line beside them, which these writes leave alone — change the words in
    both repos together. A phone before T2.41 sends neither, and nothing
    changes.
+16. **Extra work to bill, and the board's review names** (DB Crew T2.42, 6
+   Nov 2026; contract 7). Done and Can't finish also take `extra` (words):
+   work on a service call the warranty or the repair does not cover, written
+   as its own line, `💲 Extra work to bill: <words> (<name>, <Mon D>)`
+   (`extraLine`), replacing the tech's last one. Its photo comes as an
+   ordinary `REPAIR` photo with the location "Extra work to bill", which
+   names the file. The Production Board lists every one until somebody marks
+   it billed there, which writes a `💲 Billed — …` line these writes never
+   touch. And `areaOfReviewName` reads the review lines the board writes
+   since 27 Oct 2026 — `PM punch review`, `PM final inspection review`, bare
+   on the roof's own line or `— Gutters` on any other — as well as the old
+   `PM review` ones, so an approved gutters or siding review counts again
+   when deciding whether to post a repair summary.
 
 The six pipeline tasks come from the **"Roofing Schedule - Phase I"** task
 template, copied onto every job. `docs/jobtread-setup.md` is the contract:
@@ -244,7 +257,7 @@ its source, which `GET /health` reports as `build` (`source`, `on` —
 commit); and `test/bundle.test.ts` fails when the committed copy is older than
 the source, so rebuild and commit it with any change under `apps/sync/src`
 or `packages/shared/src`. `/health` also reports `contract`
-(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34, 4 since T2.35, 5 since T2.40, 6 since T2.41): what DB Crew's phone
+(`PHONE_CONTRACT` in `routes.ts`, 1 since 30 Oct 2026, 2 since DB Crew T2.33, 3 since T2.34, 4 since T2.35, 5 since T2.40, 6 since T2.41, 7 since T2.42): what DB Crew's phone
 can count on this server for. DB Crew's Diagnostics shows it beside the
 build and warns while it is below the phone's `CO_CONTRACT_NEED`, so raise it
 in the change that gives the phone something new to depend on. Env vars: `JT_GRANT_KEY` and `CREW_APP_SECRET`

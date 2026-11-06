@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 7e041bb32267
+// GENERATED FILE — do not edit. Source: apps/sync/src/*. Rebuild: npm run build:api · source 1d62da7f7fbb
 
 // <define:__CLOSEOUT_BUILD__>
-var define_CLOSEOUT_BUILD_default = { source: "7e041bb32267", on: "local", commit: null };
+var define_CLOSEOUT_BUILD_default = { source: "1d62da7f7fbb", on: "local", commit: null };
 
 // apps/sync/src/env.ts
 function loadEnv(source = process.env) {
@@ -288,13 +288,20 @@ function warrantyLine(answer, by, day) {
   const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
   return `${WARRANTY_PREFIX} ${WARRANTY_WORDS[answer]}${who ? ` (${who})` : ""}`;
 }
-function withServiceLines(description, found, warranty) {
+var EXTRA_PREFIX = "\u{1F4B2} Extra work to bill:";
+function extraLine(extra, by, day) {
+  const said = waitingWords(extra, 400);
+  if (!said) return null;
+  const who = [by?.trim(), day?.trim()].filter(Boolean).join(", ");
+  return `${EXTRA_PREFIX} ${said}${who ? ` (${who})` : ""}`;
+}
+function withServiceLines(description, found, warranty, extra = null) {
   const lines = String(description ?? "").split("\n").filter((l) => {
     const t = l.trim();
-    return !(found && t.startsWith(FOUND_PREFIX)) && !(warranty && t.startsWith(WARRANTY_PREFIX));
+    return !(found && t.startsWith(FOUND_PREFIX)) && !(warranty && t.startsWith(WARRANTY_PREFIX)) && !(extra && t.startsWith(EXTRA_PREFIX));
   });
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  const add = [found, warranty].filter((x) => !!x);
+  const add = [found, warranty, extra].filter((x) => !!x);
   if (!add.length) return lines.join("\n");
   return lines.length ? `${lines.join("\n")}
 
@@ -493,9 +500,19 @@ function areaOfInspectionName(name) {
   const m = /^Final inspection — (.+)$/.exec(flat(name));
   return m ? AREA_ORDER.find((a) => AREA_LABEL[a] === m[1].trim()) ?? null : null;
 }
-function areaOfReviewName(name) {
-  const m = /^PM review — (.+)$/.exec(flat(name));
-  return m ? AREA_ORDER.find((a) => AREA_LABEL[a] === m[1].trim()) ?? null : null;
+var REVIEW_LINES = ["PM punch review", "PM final inspection review"];
+var LEGACY_REVIEW = "PM review";
+function areaOfReviewName(name, line = null) {
+  const n = flat(name);
+  const lower = n.toLowerCase();
+  for (const base of [...REVIEW_LINES, LEGACY_REVIEW].map((b) => b.toLowerCase())) {
+    if (lower === base) return line;
+    if (lower.startsWith(`${base} \u2014 `)) {
+      const label = n.slice(base.length + 3).trim().toLowerCase();
+      return AREA_ORDER.find((a) => AREA_LABEL[a].toLowerCase() === label) ?? null;
+    }
+  }
+  return null;
 }
 function areaTagLine(area, byName) {
   return `${AREA_LABEL[area]} \xB7 reported by ${byName}`;
@@ -1606,7 +1623,7 @@ async function readRepairTask(pave, taskId) {
 }
 async function markRepairWaiting(pave, task, line, service) {
   const waiting = withWaitingLine(task.description ?? "", line);
-  const description = (service ? withServiceLines(waiting, service.found, service.warranty) : waiting).slice(0, 4096);
+  const description = (service ? withServiceLines(waiting, service.found, service.warranty, service.extra ?? null) : waiting).slice(0, 4096);
   await pave.query({
     updateTask: {
       $: { id: task.id, ...TASK_WRITE_GUARDS, description, startDate: null, endDate: null }
@@ -1648,7 +1665,7 @@ function isRepairTask(task) {
 }
 async function completeTask(pave, taskId, note, service) {
   const trimmed = note?.trim();
-  if (!trimmed && !(service && (service.found || service.warranty))) {
+  if (!trimmed && !(service && (service.found || service.warranty || service.extra))) {
     await pave.query({ updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1 } } });
     return;
   }
@@ -1658,7 +1675,7 @@ async function completeTask(pave, taskId, note, service) {
   const done = trimmed ? `\u2714 Done \u2014 ${trimmed}` : "";
   const raw = res.task?.description ?? "";
   const unwaited = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
-  const existing = service ? withServiceLines(unwaited, service.found, service.warranty) : unwaited;
+  const existing = service ? withServiceLines(unwaited, service.found, service.warranty, service.extra ?? null) : unwaited;
   const description = !done || existing.includes(done) ? existing : existing ? `${existing}
 
 ${done}` : done;
@@ -1855,8 +1872,8 @@ function reviewerOf(answer, area) {
   return fallbackReviewer(area);
 }
 var areaLabel = (state, area) => state.areas.length > 1 && area ? AREA_LABEL[area] : null;
-function areaApproved(milestones, area) {
-  return area !== null && milestones.some((t) => areaOfReviewName(t.name) === area && t.progress >= 1);
+function areaApproved(milestones, area, line = null) {
+  return area !== null && milestones.some((t) => areaOfReviewName(t.name, line) === area && t.progress >= 1);
 }
 async function syncChecklists(pave, state, problemsReported = 0, closed) {
   const inspection = findPipelineTask(state.milestones, PIPELINE_TASKS.finalInspection);
@@ -1877,7 +1894,7 @@ async function postRepairSummaries(pave, state, reviewer) {
     const tasks = punchFor(state, area);
     if (tasks.length === 0 || tasks.some((t) => t.progress < 1)) continue;
     const who = area ?? state.line;
-    if (areaApproved(state.milestones, who)) continue;
+    if (areaApproved(state.milestones, who, state.line)) continue;
     try {
       const id = await postPmReviewSummary(
         pave,
@@ -2094,7 +2111,7 @@ async function translateTexts(texts, to, env, fetchImpl = fetch) {
 
 // apps/sync/src/routes.ts
 var BUILD = typeof define_CLOSEOUT_BUILD_default !== "undefined" ? define_CLOSEOUT_BUILD_default : { source: null, on: "source", commit: null };
-var PHONE_CONTRACT = 6;
+var PHONE_CONTRACT = 7;
 function bearerToken(req) {
   const header = req.headers["authorization"];
   if (typeof header !== "string") return "";
@@ -2652,11 +2669,13 @@ function createHandler(deps) {
 function serviceRecord(body, by, day = officeDay()) {
   const hasFound = typeof body.found === "string" && body.found.trim() !== "";
   const hasWarranty = body.warranty !== void 0 && body.warranty !== null && body.warranty !== "";
-  if (!hasFound && !hasWarranty) return null;
+  const hasExtra = typeof body.extra === "string" && body.extra.trim() !== "";
+  if (!hasFound && !hasWarranty && !hasExtra) return null;
   if (hasWarranty && !isWarrantyAnswer(body.warranty)) return "bad";
   return {
     found: hasFound ? foundLine(String(body.found).slice(0, 2e3), by, day) : null,
-    warranty: hasWarranty ? warrantyLine(body.warranty, by, day) : null
+    warranty: hasWarranty ? warrantyLine(body.warranty, by, day) : null,
+    extra: hasExtra ? extraLine(String(body.extra).slice(0, 2e3), by, day) : null
   };
 }
 function isGone(err) {

@@ -2026,14 +2026,15 @@ export async function readRepairTask(pave: PaveClient, taskId: string): Promise<
  * which is where the PM has to see it. Idempotent: a re-sent call finds the
  * same line and no day.
  */
-/** A service visit's record (DB Crew T2.41, audit I15): the lines to write, or nulls. */
+/** A service visit's record (DB Crew T2.41, audit I15; extra work T2.42): the lines to write, or nulls. */
 export interface ServiceRecord {
   found: string | null;
   warranty: string | null;
+  extra?: string | null;
 }
 export async function markRepairWaiting(pave: PaveClient, task: RepairTaskInfo, line: string, service?: ServiceRecord | null): Promise<void> {
   const waiting = withWaitingLine(task.description ?? "", line);
-  const description = (service ? withServiceLines(waiting, service.found, service.warranty) : waiting).slice(0, 4096);
+  const description = (service ? withServiceLines(waiting, service.found, service.warranty, service.extra ?? null) : waiting).slice(0, 4096);
   await pave.query({
     updateTask: {
       $: { id: task.id, ...TASK_WRITE_GUARDS, description, startDate: null, endDate: null },
@@ -2096,7 +2097,7 @@ export function isRepairTask(task: RepairTaskInfo): boolean {
 
 export async function completeTask(pave: PaveClient, taskId: string, note?: string, service?: ServiceRecord | null): Promise<void> {
   const trimmed = note?.trim();
-  if (!trimmed && !(service && (service.found || service.warranty))) {
+  if (!trimmed && !(service && (service.found || service.warranty || service.extra))) {
     await pave.query({ updateTask: { $: { id: taskId, ...TASK_WRITE_GUARDS, progress: 1 } } });
     return;
   }
@@ -2107,8 +2108,9 @@ export async function completeTask(pave: PaveClient, taskId: string, note?: stri
   const raw = res.task?.description ?? "";
   // Finished after all (DB Crew T2.35): it no longer waits on anything.
   const unwaited = waitingOf(raw) ? withWaitingLine(raw, null) : raw;
-  // A service visit's record (T2.41): what was found, and the warranty answer.
-  const existing = service ? withServiceLines(unwaited, service.found, service.warranty) : unwaited;
+  // A service visit's record (T2.41): what was found, the warranty answer,
+  // and any extra work to bill (T2.42).
+  const existing = service ? withServiceLines(unwaited, service.found, service.warranty, service.extra ?? null) : unwaited;
   // A re-sent completion must not write "Done" twice.
   const description = !done || existing.includes(done) ? existing : existing ? `${existing}\n\n${done}` : done;
   await pave.query({

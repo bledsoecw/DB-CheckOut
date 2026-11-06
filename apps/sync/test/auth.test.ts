@@ -139,7 +139,8 @@ test("/health says what the server was built from, and no longer offers sign-in"
   // 4 (T2.35): Can't finish today (POST /tasks/:id/blocked) and `waiting` on a repair.
   // 5 (T2.40): a construction job's final inspection, notes and photos, as one area.
   // 6 (T2.41): a service repair's record — what was found, and the warranty answer.
-  assert.equal(body["contract"], 6);
+  // 7 (T2.42): the extra work to bill on a service repair.
+  assert.equal(body["contract"], 7);
 });
 
 test("reports are stamped with the acted-for name, not the client's claim", async () => {

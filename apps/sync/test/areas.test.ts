@@ -44,8 +44,21 @@ test("inspection and review names round-trip, word for word the board's", () => 
   assert.equal(areaInspectionName("gutters", "shingle"), "Final inspection — Gutters");
   assert.equal(areaOfInspectionName("Final inspection — Low-slope roof"), "flat");
   assert.equal(areaOfInspectionName("Final inspection"), null);
-  assert.equal(reviewTaskName("siding"), "PM review — Siding");
+  assert.equal(reviewTaskName("siding"), "PM punch review — Siding");
+  // The names the board writes since 27 Oct 2026, and the old ones it still reads.
+  assert.equal(areaOfReviewName("PM punch review — Gutters"), "gutters");
+  assert.equal(areaOfReviewName("PM final inspection review — Siding"), "siding");
   assert.equal(areaOfReviewName(" PM review —  Gutters "), "gutters");
+  assert.equal(areaOfReviewName("pm PUNCH review — gutters"), "gutters", "the board compares lowered");
+  // The template's own line, bare, is the line's area — and nobody's when there is no line.
+  assert.equal(areaOfReviewName("PM punch review", "shingle"), "shingle");
+  assert.equal(areaOfReviewName("PM final inspection review", "metal"), "metal");
+  assert.equal(areaOfReviewName("PM Review", "shingle"), "shingle");
+  assert.equal(areaOfReviewName("PM punch review"), null);
+  // Not review lines.
+  assert.equal(areaOfReviewName("PM punch review — Patio"), null);
+  assert.equal(areaOfReviewName("Final inspection — Gutters"), null);
+  assert.equal(areaOfReviewName("PM reviewed the gutters"), null);
 });
 
 test("a repair is filed by its tag, then by the roof form, then by the job having one area", () => {

@@ -588,6 +588,30 @@ test("an approved area is not told again, and an untagged repair on one area is 
   assert.equal(fake.posted.length, 0);
 });
 
+test("approved under the names the board writes now: the template's bare line on the roof, the suffixed one on gutters", async () => {
+  // The roof's review is the template's own "PM punch review", ticked.
+  const roof = fakePave({
+    ...ROOF,
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "Reseal the boot", progress: 1, description: "typed in JobTread" }],
+    milestones: [
+      ...template({ progress: 1, description: INSPECTED }).filter((t) => t.id !== "pmr"),
+      { id: "pmr", name: "PM punch review", progress: 1, typeId: TASK_TYPES.general, subtasks: [] },
+    ],
+  });
+  await applyPipeline(roof.client, "job1", fakeBoard());
+  assert.equal(roof.posted.length, 0, "the roof's PM already approved it");
+  // Not ticked: the reviewer is told.
+  const open = fakePave({
+    ...ROOF,
+    status: STATUS.punchList,
+    punch: [{ id: "r1", name: "Reseal the boot", progress: 1, description: "typed in JobTread" }],
+    milestones: template({ progress: 1, description: INSPECTED }),
+  });
+  await quiet(() => applyPipeline(open.client, "job1", fakeBoard()));
+  assert.equal(open.posted.length, 1, "nobody has approved it, so the summary goes");
+});
+
 test("an inspection that finds problems: the board is told how many, the reviewer gets the punch list to book", async () => {
   const fake = fakePave({
     ...ROOF,
